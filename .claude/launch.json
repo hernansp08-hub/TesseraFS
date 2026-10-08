@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "portable",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["apps/portable/src/main.ts", "--no-window"],
+      "env": { "TESSERA_PORT": "47800" },
+      "port": 47800,
+      "url": "http://127.0.0.1:47800"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+node_modules/
+target/
+dist/
+dist-demo/
+*.log
+# Investigación interna: no forma parte del producto publicado
+reports/
+research_notes/
+.claude/settings.local.json

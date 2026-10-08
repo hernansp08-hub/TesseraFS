@@ -1,0 +1,11 @@
+{
+  "name": "@tessera/portable",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/main.ts --debug",
+    "serve": "bun src/main.ts --no-window",
+    "pack": "bun pack.ts"
+  }
+}

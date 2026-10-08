@@ -1,0 +1,19 @@
+{
+  "name": "tesserafs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/portable"
+  ],
+  "scripts": {
+    "ui:build": "bun packages/ui/build.ts",
+    "portable:dev": "bun apps/portable/src/main.ts",
+    "portable:pack": "bun apps/portable/pack.ts",
+    "desktop:dev": "cd apps/desktop && bunx tauri dev",
+    "desktop:build": "cd apps/desktop && bunx tauri build",
+    "test": "bun test",
+    "release": "bun scripts/release.ts"
+  }
+}

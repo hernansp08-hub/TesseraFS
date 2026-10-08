@@ -1,0 +1,6 @@
+# Enlaza el CRT de forma estática: el .exe no necesita el redistribuible de Visual C++.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

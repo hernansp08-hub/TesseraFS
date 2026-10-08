@@ -1,0 +1,37 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "tesserafs",
+    },
+    "apps/portable": {
+      "name": "@tessera/portable",
+      "version": "0.1.0",
+    },
+    "packages/core-bun": {
+      "name": "@tessera/core-bun",
+      "version": "0.1.0",
+    },
+    "packages/protocol": {
+      "name": "@tessera/protocol",
+      "version": "0.1.0",
+    },
+    "packages/ui": {
+      "name": "@tessera/ui",
+      "version": "0.1.0",
+      "dependencies": {
+        "@tessera/protocol": "workspace:*",
+      },
+    },
+  },
+  "packages": {
+    "@tessera/core-bun": ["@tessera/core-bun@workspace:packages/core-bun"],
+
+    "@tessera/portable": ["@tessera/portable@workspace:apps/portable"],
+
+    "@tessera/protocol": ["@tessera/protocol@workspace:packages/protocol"],
+
+    "@tessera/ui": ["@tessera/ui@workspace:packages/ui"],
+  }
+}

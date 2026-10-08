@@ -1,0 +1,15 @@
+[package]
+name = "tessera-cli"
+description = "Línea de comandos de TesseraFS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "tessera-cli"
+path = "src/main.rs"
+
+[dependencies]
+tessera-core.workspace = true
+serde_json.workspace = true

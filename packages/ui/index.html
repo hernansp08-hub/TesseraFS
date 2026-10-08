@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TesseraFS</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1' y='1' width='13' height='22' rx='1.6' fill='%23d9864a'/%3E%3Crect x='15' y='1' width='8' height='11' rx='1.4' fill='%235a8be6'/%3E%3Crect x='15' y='13' width='8' height='5' rx='1.2' fill='%234fae79'/%3E%3Crect x='15' y='19' width='3.5' height='4' rx='1' fill='%23c56aae'/%3E%3Crect x='19.5' y='19' width='3.5' height='4' rx='1' fill='%23b3a244'/%3E%3C/svg%3E">
+<style>/*FONTS*/</style>
+<style>/*STYLE*/</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="13" height="22" rx="1.6" fill="#d9864a"/><rect x="15" y="1" width="8" height="11" rx="1.4" fill="#5a8be6"/><rect x="15" y="13" width="8" height="5" rx="1.2" fill="#4fae79"/><rect x="15" y="19" width="3.5" height="4" rx="1" fill="#c56aae"/><rect x="19.5" y="19" width="3.5" height="4" rx="1" fill="#b3a244"/></svg>
+      <span class="word">Tessera<b>FS</b></span>
+      <span class="proto" id="editionTag">Demo</span>
+    </div>
+    <button class="vol" id="volBtn" type="button" aria-haspopup="menu">
+      <span class="drive" id="volLetter">C:</span>
+      <span class="vol-txt">
+        <span class="vol-name"><span id="volName">—</span><span id="volPct"></span></span>
+        <span class="meter" aria-hidden="true"><i class="used" id="volMeter" style="width:0"></i></span>
+        <span class="vol-sub" id="volSub">Elige una unidad</span>
+      </span>
+      <svg class="i" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg>
+    </button>
+    <button class="btn primary" id="scanBtn" type="button"><svg class="i" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg><span>Escanear</span></button>
+    <div class="scan-stat"><span class="pill" id="enginePill" hidden></span><span id="scanTxt"></span></div>
+    <button class="elev" id="elevBtn" type="button" hidden title="Reinicia como administrador para leer la MFT directamente, mucho más rápido que recorrer carpetas"><svg class="i" viewBox="0 0 16 16"><path d="M9 1.5 3.5 9H8l-1 5.5L12.5 7H8z"/></svg>Modo rápido</button>
+    <div class="search-wrap">
+      <label class="search" for="q">
+        <svg class="i" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+        <input id="q" type="search" placeholder="Filtrar: ext:gguf  size:>1g  age:>1y" autocomplete="off" spellcheck="false">
+        <kbd>Ctrl K</kbd>
+        <button class="icon-btn sm" id="qHelpBtn" type="button" aria-expanded="false" aria-controls="qHelp" title="Cómo filtrar">?</button>
+      </label>
+      <div class="qhelp" id="qHelp" hidden>
+        <p>Espacio = y · <code>OR</code> = o · <code>-</code> delante = excluir · comillas para nombres con espacios.</p>
+        <button type="button" data-q="ext:gguf,safetensors"><code>ext:gguf,safetensors</code><span>Modelos de IA locales</span></button>
+        <button type="button" data-q="size:>1g"><code>size:&gt;1g</code><span>Archivos de más de 1 GB</span></button>
+        <button type="button" data-q="age:>2y size:>100m"><code>age:&gt;2y size:&gt;100m</code><span>Grandes sin tocar en 2 años</span></button>
+        <button type="button" data-q="ext:rlib OR ext:pdb"><code>ext:rlib OR ext:pdb</code><span>Artefactos de compilación</span></button>
+        <button type="button" data-q="type:dir name:node_modules"><code>type:dir name:node_modules</code><span>Carpetas de dependencias</span></button>
+        <button type="button" data-q="-ext:dll size:>500m"><code>-ext:dll size:&gt;500m</code><span>Grandes que no son DLL</span></button>
+        <button type="button" data-q="path:Downloads ext:msi,exe,iso"><code>path:Downloads ext:msi,exe,iso</code><span>Instaladores descargados</span></button>
+        <button type="button" data-q="re:^VT[._]"><code>re:^VT[._]</code><span>Expresión regular sobre el nombre</span></button>
+      </div>
+    </div>
+    <div class="top-tools">
+      <button class="icon-btn" id="themeBtn" type="button" title="Tema: sistema"></button>
+      <button class="btn ghost" id="notesBtn" type="button"><svg class="i" viewBox="0 0 16 16"><path d="M3 2.5h7.5a2 2 0 0 1 2 2v9H5a2 2 0 0 1-2-2z"/><path d="M3 11.5a2 2 0 0 1 2-2h7.5"/></svg><span>Guía</span></button>
+    </div>
+    <div class="scan-bar" id="scanBar" hidden><i></i></div>
+  </header>
+
+  <main class="work">
+    <section class="pane tree-pane" aria-label="Explorador">
+      <div class="pane-head">
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" type="button" data-tab="tree" aria-selected="true">Carpetas</button>
+          <button class="tab" role="tab" type="button" data-tab="files" aria-selected="false">Archivos <span class="count" id="filesCount"></span></button>
+          <button class="tab" role="tab" type="button" data-tab="clean" aria-selected="false">Liberar espacio <span class="count" id="cleanCount"></span></button>
+        </div>
+      </div>
+      <div class="view" id="view-tree">
+        <div class="tbl tbl-tree">
+          <div class="thead" id="treeHead">
+            <button type="button" class="c-name" data-sort="name">Nombre</button>
+            <button type="button" class="c-size r" data-sort="size">Tamaño</button>
+            <span class="c-pct r">%</span>
+            <button type="button" class="c-alloc r" data-sort="alloc">En disco</button>
+            <button type="button" class="c-items r" data-sort="files">Elementos</button>
+            <button type="button" class="c-mod r" data-sort="mtime">Modificado</button>
+          </div>
+          <div class="tbody" id="treeBody" role="treegrid" tabindex="0" aria-label="Árbol de carpetas"></div>
+        </div>
+      </div>
+      <div class="view" id="view-files" hidden>
+        <div class="files-meta" id="filesMeta"></div>
+        <div class="tbl tbl-files">
+          <div class="thead"><span class="c-name">Nombre</span><span class="c-path">Carpeta</span><span class="c-size r">Tamaño</span><span class="c-mod r">Modificado</span></div>
+          <div class="tbody" id="filesBody" role="grid" tabindex="0" aria-label="Archivos"></div>
+        </div>
+      </div>
+      <div class="view" id="view-clean" hidden><div class="clean" id="cleanBody"></div></div>
+    </section>
+    <div class="split" id="split1" role="separator" aria-orientation="vertical" aria-label="Ancho del panel de carpetas" tabindex="0" title="Arrastra para cambiar el ancho · doble clic para restablecer"></div>
+
+    <section class="pane map-pane" aria-label="Mapa de uso del disco">
+      <div class="pane-head">
+        <nav class="crumbs" id="crumbs" aria-label="Ruta del mapa"></nav>
+        <div class="map-tools">
+          <span class="hl-chip" id="hlChip" hidden><span id="hlTxt"></span><button class="icon-btn sm" id="hlClear" type="button" title="Quitar resaltado (Esc)"><svg class="i" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button></span>
+          <span class="seg" role="group" aria-label="Color de las teselas" id="colorSeg">
+            <button type="button" data-color="category" aria-pressed="true">Categoría</button><button type="button" data-color="ext" aria-pressed="false">Extensión</button><button type="button" data-color="age" aria-pressed="false">Antigüedad</button>
+          </span>
+          <span class="seg" role="group" aria-label="Estilo del mapa" id="styleSeg">
+            <button type="button" data-style="mosaic" aria-pressed="true" title="Teselas con juntas">Mosaico</button><button type="button" data-style="relief" aria-pressed="false" title="Sombreado en relieve">Relieve</button>
+          </span>
+          <button class="icon-btn" id="labelsBtn" type="button" aria-pressed="true" title="Cabeceras y nombres"><svg class="i" viewBox="0 0 16 16"><path d="M2.5 4h7M6 4v8.5M9.5 8h4M11.5 8v4.5"/></svg></button>
+          <button class="icon-btn" id="upBtn" type="button" title="Subir un nivel (Retroceso)"><svg class="i" viewBox="0 0 16 16"><path d="M8 13V3M4 7l4-4 4 4"/></svg></button>
+        </div>
+      </div>
+      <div class="map-wrap" id="mapWrap">
+        <canvas id="map"></canvas>
+        <canvas id="overlay" aria-label="Mapa de teselas: el área de cada tesela es su tamaño"></canvas>
+        <canvas id="snap" hidden></canvas>
+        <div class="tip" id="tip" hidden></div>
+        <div class="map-state" id="mapState" hidden></div>
+      </div>
+    </section>
+    <div class="split" id="split2" role="separator" aria-orientation="vertical" aria-label="Ancho del panel de detalle" tabindex="0" title="Arrastra para cambiar el ancho · doble clic para restablecer"></div>
+    <div class="split row" id="split3" role="separator" aria-orientation="horizontal" aria-label="Alto del panel de detalle" tabindex="0" title="Arrastra para cambiar el alto · doble clic para restablecer"></div>
+
+    <aside class="rail">
+      <section class="card insp" id="insp" aria-live="polite"></section>
+      <section class="card exts">
+        <div class="card-head"><h2 id="compTitle">Composición</h2><span id="extScope"></span></div>
+        <div class="ext-list" id="extList"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="status">
+    <span id="st1"></span><span id="st2"></span>
+    <span class="st3" id="st3"></span>
+  </footer>
+</div>
+
+<div class="menu" id="menu" role="menu" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div class="scrim" id="scrim" hidden></div>
+<aside class="notes" id="notes" role="dialog" aria-modal="true" aria-labelledby="notesTitle" hidden>
+  <button class="icon-btn notes-close" id="notesClose" type="button" title="Cerrar (Esc)"><svg class="i" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+  <h2 id="notesTitle">Guía rápida</h2>
+  <p class="lede">TesseraFS dibuja tu disco como un mosaico: cada tesela es un archivo y su área es su tamaño. Las carpetas agrupan sus teselas bajo una cabecera.</p>
+  <h3>Encontrar y ubicar</h3>
+  <ul>
+    <li>Pasa el puntero por el mapa para ver nombre, ruta y tamaño. Clic para ubicar el elemento en <b>Carpetas</b>; doble clic para entrar en su carpeta.</li>
+    <li>Al seleccionar una fila, su tesela se marca en el mapa.</li>
+    <li>El panel <b>Composición</b> agrupa el espacio por categorías. Pulsa una para resaltar sus teselas.</li>
+    <li>Cambia el color a <b>Extensión</b> o <b>Antigüedad</b> para buscar lo que lleva años sin tocarse.</li>
+  </ul>
+  <h3>Filtrar</h3>
+  <div class="tscroll"><table>
+    <thead><tr><th>Escribe</th><th>Encuentra</th></tr></thead>
+    <tbody>
+      <tr><td><code>ext:gguf,bin</code></td><td>Archivos con esas extensiones (<code>ext:none</code>: sin extensión)</td></tr>
+      <tr><td><code>size:&gt;1g</code> · <code>size:1g..5g</code></td><td>Por tamaño (b, k, m, g, t). <code>alloc:</code> usa el espacio en disco</td></tr>
+      <tr><td><code>age:&gt;1y</code> · <code>age:&lt;30d</code></td><td>Por fecha de modificación (d, w, mo, y)</td></tr>
+      <tr><td><code>path:Downloads</code></td><td>Texto dentro de la ruta completa</td></tr>
+      <tr><td><code>name:VT*</code> · <code>re:^VT</code></td><td>Comodines o expresión regular sobre el nombre</td></tr>
+      <tr><td><code>type:dir</code></td><td>Incluye carpetas (por defecto sólo archivos)</td></tr>
+      <tr><td><code>a OR b</code> · <code>-x</code></td><td>Alternativas y exclusiones</td></tr>
+    </tbody>
+  </table></div>
+  <p>También en español: <code>tam:</code>, <code>asig:</code>, <code>edad:</code>, <code>ruta:</code>, <code>nombre:</code>, <code>tipo:carpeta</code>.</p>
+  <h3>Velocidad y permisos</h3>
+  <ul>
+    <li>Con permisos de administrador en unidades NTFS, TesseraFS lee la tabla maestra de archivos (MFT) directamente: es el modo más rápido.</li>
+    <li>Sin administrador recorre las carpetas. Es más lento y omite las que Windows no te deja abrir.</li>
+    <li>Nada sale de tu equipo y nada se borra sin confirmarlo en el panel de detalle.</li>
+  </ul>
+  <h3>Atajos</h3>
+  <div class="keys">
+    <kbd>Ctrl K</kbd><span>Filtrar</span>
+    <kbd>↑ ↓</kbd><span>Moverse por el árbol</span>
+    <kbd>→ ←</kbd><span>Expandir o plegar</span>
+    <kbd>Intro</kbd><span>Entrar en la carpeta en el mapa</span>
+    <kbd>Retroceso</kbd><span>Subir un nivel</span>
+    <kbd>1 2 3</kbd><span>Color por categoría, extensión o antigüedad</span>
+    <kbd>Supr</kbd><span>Mover a la papelera (pide confirmación)</span>
+    <kbd>Esc</kbd><span>Quitar resaltado o cerrar paneles</span>
+  </div>
+</aside>
+<script>/*SCRIPT*/</script>
+</body>
+</html>

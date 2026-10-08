@@ -1,0 +1,16 @@
+[package]
+name = "tesserafs-desktop"
+description = "TesseraFS: analizador de espacio en disco (edición de escritorio)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+tessera-core.workspace = true

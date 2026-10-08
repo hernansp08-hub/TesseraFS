@@ -1,0 +1,7 @@
+3.13.14 (tags/v3.13.14:fd17997, Jun 10 2026, 13:03:48) [MSC v.1944 64 bit (AMD64)] GIL enabled: True root: C:\
+serial pass1 (cold-ish)      entries=1,530,291 (files=1,286,662 dirs=243,629) bytes=383.6GB err=110 time=  79.73s rate=    19,194 entries/s
+serial pass2 (warm)          entries=1,530,301 (files=1,286,672 dirs=243,629) bytes=383.6GB err=110 time=  35.74s rate=    42,814 entries/s
+threads=2 (warm, GIL)        entries=1,530,330 (files=1,286,691 dirs=243,639) bytes=383.6GB err=110 time=  18.55s rate=    82,482 entries/s
+threads=4 (warm, GIL)        entries=1,530,333 (files=1,286,694 dirs=243,639) bytes=383.6GB err=110 time=  15.08s rate=   101,475 entries/s
+threads=8 (warm, GIL)        entries=1,530,335 (files=1,286,696 dirs=243,639) bytes=383.6GB err=110 time=  19.49s rate=    78,521 entries/s
+threads=16 (warm, GIL)       entries=1,530,337 (files=1,286,698 dirs=243,639) bytes=383.6GB err=110 time=  21.83s rate=    70,088 entries/s
