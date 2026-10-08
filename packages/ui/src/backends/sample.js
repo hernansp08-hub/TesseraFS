@@ -127,7 +127,7 @@ function build() {
   F(users, 'Public', .3, P.user, 2);
 
   const apps = dir(root, 'apps');
-  const lam = dir(apps, 'lamina-rs'), tgt = dir(lam, 'target');
+  const lam = dir(apps, 'lamina-rs'), tgt = dir(lam, 'target'); file(tgt, 'CACHEDIR.TAG', 177);
   F(tgt, 'debug', 11.3, P.dev, 4); F(tgt, 'release', 9.5, P.dev, 4);
   F(lam, '.git', 2.8, P.git, 2); F(lam, 'src', .02, P.rs, 2); F(lam, 'assets', .58, P.user, 2);
   const chess = dir(apps, 'chess-engine'), data = dir(chess, 'data'), nnue = dir(data, 'nnue');
