@@ -4,12 +4,20 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.2.0] - 2026-10-08
+
 ### Documentación
 - Guía de usuario, filtros, liberar espacio y preguntas frecuentes.
 - Documentación técnica (arquitectura, motores, interfaz y desarrollo) con 24 diagramas y capturas con datos de ejemplo.
 
 ### Distribución
 - Versiones empaquetadas en zip en GitHub Releases, una por edición, con LEEME, licencias, avisos de terceros y sumas SHA-256 (`bun run package --publish`).
+
+### Añadido
+- **ui:** enlaces directos a vistas con #archivos, #limpieza, #extension, #antiguedad, #relieve y #guia
+
+### Corregido
+- **ui:** el porcentaje de la tarjeta de progreso no salta de línea al llegar a 100 %
 
 ## [0.1.1] - 2026-10-08
 
@@ -33,6 +41,7 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.1.1...HEAD
+[Sin publicar]: ../../compare/v0.2.0...HEAD
+[0.2.0]: ../../compare/v0.1.1...v0.2.0
 [0.1.1]: ../../compare/v0.1.0...v0.1.1
 [0.1.0]: ../../releases/tag/v0.1.0
