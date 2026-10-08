@@ -4,6 +4,13 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+### Documentación
+- Guía de usuario, filtros, liberar espacio y preguntas frecuentes.
+- Documentación técnica (arquitectura, motores, interfaz y desarrollo) con 24 diagramas y capturas con datos de ejemplo.
+
+### Distribución
+- Versiones empaquetadas en zip en GitHub Releases, una por edición, con LEEME, licencias, avisos de terceros y sumas SHA-256 (`bun run package --publish`).
+
 ## [0.1.1] - 2026-10-08
 
 - Mantenimiento.
