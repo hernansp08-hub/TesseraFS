@@ -822,7 +822,8 @@ export async function startScan() {
     const big = await B.search({ query: '', root: S.root.id, limit: 1 });
     if (big.rows[0]) { S.pathCache.set(big.rows[0].id, big.rows[0].path); await locate(remember(big.rows[0])); } else select(S.root);
     $('cleanCount').textContent = ''; if (S.tab === 'clean') renderClean(); if (S.tab === 'files') loadFiles();
-    if (res.warnings.length) toast(res.warnings[0]);
+    if (res.warnings.length && B.kind !== 'demo') toast(res.warnings[0]);
+    applyHash();
   } catch (e) {
     mapState(`<h2>No se pudo escanear</h2><p>${esc((e as Error).message)}</p>`);
   } finally {
@@ -830,6 +831,16 @@ export async function startScan() {
   }
 }
 $('scanBtn').addEventListener('click', () => startScan());
+// Enlaces directos a una vista: #archivos, #limpieza, #extension, #antiguedad, #relieve, #guia
+function applyHash() {
+  const h = location.hash.slice(1).toLowerCase().split(/[,+]/);
+  if (h.includes('archivos')) setTab('files');
+  if (h.includes('limpieza')) setTab('clean');
+  if (h.includes('extension')) setColorMode('ext');
+  if (h.includes('antiguedad')) setColorMode('age');
+  if (h.includes('relieve')) ($('styleSeg').querySelector('[data-style="relief"]') as HTMLElement).click();
+  if (h.includes('guia')) $('notesBtn').click();
+}
 export function renderStatus() {
   const r = S.sel || zoomRow(), z = zoomRow();
   $('st1').innerHTML = r ? `Seleccionado: <b>${esc(nameOf(r))}</b> · ${fmtB(r.size)}${r.isDir ? ' · ' + fmtN(r.files) + ' archivos' : ''}` : '';
