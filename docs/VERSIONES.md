@@ -59,6 +59,31 @@ git push --follow-tags       # publica (cuando haya repositorio remoto)
 
 Otras formas: `patch`, `minor`, `major`, `minor --pre=beta` (→ `0.2.0-beta.1`), `pre` (→ `beta.2`), `final` (quita el sufijo) o un número exacto.
 
+### Publicar los zips en GitHub Releases
+
+```bash
+bun run package --publish
+```
+
+```mermaid
+flowchart LR
+    R["bun run release auto<br/>commit + etiqueta vX.Y.Z"] --> P["git push --follow-tags"]
+    P --> K["bun run package --publish"]
+    K --> B["Compila interfaz,<br/>exe de escritorio y portable"]
+    B --> Z["Zips + LEEME + licencias<br/>+ SHA256SUMS.txt"]
+    Z --> G["gh release create vX.Y.Z<br/>notas del CHANGELOG"]
+```
+
+| Archivo publicado | Contenido |
+|---|---|
+| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` | `tesserafs-desktop.exe`, `LEEME.txt`, `LICENCIAS-TERCEROS.txt` (crates de Rust incluidos) y `licencias/` |
+| `TesseraFS-X.Y.Z-portable-win-x64.zip` | `bun.exe` (firmado, sin modificar), `tesserafs.js`, lanzadores, `LEEME.txt`, avisos de Bun y `licencias/` |
+| `SHA256SUMS.txt` | Sumas para comprobar las descargas: `Get-FileHash archivo.zip` |
+
+- Sin `--publish`, sólo deja los archivos en `dist/release/vX.Y.Z/`, para revisarlos antes.
+- `--skip-build` reutiliza lo ya compilado.
+- Las versiones con sufijo (`-beta.1`) se publican como *prerelease*.
+
 Antes de publicar, comprueba que todo esté en verde:
 ```bash
 bun test && cargo test --workspace

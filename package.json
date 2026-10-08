@@ -14,6 +14,7 @@
     "desktop:dev": "cd apps/desktop && bunx tauri dev",
     "desktop:build": "cd apps/desktop && bunx tauri build",
     "test": "bun test",
-    "release": "bun scripts/release.ts"
+    "release": "bun scripts/release.ts",
+    "package": "bun scripts/package.ts"
   }
 }
