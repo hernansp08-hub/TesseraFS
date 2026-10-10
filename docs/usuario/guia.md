@@ -311,6 +311,29 @@ Cada tarjeta explica qué es, cuánto ocupa y cómo liberarlo bien: con la orden
 
 Detalles y procedimientos seguros en **[Liberar espacio](liberar-espacio.md)**.
 
+### Archivos duplicados
+
+La pestaña **Duplicados** busca archivos con **exactamente el mismo contenido**, aunque tengan nombres distintos.
+
+1. Elige dónde buscar (la carpeta del mapa o todo lo escaneado) y el tamaño mínimo (por defecto, 1 MB).
+2. Pulsa **Buscar duplicados**. Se puede cancelar en cualquier momento.
+3. Revisa los grupos, ordenados por el espacio que recuperarías. **Marcar las copias** conserva la más antigua de cada grupo y manda las demás a [Para borrar](#borrar-varias-cosas-a-la-vez-para-borrar); también puedes marcar o desmarcar cada archivo con su casilla.
+
+```mermaid
+flowchart LR
+    A["Archivos del escaneo<br/>(sin leer nada)"] -->|"mismo tamaño"| B["Candidatos"]
+    B -->|"mismos primeros 64 KB"| C["Sospechosos"]
+    C -->|"mismo contenido completo<br/>(hash criptográfico)"| D["Duplicados"]
+```
+
+Sólo se lee lo imprescindible: la mayoría de archivos se descartan por tamaño sin abrirlos, y la mayoría de los que quedan, con sus primeros 64 KB. Quedan fuera:
+
+- los **enlaces duros**: son el mismo archivo con dos nombres, así que borrar uno no libera nada;
+- los archivos de **OneDrive que sólo están en la nube**: leerlos obligaría a descargarlos.
+
+> [!TIP]
+> Si todas las copias de un grupo quedan marcadas, el grupo se pone en rojo para que conserves al menos una. **Resaltar en el mapa** muestra dónde están todas las copias.
+
 ---
 
 ## 11. Atajos de teclado

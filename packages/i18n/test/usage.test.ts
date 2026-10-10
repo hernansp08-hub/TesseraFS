@@ -70,7 +70,7 @@ describe('uso de las claves', () => {
     const refs = new Set([...used(UI), ...used(PACKAGING)]);
     const codes = new Set([...bunCodes, ...rustCodes, ...queryCodes, ...demoCodes].map(c => 'engine.' + c));
     // Prefijos que se componen en tiempo de ejecución
-    const dynamic = [/^cat\./, /^age\.\d$/, /^phase\./, /^clean\.(risk|sum)\./, /^clean\.\w+\.(title|why|how)$/, /^known\.\w+$/];
+    const dynamic = [/^cat\./, /^age\.\d$/, /^phase\./, /^clean\.(risk|sum)\./, /^clean\.\w+\.(title|why|how)$/, /^known\.\w+$/, /^dups\.phase\./];
     const unused = KEYS.filter(k => !refs.has(k) && !codes.has(k) && !dynamic.some(r => r.test(k)));
     expect(unused).toEqual([]);
   });

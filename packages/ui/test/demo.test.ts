@@ -29,6 +29,26 @@ test('demo: cumple el contrato (slice, hijos, búsqueda, extensiones)', async ()
   expect(ext[0].ext).toBe('cok');
 });
 
+test('demo: duplicados con sus tres pasadas, orden por espacio recuperable y cancelación', async () => {
+  const b = new DemoBackend(), GB = 1024 ** 3;
+  const res = await b.scan({ path: 'C:\\', engine: 'auto' }, () => { });
+  const phases: string[] = [];
+  const d = await b.duplicates({ root: res.rootId, minSize: 1024 * 1024, limit: 100 }, p => { if (phases.at(-1) !== p.phase) phases.push(p.phase); });
+  expect(phases).toEqual(['size', 'prefix', 'full', 'done']);
+  expect(d.groups[0].files.map(f => f.name)).toEqual(['Win11_24H2_Spanish_x64.iso', 'Win11_24H2_Spanish_x64.iso']);
+  expect(d.groups.some(g => g.files.some(f => f.name === 'VSCodeUserSetup-x64-1.104.0 (1).exe'))).toBe(true);
+  expect(d.groups.every(g => g.files.length >= 2)).toBe(true);
+  expect(d.totalGroups).toBeGreaterThanOrEqual(11);
+  expect(d.wasted).toBeGreaterThan(9.9 * GB);
+  expect(d.skipped.hardlinks).toBeGreaterThan(0); // los enlaces duros de WinSxS quedan fuera
+  const waste = d.groups.map(g => (g.files.length - 1) * g.size);
+  expect(waste).toEqual([...waste].sort((x, y) => y - x));
+
+  const p = b.duplicates({ root: res.rootId, minSize: 1024 * 1024, limit: 100 }, () => { });
+  expect(await b.cancelDuplicates()).toBe(true);
+  await expect(p).rejects.toMatchObject({ code: 'error.cancelled' });
+}, 20000); // escaneo simulado (2,6 s) + búsqueda simulada (1,8 s)
+
 test('demo: cancelar el escaneo lo rechaza con error.cancelled', async () => {
   const b = new DemoBackend();
   expect(await b.cancelScan()).toBe(false);

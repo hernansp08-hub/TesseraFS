@@ -84,6 +84,39 @@ export interface ActionResult { ok: boolean; code?: string; params?: Record<stri
 
 export interface ElevationInfo { elevated: boolean; canElevate: boolean }
 
+// ---------- Duplicados ----------
+/**
+ * Busca archivos con el mismo contenido bajo `root`, en tres pasadas: tamaño (sin leer nada), los primeros
+ * 64 KiB y el contenido completo (hash criptográfico de 256 bits). Excluye enlaces duros (FLAG.HARDLINK: borrar
+ * uno no libera nada), archivos sólo en la nube (FLAG.CLOUD: leerlos los descargaría), puntos de reanálisis y
+ * archivos por debajo de `minSize`. Devuelve los `limit` grupos con más espacio recuperable.
+ */
+export interface DupRequest { root: number; minSize: number; limit: number }
+export type DupPhase = 'size' | 'prefix' | 'full' | 'done';
+export interface DupProgress {
+  phase: DupPhase;
+  files: number;       // archivos leídos en la pasada actual
+  totalFiles: number;  // candidatos de la pasada actual
+  bytes: number;       // bytes leídos en la pasada actual
+  totalBytes: number;  // bytes que leerá la pasada actual
+  elapsedMs: number;
+}
+export interface DupGroup {
+  size: number;        // tamaño de cada copia
+  hash: string;        // hex del hash del contenido (identifica el grupo)
+  files: SearchRow[];  // ≥ 2, ordenados por ruta
+}
+export interface DupResult {
+  groups: DupGroup[];      // ordenados por espacio recuperable, (n − 1) × size, de mayor a menor
+  totalGroups: number;     // grupos encontrados (puede ser > groups.length)
+  wasted: number;          // espacio recuperable de todos los grupos encontrados
+  candidates: number;      // archivos con tamaño repetido (primera pasada)
+  readBytes: number;       // bytes leídos en total
+  skipped: { hardlinks: number; cloud: number };
+  elapsedMs: number;
+  warnings: EngineMessage[]; // p. ej. { code: 'dup.readErrors', params: { count } }
+}
+
 /** Lo que la interfaz necesita de un motor. Implementaciones: demo, tauri, http. */
 export interface Backend {
   readonly kind: 'demo' | 'tauri' | 'http';
@@ -98,6 +131,10 @@ export interface Backend {
   nodePath(id: number): Promise<string>;
   nodeInfo(id: number): Promise<NodeRow>;
   action(kind: ActionKind, id: number): Promise<ActionResult>;
+  /** Exige un escaneo cargado y ninguna operación larga en curso (si no, `error.scanBusy` o `error.dupBusy`). */
+  duplicates(req: DupRequest, onProgress: (p: DupProgress) => void): Promise<DupResult>;
+  /** Pide parar la búsqueda de duplicados: `duplicates` se rechaza con `error.cancelled`. False si no había ninguna. */
+  cancelDuplicates(): Promise<boolean>;
   elevation(): Promise<ElevationInfo>;
   relaunchElevated(): Promise<void>;
 }

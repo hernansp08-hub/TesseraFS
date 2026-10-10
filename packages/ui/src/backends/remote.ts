@@ -1,7 +1,7 @@
 // Motores reales: Tauri (Rust en el mismo proceso) y HTTP local (edición portable con Bun).
 import type {
-  ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, ElevationInfo, ExtStat, NodeRow, ScanProgress,
-  ScanRequest, ScanResult, SearchRequest, SearchResponse, VolumeInfo,
+  ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, DupProgress, DupRequest, DupResult, ElevationInfo, ExtStat,
+  NodeRow, ScanProgress, ScanRequest, ScanResult, SearchRequest, SearchResponse, VolumeInfo,
 } from '@tessera/protocol';
 import { engineFailure, isEngineMessage } from './errors';
 
@@ -23,6 +23,11 @@ export class TauriBackend implements Backend {
     return this.call<ScanResult>('scan', { path: req.path, engine: req.engine, onProgress: ch });
   }
   cancelScan() { return this.call<boolean>('cancel_scan'); }
+  duplicates(req: DupRequest, onProgress: (p: DupProgress) => void) {
+    const ch = new this.core.Channel<DupProgress>(); ch.onmessage = onProgress;
+    return this.call<DupResult>('duplicates', { root: req.root, minSize: req.minSize, limit: req.limit, onProgress: ch });
+  }
+  cancelDuplicates() { return this.call<boolean>('cancel_duplicates'); }
   async slice(root: number, minBytes: number, maxNodes: number) {
     const r = await this.call<ArrayBuffer | number[]>('slice', { root, minBytes, maxNodes });
     return r instanceof ArrayBuffer ? r : new Uint8Array(r).buffer;
@@ -55,8 +60,11 @@ export class HttpBackend implements Backend {
   private qs(o: Record<string, string | number | boolean>) { return new URLSearchParams(Object.entries(o).map(([k, v]) => [k, String(v)])).toString(); }
 
   volumes() { return this.get<VolumeInfo[]>('/api/volumes'); }
-  async scan(req: ScanRequest, onProgress: (p: ScanProgress) => void) {
-    // EventSource no admite cabeceras: el progreso se lee como flujo con fetch
+  /**
+   * Escucha los eventos SSE de /api/events mientras dura `run`. EventSource no admite cabeceras, así que se lee
+   * como flujo con fetch. El progreso del escaneo llega sin nombre (`message`); el de los duplicados, como `dup`.
+   */
+  private async withEvents<T>(name: string, onData: (d: unknown) => void, run: () => Promise<T>): Promise<T> {
     const ctrl = new AbortController();
     this.req('/api/events', { signal: ctrl.signal }).then(async r => {
       const rd = r.body!.getReader(), dec = new TextDecoder(); let buf = '';
@@ -64,15 +72,23 @@ export class HttpBackend implements Backend {
         const { value, done } = await rd.read(); if (done) break;
         buf += dec.decode(value, { stream: true });
         let i; while ((i = buf.indexOf('\n\n')) >= 0) {
-          const ev = buf.slice(0, i); buf = buf.slice(i + 2);
-          const data = ev.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('');
-          if (data) { try { const p = JSON.parse(data); if (p && p.phase) onProgress(p); } catch { } }
+          const ev = buf.slice(0, i).split('\n'); buf = buf.slice(i + 2);
+          const type = ev.find(l => l.startsWith('event:'))?.slice(6).trim() || 'message';
+          const data = ev.filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('');
+          if (type === name && data) { try { onData(JSON.parse(data)); } catch { } }
         }
       }
     }).catch(() => { });
-    try { return await this.post<ScanResult>('/api/scan', req); } finally { setTimeout(() => ctrl.abort(), 300); }
+    try { return await run(); } finally { setTimeout(() => ctrl.abort(), 300); }
+  }
+  scan(req: ScanRequest, onProgress: (p: ScanProgress) => void) {
+    return this.withEvents('message', d => { if ((d as ScanProgress)?.phase) onProgress(d as ScanProgress); }, () => this.post<ScanResult>('/api/scan', req));
   }
   cancelScan() { return this.post<boolean>('/api/cancel', {}); }
+  duplicates(req: DupRequest, onProgress: (p: DupProgress) => void) {
+    return this.withEvents('dup', d => { if ((d as DupProgress)?.phase) onProgress(d as DupProgress); }, () => this.post<DupResult>('/api/duplicates', req));
+  }
+  cancelDuplicates() { return this.post<boolean>('/api/duplicates/cancel', {}); }
   async slice(root: number, minBytes: number, maxNodes: number) {
     return (await this.req('/api/slice?' + this.qs({ root, min: minBytes, max: maxNodes }))).arrayBuffer();
   }

@@ -140,6 +140,35 @@ Cada evento `ScanProgress` lleva la fase, los elementos, los bytes, el tiempo, u
 
 Las 21 consultas de la prueba cruzada (`crates/tessera-cli/tests/crosscheck.ts`) dan los mismos totales, bytes, orden y rutas en Rust y en TypeScript.
 
+## Duplicados
+
+`crates/tessera-core/src/dup.rs` y `packages/core-bun/src/dup.ts` siguen el mismo algoritmo sobre el árbol ya cargado, en tres pasadas que leen cada vez menos archivos:
+
+```mermaid
+flowchart LR
+    A["Archivos bajo root<br/>≥ minSize"] -->|"fuera: enlaces duros,<br/>sólo en la nube, reanálisis"| B["1. Por tamaño<br/>(sin leer)"]
+    B -->|"tamaños repetidos"| C["2. Primeros 64 KiB<br/>(hash)"]
+    C -->|"≤ 64 KiB: ya es el contenido"| E["Grupos"]
+    C -->|"> 64 KiB"| D["3. Contenido completo<br/>(hash de 256 bits)"]
+    D --> E
+```
+
+| | Rust | Bun |
+|---|---|---|
+| Hash | BLAKE3 | SHA-256 (`Bun.CryptoHasher`, ≈1 GB/s) |
+| Lectura | 4 hilos (rayon) en las pasadas 2 y 3, bloques de 1 MiB, `FILE_FLAG_SEQUENTIAL_SCAN` y `FILE_FLAG_OPEN_NO_RECALL` | Asíncrona: 16 archivos a la vez en la pasada 2 y 2 en la 3, bloques de 1 MiB con lectura anticipada |
+| Rutas | UTF-16 exacta del árbol con `\\?\` | Ruta completa con `\\?\` (`\\?\UNC\` en red) |
+
+Reglas comunes:
+
+- **Fuera:** los enlaces duros (son el mismo archivo: borrar uno no libera nada), los archivos sólo en la nube (leerlos los descargaría) y los puntos de reanálisis.
+- **Archivos que cambiaron** desde el escaneo (no existen, o su tamaño ya no coincide) quedan fuera y se avisan con `dup.readErrors`.
+- **Orden:** grupos por espacio recuperable `(n − 1) × tamaño`, luego tamaño y luego hash; archivos de cada grupo por ruta sin distinguir mayúsculas.
+- **Progreso** por pasada (`size`, `prefix`, `full`, `done`) cada ≈100 ms, y cancelación entre archivos y cada MiB leído.
+- Mientras dura la búsqueda no se puede escanear (`error.dupBusy`), ni buscar mientras se escanea (`error.scanBusy`). En el escritorio, lo que se manda a la papelera durante una búsqueda va a la Papelera en el acto y sale del árbol al terminar.
+
+Los dos motores dan los mismos grupos, candidatos y bytes leídos. Para comprobarlo en un disco real: `tessera-cli scan <ruta> --dups <bytes> --dups-out dups.json`. Medido sobre la carpeta `target` del repositorio (7,75 GiB, 14.049 archivos, mínimo 1 MiB): 268 candidatos, 241 enlaces duros fuera, 3 grupos y 132 MiB leídos en 1,0 s.
+
 ## Slice: el subárbol para el mapa
 
 ```mermaid
@@ -164,5 +193,4 @@ La selección por niveles gasta el presupuesto primero en lo que más se ve. El 
 - Saltar los registros libres con `$MFT:$BITMAP` (≈40 % menos de E/S).
 - Lectura de la MFT con E/S solapada y varios hilos en Bun.
 - Actualización en vivo con el diario USN (`FSCTL_READ_USN_JOURNAL`), sin volver a escanear.
-- Cancelar un escaneo desde la interfaz.
 - Proceso auxiliar elevado y mínimo, en lugar de relanzar la app completa.

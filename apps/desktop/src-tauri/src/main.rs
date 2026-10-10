@@ -4,24 +4,31 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State, WebviewWindowBuilder};
 use tessera_core::{
-    msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, ElevationInfo, EngineChoice, EngineMessage, ExtStat, NodeRow, Scan,
-    ScanOptions, ScanProgress, ScanResult, SearchResponse, SortKey, VolumeInfo,
+    msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, DupProgress, DupResult, ElevationInfo, EngineChoice, EngineMessage,
+    ExtStat, NodeRow, Scan, ScanOptions, ScanProgress, ScanResult, SearchResponse, SortKey, VolumeInfo,
 };
 
 type Res<T> = Result<T, EngineMessage>;
 
 /// Estado compartido: el último escaneo y su generación (cambia con cada escaneo nuevo).
+/// Un escaneo y una búsqueda de duplicados no pueden coincidir.
 #[derive(Default)]
 struct AppState {
     scan: RwLock<Option<Scan>>,
     generation: AtomicU64,
     busy: AtomicBool,
     cancel: AtomicBool,
+    dup_busy: AtomicBool,
+    dup_cancel: AtomicBool,
+    /// Enviados a la papelera durante una búsqueda de duplicados, (generación, id): la búsqueda
+    /// tiene el árbol bajo lectura y esperar la escritura bloquearía el resto de lecturas.
+    /// Este cerrojo también ordena los cambios de `dup_busy`.
+    dup_trashed: Mutex<Vec<(u64, u32)>>,
 }
 
 type St<'a> = State<'a, Arc<AppState>>;
@@ -64,6 +71,11 @@ async fn scan(st: St<'_>, path: String, engine: Option<EngineChoice>, on_progres
     let st = st.inner().clone();
     if st.busy.swap(true, SeqCst) {
         return Err(msg::scan_busy());
+    }
+    // La búsqueda de duplicados lee el árbol actual: no se puede sustituir mientras dura
+    if st.dup_busy.load(SeqCst) {
+        st.busy.store(false, SeqCst);
+        return Err(msg::dup_busy());
     }
     // Se limpia antes de lanzar el trabajo: una cancelación que llegue justo después no se pierde
     st.cancel.store(false, SeqCst);
@@ -163,10 +175,16 @@ async fn action(st: St<'_>, kind: String, id: u32) -> Res<ActionResult> {
             return Ok(ActionResult::fail(e));
         }
         if kind == ActionKind::Trash {
-            let mut g = st.scan.write().map_err(poisoned)?;
-            if let Some(s) = g.as_mut() {
-                if st.generation.load(SeqCst) == generation {
-                    let _ = s.tree.remove(id);
+            // Con el cerrojo tomado no puede empezar una búsqueda de duplicados mientras se espera la escritura
+            let mut later = st.dup_trashed.lock().map_err(poisoned)?;
+            if st.dup_busy.load(SeqCst) {
+                later.push((generation, id));
+            } else {
+                let mut g = st.scan.write().map_err(poisoned)?;
+                if let Some(s) = g.as_mut() {
+                    if st.generation.load(SeqCst) == generation {
+                        let _ = s.tree.remove(id);
+                    }
                 }
             }
         }
@@ -174,6 +192,78 @@ async fn action(st: St<'_>, kind: String, id: u32) -> Res<ActionResult> {
     })
     .await
     .map_err(join_error)?
+}
+
+/// Busca duplicados bajo `root` con el escaneo actual (bajo lectura durante toda la búsqueda).
+#[tauri::command]
+async fn duplicates(st: St<'_>, root: u32, min_size: f64, limit: u32, on_progress: Channel<DupProgress>) -> Res<DupResult> {
+    let st = st.inner().clone();
+    {
+        let _order = st.dup_trashed.lock().map_err(poisoned)?;
+        if st.dup_busy.swap(true, SeqCst) {
+            return Err(msg::dup_busy());
+        }
+    }
+    if st.busy.load(SeqCst) {
+        st.dup_busy.store(false, SeqCst);
+        return Err(msg::scan_busy());
+    }
+    st.dup_cancel.store(false, SeqCst);
+    let job = st.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        // `as` satura: negativos y NaN → 0
+        let r = run_duplicates(&job, root, min_size as u64, limit, on_progress);
+        end_duplicates(&job);
+        r
+    })
+    .await;
+    if r.is_err() {
+        // El hilo terminó con pánico antes de cerrar la búsqueda
+        end_duplicates(&st);
+    }
+    r.map_err(join_error)?
+}
+
+fn run_duplicates(st: &AppState, root: u32, min_size: u64, limit: u32, on_progress: Channel<DupProgress>) -> Res<DupResult> {
+    let g = st.scan.read().map_err(poisoned)?;
+    let s = g.as_ref().ok_or_else(msg::no_scan)?;
+    check(s, root)?;
+    let cb = move |p: DupProgress| {
+        let _ = on_progress.send(p);
+    };
+    tessera_core::duplicates(&s.tree, root, min_size, limit, &cb, &st.dup_cancel)
+}
+
+/// Cierra la búsqueda (ya sin la lectura del árbol) y quita lo enviado a la papelera mientras duraba.
+fn end_duplicates(st: &AppState) {
+    let trashed = {
+        let mut later = st.dup_trashed.lock().unwrap_or_else(PoisonError::into_inner);
+        st.dup_busy.store(false, SeqCst);
+        std::mem::take(&mut *later)
+    };
+    if trashed.is_empty() {
+        return;
+    }
+    if let Ok(mut g) = st.scan.write() {
+        if let Some(s) = g.as_mut() {
+            let current = st.generation.load(SeqCst);
+            for (generation, id) in trashed {
+                if generation == current {
+                    let _ = s.tree.remove(id);
+                }
+            }
+        }
+    }
+}
+
+/// Pide parar la búsqueda de duplicados; el comando `duplicates` pendiente termina con `error.cancelled`.
+#[tauri::command]
+fn cancel_duplicates(st: St<'_>) -> bool {
+    let busy = st.dup_busy.load(SeqCst);
+    if busy {
+        st.dup_cancel.store(true, SeqCst);
+    }
+    busy
 }
 
 #[tauri::command]
@@ -213,6 +303,8 @@ fn main() {
             node_path,
             node_info,
             action,
+            duplicates,
+            cancel_duplicates,
             elevation,
             relaunch_elevated
         ])

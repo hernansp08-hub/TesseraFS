@@ -171,6 +171,23 @@ function postProcess(root) {
   walk(win.kids.find(k => k.name === 'WinSxS'), n => { if (!n.isDir) { n.comp = R() < .42; n.hl = R() < .36; } });
   walk(win.kids.find(k => k.name === 'System32'), n => { if (!n.isDir) n.comp = R() < .22; });
   for (const n of N) if (HIDDEN.has(n.name)) n.hidden = true;
+  addCopies(root);
+}
+// Copias para la búsqueda de duplicados de la demo. Van al final y sin números aleatorios: el resto de la muestra no cambia.
+function addCopies(root) {
+  const at = (...names) => names.reduce((p, nm) => p.kids.find(k => k.name === nm) || dir(p, nm), root);
+  const me = ['Users', 'usuario'], t = d => T1 - d * 86400;
+  const dl = at(...me, 'Downloads'), docs = at(...me, 'Documents'), pics = at(...me, 'Pictures'), vids = at(...me, 'Videos');
+  const twice = (name, size, mt, ...folders) => folders.forEach(([p, nm]) => file(p, nm || name, size, mt));
+  twice('Win11_24H2_Spanish_x64.iso', 5.8 * GB, t(140), [dl], [at(...me, 'Documents', 'Instaladores')]);
+  twice('Boda Laura y Dani.mp4', 2.4 * GB, t(410), [vids], [at(...me, 'Documents', 'Copia del móvil')]);
+  twice('Proyecto final.zip', 640 * MB, t(75), [dl], [docs]);
+  twice('VSCodeUserSetup-x64-1.104.0.exe', 110 * MB, t(30), [dl], [dl, 'VSCodeUserSetup-x64-1.104.0 (1).exe']);
+  const qwen = at(...me, 'AppData', 'Local', 'lm-studio', 'models').kids.find(k => k.name === 'qwen3-1.7b-q8_0.gguf');
+  file(dl, qwen.name, qwen.size, qwen.mtime);
+  const y25 = at(...me, 'Pictures', '2025'), imp = at(...me, 'Pictures', 'Importado del móvil');
+  [3.4, 4.1, 2.9, 5.2, 3.7, 4.6].forEach((m, i) => twice(`IMG_20${41 + i}.jpg`, m * MB + i * 4093, t(300 - i * 9), [y25], [imp]));
+  void pics;
 }
 // Agregación ascendente en una pasada: cada padre tiene id menor que sus hijos
 function aggregate() {

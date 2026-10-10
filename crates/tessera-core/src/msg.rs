@@ -61,6 +61,13 @@ pub fn read_errors(count: u64, samples: &[String]) -> EngineMessage {
     sample_param(EngineMessage::new("scan.readErrors", with_samples(m, samples)).param("count", count), samples)
 }
 
+// ---- Avisos de la búsqueda de duplicados (DupResult.warnings) ----
+
+pub fn dup_read_errors(count: u64) -> EngineMessage {
+    let (n, were) = (plural(count, "file", "files"), if count == 1 { "was" } else { "were" });
+    EngineMessage::new("dup.readErrors", format!("{n} couldn't be read and {were} left out")).param("count", count)
+}
+
 // ---- Errores de las operaciones (Tauri: Err(EngineMessage)) ----
 
 pub fn invalid_path(path: &str) -> EngineMessage {
@@ -78,6 +85,11 @@ pub fn cannot_open(path: &str, error: &str) -> EngineMessage {
 
 pub fn scan_busy() -> EngineMessage {
     EngineMessage::new("error.scanBusy", "A scan is already running")
+}
+
+/// También rechaza un escaneo nuevo mientras dura la búsqueda.
+pub fn dup_busy() -> EngineMessage {
+    EngineMessage::new("error.dupBusy", "A duplicate search is already in progress")
 }
 
 pub fn no_scan() -> EngineMessage {

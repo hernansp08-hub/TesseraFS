@@ -315,6 +315,72 @@ pub struct ElevationInfo {
     pub can_elevate: bool,
 }
 
+// ---------- Duplicados (ver crate::dup) ----------
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DupRequest {
+    pub root: u32,
+    pub min_size: u64,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DupPhase {
+    Size,
+    Prefix,
+    Full,
+    Done,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DupProgress {
+    pub phase: DupPhase,
+    /// Archivos leídos en la pasada actual y candidatos de la pasada.
+    pub files: u64,
+    pub total_files: u64,
+    /// Bytes leídos en la pasada actual y bytes que leerá.
+    pub bytes: u64,
+    pub total_bytes: u64,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DupGroup {
+    /// Tamaño de cada copia.
+    pub size: u64,
+    /// BLAKE3 del contenido en hex (64 caracteres en minúsculas).
+    pub hash: String,
+    /// ≥ 2, ordenados por ruta sin distinguir mayúsculas.
+    pub files: Vec<SearchRow>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DupSkipped {
+    pub hardlinks: u64,
+    pub cloud: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DupResult {
+    /// Los `limit` primeros por espacio recuperable, (n − 1) × size, de mayor a menor.
+    pub groups: Vec<DupGroup>,
+    pub total_groups: u64,
+    /// Espacio recuperable de todos los grupos encontrados.
+    pub wasted: u64,
+    /// Archivos con tamaño repetido (primera pasada).
+    pub candidates: u64,
+    pub read_bytes: u64,
+    pub skipped: DupSkipped,
+    pub elapsed_ms: u64,
+    pub warnings: Vec<EngineMessage>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,5 +436,36 @@ mod tests {
         assert_eq!(serde_json::to_value(e).unwrap(), serde_json::json!({ "code": "error.internal", "params": { "error": "boom" }, "message": "Internal error: boom" }));
         assert_eq!("trash".parse::<ActionKind>(), Ok(ActionKind::Trash));
         assert_eq!("nuke".parse::<ActionKind>(), Err("nuke".to_string()));
+    }
+
+    #[test]
+    fn dup_json() {
+        let p = DupProgress { phase: DupPhase::Prefix, files: 1, total_files: 2, bytes: 3, total_bytes: 4, elapsed_ms: 5 };
+        assert_eq!(
+            serde_json::to_string(&p).unwrap(),
+            r#"{"phase":"prefix","files":1,"totalFiles":2,"bytes":3,"totalBytes":4,"elapsedMs":5}"#
+        );
+        let r = DupResult {
+            groups: vec![DupGroup { size: 7, hash: "ab".into(), files: vec![] }],
+            total_groups: 1,
+            wasted: 7,
+            candidates: 2,
+            read_bytes: 14,
+            skipped: DupSkipped { hardlinks: 1, cloud: 0 },
+            elapsed_ms: 9,
+            warnings: vec![msg::dup_read_errors(1)],
+        };
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            serde_json::json!({
+                "groups": [{ "size": 7, "hash": "ab", "files": [] }], "totalGroups": 1, "wasted": 7, "candidates": 2, "readBytes": 14,
+                "skipped": { "hardlinks": 1, "cloud": 0 }, "elapsedMs": 9,
+                "warnings": [{ "code": "dup.readErrors", "params": { "count": 1 }, "message": "1 file couldn't be read and was left out" }],
+            })
+        );
+        let q: DupRequest = serde_json::from_str(r#"{"root":3,"minSize":1048576,"limit":200}"#).unwrap();
+        assert_eq!(q, DupRequest { root: 3, min_size: 1 << 20, limit: 200 });
+        assert_eq!(msg::dup_read_errors(2).message, "2 files couldn't be read and were left out");
+        assert_eq!(msg::dup_busy().code, "error.dupBusy");
     }
 }

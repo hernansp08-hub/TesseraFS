@@ -5,7 +5,7 @@ use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use tessera_core::{ops, slice, EngineChoice, ScanOptions, ScanPhase, ScanProgress, Tree};
+use tessera_core::{ops, slice, DupProgress, EngineChoice, ScanOptions, ScanPhase, ScanProgress, Tree};
 
 const USO: &str = "Uso:
   tessera-cli scan <ruta> [opciones]
@@ -22,6 +22,8 @@ Opciones:
   --limit N                Filas de la búsqueda (50)
   --search-out f.json      Escribe la respuesta de búsqueda en JSON
   --json-out f.json        Vuelca el árbol completo en JSON (sólo para carpetas pequeñas)
+  --dups BYTES             Busca duplicados de al menos BYTES (lee los archivos; --limit grupos)
+  --dups-out f.json        Escribe el DupResult en JSON
   --compare                Escanea con MFT y con recorrido y compara la raíz y sus hijos
   --flags                  Estadísticas de flags (enlaces duros, comprimidos, nube…)
   --children               Lista los hijos de la raíz con sus totales
@@ -83,6 +85,7 @@ fn main() {
     let mut opts = ScanOptions::default();
     let (mut slice_out, mut json_out, mut search_out) = (None, None, None);
     let mut search_q: Vec<String> = Vec::new();
+    let (mut dups_min, mut dups_out) = (None, None);
     let mut show_progress = false;
     let mut show_children = false;
     let mut show_flags = false;
@@ -116,6 +119,8 @@ fn main() {
             "--limit" => limit = num(next(i)) as u32,
             "--search-out" => search_out = Some(next(i)),
             "--json-out" => json_out = Some(next(i)),
+            "--dups" => dups_min = Some(num(next(i)).max(0.0) as u64),
+            "--dups-out" => dups_out = Some(next(i)),
             "--repeat" => repeat = num(next(i)).max(1.0) as usize,
             "--compare" => {
                 compare = true;
@@ -261,6 +266,38 @@ Búsqueda «{q}»: {} resultados, {} ({ms:.1} ms)", sep(r.total), human(r.total_
     }
     if let Some(f) = &search_out {
         std::fs::write(f, serde_json::to_vec(&all).unwrap()).expect("escribir búsqueda");
+    }
+    if let Some(min) = dups_min {
+        let dcb = |p: DupProgress| {
+            if show_progress {
+                eprintln!("  [{:>6} ms] {:?}: {}/{} archivos, {}/{}", p.elapsed_ms, p.phase, sep(p.files), sep(p.total_files), human(p.bytes), human(p.total_bytes));
+            }
+        };
+        match tessera_core::duplicates(t, 0, min, limit, &dcb, &cancel) {
+            Ok(r) => {
+                println!(
+                    "\nDuplicados (≥ {}): {} grupos, {} recuperables · {} candidatos · {} leídos · {} enlaces duros y {} en la nube fuera · {:.2} s",
+                    human(min),
+                    sep(r.total_groups),
+                    human(r.wasted),
+                    sep(r.candidates),
+                    human(r.read_bytes),
+                    sep(r.skipped.hardlinks),
+                    sep(r.skipped.cloud),
+                    r.elapsed_ms as f64 / 1000.0
+                );
+                for w in &r.warnings {
+                    println!("  Aviso: [{}] {}", w.code, w.message);
+                }
+                for g in r.groups.iter().take(top.max(5)) {
+                    println!("  {} × {:>10}  {}  {}", g.files.len(), human(g.size), &g.hash[..12], g.files[0].path);
+                }
+                if let Some(f) = &dups_out {
+                    std::fs::write(f, serde_json::to_vec(&r).unwrap()).expect("escribir duplicados");
+                }
+            }
+            Err(e) => println!("\nDuplicados: error: [{}] {}", e.code, e.message),
+        }
     }
     if let Some(f) = &slice_out {
         let t0 = Instant::now();

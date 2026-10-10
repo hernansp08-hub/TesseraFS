@@ -3,11 +3,13 @@ import { ptr } from 'bun:ffi';
 import { win32 as winPath } from 'node:path';
 import { availableParallelism } from 'node:os';
 import {
-  encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type ElevationInfo, type Engine,
+  encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type DupProgress, type DupRequest,
+  type DupResult, type ElevationInfo, type Engine,
   type EngineMessage, type ExtStat, type NodeRow, type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest,
   type SearchResponse, type VolumeInfo,
 } from '../../protocol/src/index.ts';
 import { EngineError, engineError, errorText, msg, type MessageCode, type MessageParams } from './messages.ts';
+import { findDuplicates } from './dup.ts';
 import { mftScan } from './mft.ts';
 import { Store } from './store.ts';
 import { checkRoot, walkScan, type WalkOutcome } from './walk.ts';
@@ -145,7 +147,9 @@ export class TesseraEngine {
   store: Store | null = null;
   result: ScanResult | null = null;
   scanning = false;
+  dupRunning = false;
   private cancelled = false;
+  private dupCancelled = false;
   readonly elevated = isElevated();
   private opts: EngineOptions;
 
@@ -157,6 +161,7 @@ export class TesseraEngine {
 
   async scan(req: ScanRequest, onProgress: (p: ScanProgress) => void = () => { }): Promise<ScanResult> {
     if (this.scanning) throw engineError('error.scanBusy');
+    if (this.dupRunning) throw engineError('error.dupBusy'); // la búsqueda usa el árbol actual
     // Una ruta no válida, inexistente o que no es carpeta se rechaza antes de soltar el árbol anterior,
     // que así sigue sirviendo a la interfaz
     const path = normalizePath(req.path);
@@ -232,6 +237,27 @@ export class TesseraEngine {
   cancel(): boolean {
     if (!this.scanning) return false;
     this.cancelled = true;
+    return true;
+  }
+
+  /** Archivos duplicados bajo `root` (ver dup.ts). Exige un escaneo cargado y ninguna operación larga en curso. */
+  async duplicates(req: DupRequest, onProgress: (p: DupProgress) => void = () => { }): Promise<DupResult> {
+    if (this.scanning) throw engineError('error.scanBusy');
+    if (this.dupRunning) throw engineError('error.dupBusy');
+    const s = this.need(req.root);
+    // en marcha antes del primer await: un cancelDuplicates() inmediato ya la para
+    this.dupRunning = true; this.dupCancelled = false;
+    try {
+      return await findDuplicates(s, req.root, { minSize: req.minSize, limit: req.limit, onProgress, isCancelled: () => this.dupCancelled });
+    } finally {
+      this.dupRunning = false;
+    }
+  }
+
+  /** Pide parar la búsqueda de duplicados; `duplicates` se rechaza con error.cancelled. False si no había ninguna. */
+  cancelDuplicates(): boolean {
+    if (!this.dupRunning) return false;
+    this.dupCancelled = true;
     return true;
   }
 

@@ -4,9 +4,11 @@
 //!   recorrido de directorios, y devuelve un [`tree::Tree`] compacto.
 //! - [`slice::encode_slice`], [`ops::children`], [`ops::search`] y [`ops::ext_stats`]
 //!   responden a la interfaz según el contrato de `docs/ARQUITECTURA.md`.
+//! - [`dup::duplicates`] busca archivos duplicados (tamaño, primeros 64 KiB y BLAKE3 completo).
 
 pub mod attrs;
 pub mod build;
+pub mod dup;
 pub mod mft;
 pub mod msg;
 pub mod names;
@@ -20,6 +22,7 @@ pub mod types;
 #[cfg(windows)]
 pub mod walk;
 
+pub use dup::duplicates;
 pub use scan::{scan, Progress, Scan, ScanOptions};
 pub use tree::Tree;
 pub use types::*;

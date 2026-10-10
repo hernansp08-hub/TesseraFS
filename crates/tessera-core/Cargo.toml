@@ -11,6 +11,7 @@ serde.workspace = true
 rayon = "1.10"
 regex = { version = "1.11", default-features = false, features = ["std", "unicode", "perf"] }
 memchr = "2.7"
+blake3 = "1.8"
 
 [target.'cfg(windows)'.dependencies]
 trash = "5.2"

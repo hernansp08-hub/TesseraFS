@@ -62,6 +62,7 @@
           <button class="tab" role="tab" type="button" data-tab="tree" aria-selected="true"><span data-i18n="tab.tree">Folders</span></button>
           <button class="tab" role="tab" type="button" data-tab="files" aria-selected="false"><span data-i18n="tab.files">Files</span> <span class="count" id="filesCount"></span></button>
           <button class="tab" role="tab" type="button" data-tab="clean" aria-selected="false"><span data-i18n="tab.clean">Free up space</span> <span class="count" id="cleanCount"></span></button>
+          <button class="tab" role="tab" type="button" data-tab="dups" aria-selected="false"><span data-i18n="tab.dups">Duplicates</span> <span class="count" id="dupsCount"></span></button>
           <button class="tab" role="tab" type="button" data-tab="basket" aria-selected="false"><span data-i18n="tab.basket">To delete</span> <span class="count danger" id="basketCount"></span></button>
         </div>
       </div>
@@ -86,6 +87,7 @@
         </div>
       </div>
       <div class="view" id="view-clean" hidden><div class="clean" id="cleanBody"></div></div>
+      <div class="view" id="view-dups" hidden><div class="dups" id="dupsBody"></div></div>
       <div class="view" id="view-basket" hidden><div class="basket" id="basketBody"></div></div>
     </section>
     <div class="split" id="split1" role="separator" aria-orientation="vertical" data-i18n-aria="split.tree" tabindex="0" data-i18n-title="split.title"></div>
@@ -145,6 +147,7 @@
     <li data-i18n-html="guide.find.2"></li>
     <li data-i18n-html="guide.find.3"></li>
     <li data-i18n-html="guide.find.4"></li>
+    <li data-i18n-html="guide.find.5"></li>
   </ul>
   <h3 data-i18n="guide.filter.title"></h3>
   <div class="tscroll"><table>

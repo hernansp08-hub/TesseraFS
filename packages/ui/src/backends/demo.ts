@@ -1,7 +1,7 @@
 // Motor de demostración: árbol de ejemplo en memoria que cumple el mismo contrato que los motores reales.
 import {
-  FLAG, compileQuery, encodeSlice, type Backend, type ChildrenRequest, type NodeRow, type ScanProgress, type ScanRequest,
-  type ScanResult, type SearchRequest, type SliceSource, type VolumeInfo,
+  FLAG, compileQuery, encodeSlice, type Backend, type ChildrenRequest, type DupGroup, type DupProgress, type DupRequest, type DupResult,
+  type NodeRow, type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest, type SliceSource, type VolumeInfo,
 } from '@tessera/protocol';
 // @ts-ignore módulo JS sin tipos
 import { buildSample } from './sample.js';
@@ -22,6 +22,8 @@ export class DemoBackend implements Backend {
   private ready = false;
   private scanning = false;
   private cancelled = false;
+  private dupRunning = false;
+  private dupCancelled = false;
 
   private ensure() {
     if (this.ready) return;
@@ -112,6 +114,53 @@ export class DemoBackend implements Backend {
     }
     return [...m.values()].sort((a, b) => b.size - a.size);
   }
+
+  // Duplicados simulados: mismo tamaño y mismo nombre (sin « (1)»). Las tres pasadas sólo se fingen, con su progreso.
+  async duplicates(r: DupRequest, onProgress: (p: DupProgress) => void): Promise<DupResult> {
+    if (this.scanning) throw fail('error.scanBusy', 'A scan is already in progress');
+    if (this.dupRunning) throw fail('error.dupBusy', 'A duplicate search is already in progress');
+    const t0 = performance.now(), min = Math.max(1, r.minSize), files: DNode[] = [];
+    let hardlinks = 0;
+    const st = [this.node(r.root)];
+    while (st.length) {
+      const n = st.pop()!;
+      if (n.kids) { for (const k of n.kids) st.push(k); continue; }
+      if (n.size < min) continue;
+      if (n.hl) { hardlinks++; continue; }
+      files.push(n);
+    }
+    const key = (n: DNode) => n.size + '|' + n.name.toLowerCase().replace(/ \(\d+\)(?=\.[^.]+$|$)/, '');
+    const bySize = new Map<number, DNode[]>(); for (const n of files) bySize.set(n.size, [...(bySize.get(n.size) || []), n]);
+    const cands = [...bySize.values()].filter(g => g.length > 1).flat();
+    const byKey = new Map<string, DNode[]>(); for (const n of cands) byKey.set(key(n), [...(byKey.get(key(n)) || []), n]);
+    const found = [...byKey.values()].filter(g => g.length > 1);
+    const fullBytes = found.flat().reduce((s, n) => s + n.size, 0), prefixBytes = cands.reduce((s, n) => s + Math.min(n.size, 65536), 0);
+    this.dupRunning = true; this.dupCancelled = false;
+    try {
+      const steps: [DupProgress['phase'], number, number, number][] = [['size', cands.length, 0, 250], ['prefix', cands.length, prefixBytes, 450], ['full', found.flat().length, fullBytes, 1100]];
+      for (const [phase, total, bytes, dur] of steps) {
+        const s0 = performance.now();
+        for (let p = 0; p < 1;) {
+          if (this.dupCancelled) throw fail('error.cancelled', 'Operation cancelled');
+          p = Math.min(1, (performance.now() - s0) / dur);
+          onProgress({ phase, files: Math.round(total * p), totalFiles: total, bytes: Math.round(bytes * p), totalBytes: bytes, elapsedMs: performance.now() - t0 });
+          await new Promise(res => setTimeout(res, 60));
+        }
+      }
+    } finally { this.dupRunning = false; }
+    const groups: DupGroup[] = found.map(g => ({
+      size: g[0].size, hash: (g[0].size * 2654435761 % 2 ** 32).toString(16).padStart(8, '0').repeat(8),
+      files: g.map(n => ({ ...this.row(n), path: this.path(n) })).sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase())),
+    })).sort((a, b) => (b.files.length - 1) * b.size - (a.files.length - 1) * a.size || b.size - a.size);
+    const elapsedMs = performance.now() - t0;
+    onProgress({ phase: 'done', files: 0, totalFiles: 0, bytes: 0, totalBytes: 0, elapsedMs });
+    return {
+      groups: groups.slice(0, Math.max(1, Math.min(5000, r.limit))), totalGroups: groups.length,
+      wasted: groups.reduce((s, g) => s + (g.files.length - 1) * g.size, 0), candidates: cands.length,
+      readBytes: prefixBytes + fullBytes, skipped: { hardlinks, cloud: 0 }, elapsedMs, warnings: [],
+    };
+  }
+  async cancelDuplicates() { if (!this.dupRunning) return false; this.dupCancelled = true; return true; }
 
   async nodePath(id: number) { return this.path(this.node(id)); }
   async nodeInfo(id: number) { return this.row(this.node(id)); }

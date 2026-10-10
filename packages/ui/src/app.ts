@@ -1,6 +1,6 @@
 // Interfaz de TesseraFS: un único estado y una selección que une el árbol, el mapa y el panel de detalle.
 import {
-  FLAG, decodeSlice, type ActionKind, type Backend, type ExtStat, type NodeRow, type ScanProgress, type ScanResult,
+  FLAG, decodeSlice, type ActionKind, type Backend, type DupGroup, type DupProgress, type DupResult, type ExtStat, type NodeRow, type ScanProgress, type ScanResult,
   type SearchRow, type SliceNode, type SortKey, type VolumeInfo,
 } from '@tessera/protocol';
 import { layout, raster, type Layout, type Tile } from './render';
@@ -587,9 +587,10 @@ function knownHTML(r: NodeRow, path: string | undefined): string {
 }
 async function doAction(kind: ActionKind, r: NodeRow) {
   try {
+    const path = S.pathCache.get(r.id);
     const res = await B.action(kind, r.id);
     toast(res.code ? msgText(res) : res.message || t(res.ok ? 'toast.done' : 'toast.actionFailed'));
-    if (kind === 'trash' && res.ok) { S.marked.delete(r.id); await refreshAfterChange(r); }
+    if (kind === 'trash' && res.ok) { S.marked.delete(r.id); if (path) pruneDups([path]); await refreshAfterChange(r); }
   } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
 }
 async function refreshAfterChange(r: NodeRow | null) {
@@ -727,12 +728,127 @@ $('cleanBody').addEventListener('click', async e => {
 export function setTab(t: string) {
   S.tab = t;
   for (const b of document.querySelectorAll('.tab')) b.setAttribute('aria-selected', String((b as HTMLElement).dataset.tab === t));
-  for (const v of ['tree', 'files', 'clean', 'basket']) $('view-' + v).hidden = v !== t;
+  for (const v of ['tree', 'files', 'clean', 'dups', 'basket']) $('view-' + v).hidden = v !== t;
   if (t === 'tree') treeVL.paint();
   if (t === 'files') loadFiles();
   if (t === 'clean') renderClean();
   if (t === 'basket') renderBasket();
+  if (t === 'dups') renderDups();
 }
+
+// ---------- Duplicados ----------
+// El motor compara tamaños, luego los primeros 64 KiB y por último el contenido completo de los candidatos.
+// Desde aquí se marcan las copias para la cesta «Para borrar»; nada se borra sin pasar por ella.
+const DUP_SIZES = [100 * 1024, 1024 ** 2, 10 * 1024 ** 2, 100 * 1024 ** 2], DUP_PAGE = 40;
+const D = { result: null as DupResult | null, running: false, progress: null as DupProgress | null, all: false, min: 1024 ** 2, shown: DUP_PAGE };
+const ICON_BOX = '<svg class="i" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/></svg>';
+const ICON_CHECKED = '<svg class="i" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="m5.5 8 1.8 1.8L10.8 6"/></svg>';
+function resetDups() { D.result = null; D.progress = null; D.shown = DUP_PAGE; $('dupsCount').textContent = ''; }
+function dupProgressHTML() {
+  const p = D.progress, frac = !p ? 0 : p.totalBytes ? p.bytes / p.totalBytes : p.totalFiles ? p.files / p.totalFiles : 0;
+  const phase = !p || p.phase === 'done' ? 'size' : p.phase;
+  return `<div class="dp-phase"><b>${tx(('dups.phase.' + phase) as MessageKey)}</b><span>${esc(i18n.percent(Math.min(1, frac), 0))}</span></div>`
+    + `<div class="scan-track"><i style="transform:scaleX(${Math.min(1, frac)})"></i></div>`
+    + (p ? `<small>${tx('dups.progress.files', { files: p.files, totalFiles: p.totalFiles })}${p.totalBytes ? ' · ' + tx('dups.progress.bytes', { bytes: fmtB(p.bytes), totalBytes: fmtB(p.totalBytes) }) : ''}</small>` : '');
+}
+function dupGroupHTML(g: DupGroup) {
+  const f0 = g.files[0], all = g.files.every(f => S.marked.has(f.id) || !!markedAncestor(f));
+  return `<section class="dp-group${all ? ' warn' : ''}"><header><i class="sw" style="background:${rgb(rowColor(f0))}"></i><b title="${esc(f0.name)}">${esc(f0.name)}</b>`
+    + `<span>${tx('dups.group', { count: g.files.length, size: fmtB(g.size), wasted: fmtB((g.files.length - 1) * g.size) })}</span></header>`
+    + (all ? `<p class="dp-warn">${tx('dups.allMarked')}</p>` : '')
+    + g.files.map(f => {
+      const on = S.marked.has(f.id);
+      return `<div class="dp-file${markClass(f)}${S.sel?.id === f.id ? ' sel' : ''}" data-id="${f.id}">`
+        + `<button class="icon-btn sm dp-mk" type="button" data-dp="mk" aria-pressed="${on}" title="${tx(on ? 'mark.remove' : 'mark.add')}" aria-label="${tx(on ? 'mark.remove' : 'mark.add')}">${on ? ICON_CHECKED : ICON_BOX}</button>`
+        + `<span class="dp-name"><span class="nm">${esc(f.name)}</span><code title="${esc(f.path)}">${esc(parentPath(f.path))}</code></span><span class="num">${fmtD(f.mtime)}</span></div>`;
+    }).join('') + `</section>`;
+}
+function renderDups() {
+  const el = $('dupsBody');
+  if (!S.root) { el.innerHTML = `<div class="cl-loading">${tx('dups.noScan')}</div>`; return; }
+  const z = zoomRow() || S.root, whole = z.id === S.root.id, all = D.all || whole;
+  const controls = `<div class="dp-controls"><p class="dp-intro">${tx('dups.intro')}</p><div class="dp-row">`
+    + `<span class="seg" role="group" aria-label="${tx('dups.scope')}"><button type="button" data-dp="scope" data-v="map" aria-pressed="${!all}"${whole ? ' disabled' : ''}>${tx('dups.scope.map', { name: nameOf(z) })}</button>`
+    + `<button type="button" data-dp="scope" data-v="all" aria-pressed="${all}">${tx('dups.scope.all')}</button></span>`
+    + `<label class="dp-min">${tx('dups.minSize')} <select data-dp="min"${D.running ? ' disabled' : ''}>${DUP_SIZES.map(s => `<option value="${s}"${s === D.min ? ' selected' : ''}>≥ ${esc(fmtB(s))}</option>`).join('')}</select></label>`
+    + (D.running ? `<button class="btn sm" type="button" data-dp="cancel">${tx('header.cancel')}</button>`
+      : `<button class="btn sm primary" type="button" data-dp="run"${S.scanning ? ' disabled' : ''}>${tx(D.result ? 'dups.searchAgain' : 'dups.search')}</button>`)
+    + `</div></div>`;
+  if (D.running) { el.innerHTML = controls + `<div class="dp-prog" id="dpProg">${dupProgressHTML()}</div>`; return; }
+  const r = D.result; if (!r) { el.innerHTML = controls; return; }
+  const skipped = r.skipped.hardlinks || r.skipped.cloud ? `<p class="note">${tx('dups.skipped', { hardlinks: r.skipped.hardlinks, cloud: r.skipped.cloud })}</p>` : '';
+  const warns = r.warnings.map(w => `<p class="note">${esc(msgText(w))}</p>`).join('');
+  if (!r.groups.length) { el.innerHTML = controls + `<div class="cl-loading">${tx('dups.none', { size: fmtB(D.min) })}</div>` + skipped + warns; return; }
+  el.innerHTML = controls
+    + `<div class="dp-sum"><div class="bk-sum"><b>${fmtB(r.wasted)}</b><span>${tx('dups.summary', { groups: r.totalGroups })}</span>`
+    + `<small>${tx('dups.stats', { candidates: r.candidates, read: fmtB(r.readBytes), time: fmtS(r.elapsedMs) })}</small></div>`
+    + `<div class="bk-acts"><button class="btn sm" type="button" data-dp="hl">${tx('dups.highlight')}</button><button class="btn sm danger" type="button" data-dp="mark">${tx('dups.markCopies')}</button></div></div>`
+    + skipped + warns + (r.totalGroups > r.groups.length ? `<p class="note">${tx('dups.shown', { count: r.groups.length })}</p>` : '')
+    + r.groups.slice(0, D.shown).map(dupGroupHTML).join('')
+    + (r.groups.length > D.shown ? `<button class="btn sm dp-more" type="button" data-dp="more">${tx('dups.more', { count: Math.min(DUP_PAGE, r.groups.length - D.shown) })}</button>` : '');
+}
+async function runDups() {
+  if (!S.root || D.running || S.scanning) return;
+  const z = zoomRow() || S.root, root = D.all ? S.root.id : z.id;
+  D.running = true; D.progress = null; renderDups();
+  try {
+    const r = await B.duplicates({ root, minSize: D.min, limit: 1000 }, p => {
+      D.progress = p; const el = document.getElementById('dpProg'); if (el) el.innerHTML = dupProgressHTML();
+    });
+    for (const g of r.groups) for (const f of g.files) { remember(f); S.pathCache.set(f.id, f.path); }
+    D.result = r; D.shown = DUP_PAGE; $('dupsCount').textContent = r.totalGroups ? fmtN(r.totalGroups) : '';
+  } catch (e) {
+    if ((e as { code?: string }).code !== 'error.cancelled') toast(t('toast.error', { error: msgText(e) }));
+  } finally { D.running = false; if (S.tab === 'dups') renderDups(); }
+}
+/** Marca todas las copias menos una por grupo: se conserva la más antigua (a igualdad, la de ruta más corta). */
+async function markCopies() {
+  if (!D.result) return; let n = 0, bytes = 0;
+  for (const g of D.result.groups) {
+    const keep = [...g.files].sort((a, b) => a.mtime - b.mtime || a.path.length - b.path.length)[0];
+    if (S.marked.has(keep.id)) await toggleMark(keep, true); // nunca se marcan todas las copias de un grupo
+    for (const f of g.files) if (f.id !== keep.id && !S.marked.has(f.id)) {
+      await toggleMark(f, true); if (S.marked.has(f.id)) { n++; bytes += f.size; }
+    }
+  }
+  afterMarksChanged(); renderDups();
+  toast(t('dups.marked', { count: n, size: fmtB(bytes) }));
+}
+/** Tras mover cosas a la papelera: quita de los resultados lo que estaba en esas rutas. */
+function pruneDups(paths: string[]) {
+  const r = D.result; if (!r || !paths.length) return;
+  const gone = paths.map(lc), dead = (p: string) => { const l = lc(p); return gone.some(g => l === g || l.startsWith(g + '\\')); };
+  const waste = (gs: DupGroup[]) => gs.reduce((s, g) => s + (g.files.length - 1) * g.size, 0), before = waste(r.groups), n0 = r.groups.length;
+  r.groups = r.groups.map(g => ({ ...g, files: g.files.filter(f => !dead(f.path)) })).filter(g => g.files.length > 1);
+  r.wasted = Math.max(0, r.wasted - (before - waste(r.groups))); r.totalGroups = Math.max(0, r.totalGroups - (n0 - r.groups.length));
+  $('dupsCount').textContent = r.totalGroups ? fmtN(r.totalGroups) : '';
+  if (S.tab === 'dups') renderDups();
+}
+const dupFile = (id: number) => { for (const g of D.result?.groups || []) for (const f of g.files) if (f.id === id) return f; return null; };
+$('dupsBody').addEventListener('click', async e => {
+  const el = e.target as HTMLElement, b = el.closest('[data-dp]') as HTMLElement, row = el.closest('.dp-file') as HTMLElement;
+  const f = row ? dupFile(+row.dataset.id!) : null;
+  switch (b?.dataset.dp) {
+    case 'run': runDups(); return;
+    case 'cancel': B.cancelDuplicates().catch(err => toast(msgText(err))); return;
+    case 'scope': D.all = b.dataset.v === 'all'; renderDups(); return;
+    case 'more': D.shown += DUP_PAGE; renderDups(); return;
+    case 'mark': markCopies(); return;
+    case 'hl': {
+      const ids = new Set<number>(); for (const g of D.result?.groups || []) for (const x of g.files) ids.add(x.id);
+      setHL({ type: 'search', ids, query: '', count: ids.size }); return;
+    }
+    case 'mk': if (f) { await toggleMark(f); renderDups(); } return;
+  }
+  if (f) { select(f); if (e.ctrlKey || e.metaKey) { await toggleMark(f); } renderDups(); }
+});
+$('dupsBody').addEventListener('dblclick', e => {
+  const row = (e.target as HTMLElement).closest('.dp-file') as HTMLElement, f = row ? dupFile(+row.dataset.id!) : null;
+  if (f && !(e.target as HTMLElement).closest('[data-dp]')) { setTab('tree'); locate(f); }
+});
+$('dupsBody').addEventListener('change', e => {
+  const s = (e.target as HTMLElement).closest('[data-dp="min"]') as HTMLSelectElement; if (s) D.min = +s.value;
+});
 
 // ---------- Cesta «Para borrar» ----------
 // Se marca con Ctrl+clic (mapa y listas), Espacio (listas), el panel de detalle, el menú o las tarjetas de limpieza.
@@ -789,16 +905,17 @@ async function trashMarked() {
   const list = [...S.marked.values()].sort((a, b) => b.row.size - a.row.size); if (!list.length) return;
   S.basketConfirm = false; S.basketBusy = true; renderBasket();
   let moved = 0, failed = 0, bytes = 0;
+  const movedPaths: string[] = [];
   for (const [i, m] of list.entries()) {
     toast(t('basket.progress', { done: i + 1, total: list.length }));
     try {
       const res = await B.action('trash', m.row.id);
-      if (res.ok) { moved++; bytes += m.row.size; S.marked.delete(m.row.id); }
+      if (res.ok) { moved++; bytes += m.row.size; S.marked.delete(m.row.id); movedPaths.push(m.path); }
       else { failed++; m.error = res.code ? msgText(res) : res.message || t('toast.actionFailed'); }
     } catch (e) { failed++; m.error = msgText(e); }
   }
   S.basketBusy = false;
-  if (moved) await refreshAfterChange(null);
+  if (moved) { pruneDups(movedPaths); await refreshAfterChange(null); }
   toast(failed ? t('basket.partial', { moved, failed }) : t('basket.done', { count: moved, size: fmtB(bytes) }));
   afterMarksChanged();
 }
@@ -979,14 +1096,15 @@ function showProgress(p: ScanProgress) {
   } else $('scanTxt').textContent = t('header.scanProgress', { value: fmtN(p.entries) });
 }
 export async function startScan() {
-  if (S.scanning) return; S.scanning = true; closeMenus(); tip.hidden = true;
+  if (S.scanning) return;
+  if (D.running) { toast(t('engine.error.dupBusy')); return; } S.scanning = true; closeMenus(); tip.hidden = true;
   // Durante el escaneo el botón principal pasa a Cancelar
   const btn = $('scanBtn') as HTMLButtonElement; btn.disabled = false; btn.classList.add('cancel'); btn.querySelector('span')!.textContent = t('header.cancel');
   $('scanBar').hidden = !expectedBytes(); ($('scanBar').firstElementChild as HTMLElement).style.transform = 'scaleX(0)';
   scanCard = null; showProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0 });
   try {
     const res = await B.scan({ path: S.target, engine: 'auto' }, showProgress);
-    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.known.clear(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
+    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.known.clear(); resetDups(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
     S.root = remember(await B.nodeInfo(res.rootId)); S.pathCache.set(res.rootId, res.rootPath);
     S.chain = [S.root]; S.expanded = new Set([S.root.id]); S.slice = null;
     if (res.volume) { S.vol = S.vols.find(v => v.path === res.volume!.path) || res.volume; }
@@ -1146,6 +1264,7 @@ function relocalize() {
   if (S.tab === 'files') loadFiles();
   if (S.tab === 'clean') renderClean();
   renderBasketCount(); if (S.tab === 'basket') renderBasket();
+  if (S.tab === 'dups') renderDups();
 }
 export async function startApp(backend: Backend) {
   B = backend;

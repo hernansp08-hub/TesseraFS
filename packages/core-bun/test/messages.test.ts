@@ -9,7 +9,8 @@ import {
 const CONTRACT = [
   'scan.mftNeedsAdmin', 'scan.mftUnsupportedFs', 'scan.mftNetworkPath', 'scan.mftFailed', 'scan.mftFragmented',
   'scan.mftBadRecords', 'scan.mftOrphans', 'scan.accessDenied', 'scan.readErrors', 'scan.demoData',
-  'error.invalidPath', 'error.notFolder', 'error.cannotOpen', 'error.scanBusy', 'error.noScan', 'error.invalidNode',
+  'dup.readErrors',
+  'error.invalidPath', 'error.notFolder', 'error.cannotOpen', 'error.scanBusy', 'error.dupBusy', 'error.noScan', 'error.invalidNode',
   'error.cancelled', 'error.unsupportedPlatform', 'error.internal',
   'action.trashed', 'action.trashRoot', 'action.trashNotMoved', 'action.cancelled', 'action.failed', 'action.unknown',
   'elevation.failed',
@@ -34,6 +35,8 @@ test('messages: forma del objeto y plurales en inglés', () => {
   });
   expect(msg('scan.mftBadRecords', { count: 1 }).message).toBe('1 MFT record with invalid fixups was skipped');
   expect(msg('scan.mftOrphans', { count: 1536 }).message).toBe('1,536 entries without a valid parent folder are not shown');
+  expect(msg('dup.readErrors', { count: 1 }).message).toBe("1 file couldn't be read and was left out");
+  expect(msg('dup.readErrors', { count: 3 }).message).toBe("3 files couldn't be read and were left out");
 });
 
 test('walkWarnings: sólo dos recuentos (con rutas de muestra), nunca una línea por carpeta', () => {
@@ -70,6 +73,7 @@ test('http: estados por código y cuerpo JSON que es un EngineMessage', async ()
     [engineError('error.invalidNode', { id: 999999999 }), 404],
     [engineError('error.noScan'), 409],
     [engineError('error.scanBusy'), 409],
+    [engineError('error.dupBusy'), 409],
     [engineError('error.cancelled'), 409],
     [engineError('error.internal', { error: 'x' }), 500],
     [new Error('kaboom'), 500],

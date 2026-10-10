@@ -7,7 +7,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ActionKind, EngineChoice, ScanProgress, SortKey } from '../../../packages/protocol/src/index.ts';
+import type { ActionKind, DupProgress, EngineChoice, ScanProgress, SortKey } from '../../../packages/protocol/src/index.ts';
 import { TesseraEngine, defaultThreads, errorResponse, msg, runElevated, setWalkWorkerUrl, win32 } from '../../../packages/core-bun/src/index.ts';
 import { embeddedUi } from './ui-macro.ts' with { type: 'macro' };
 
@@ -67,11 +67,14 @@ async function main() {
   type Client = { send(b: Uint8Array): void };
   const clients = new Set<Client>();
   let hadClient = false, lastGone = Date.now();
-  const broadcast = (p: ScanProgress) => {
+  // el progreso del escaneo va sin nombre; el de los duplicados, con `event: dup`
+  const broadcast = (p: ScanProgress | DupProgress, event?: 'dup') => {
     if (!clients.size) return;
-    const b = enc.encode(`data: ${JSON.stringify(p)}\n\n`);
+    const b = enc.encode(`${event ? `event: ${event}\n` : ''}data: ${JSON.stringify(p)}\n\n`);
     for (const c of clients) c.send(b);
   };
+  const scanEvent = (p: ScanProgress) => broadcast(p);
+  const dupEvent = (p: DupProgress) => broadcast(p, 'dup');
   setInterval(() => { const b = enc.encode(': ping\n\n'); for (const c of clients) c.send(b); }, 5000);
 
   function events(req: Request): Response {
@@ -131,7 +134,7 @@ async function main() {
         let peak = process.memoryUsage().rss;
         const sampler = (debug || noWindow) ? setInterval(() => { peak = Math.max(peak, process.memoryUsage().rss); }, 50) : null;
         try {
-          const r = await engine.scan({ path: body.path, engine: eng }, broadcast);
+          const r = await engine.scan({ path: body.path, engine: eng }, scanEvent);
           const mb = (b: number) => Math.round(b / 2 ** 20);
           log(`scan ${r.rootPath}: ${r.entries} entries in ${r.elapsedMs} ms (${r.engine}); RSS ${mb(process.memoryUsage().rss)} MB, peak ${mb(Math.max(peak, process.memoryUsage().rss))} MB`
             + (r.warnings.length ? `; warnings: ${r.warnings.map(w => w.code).join(', ')}` : ''));
@@ -142,6 +145,23 @@ async function main() {
         } finally { if (sampler) clearInterval(sampler); }
       }
       case 'POST /api/cancel': return json(engine.cancel());
+      case 'POST /api/duplicates': {
+        server.timeout(req, 0); // lee archivos: puede tardar minutos
+        const b = await req.json().catch(() => null) as { root?: unknown; minSize?: unknown; limit?: unknown } | null;
+        if (!b || typeof b.root !== 'number') return fail(msg('error.invalidNode', { id: String(b?.root ?? '') }), 400);
+        const n = (v: unknown) => typeof v === 'number' ? v : NaN; // NaN → valor por defecto del motor
+        try {
+          const r = await engine.duplicates({ root: b.root, minSize: n(b.minSize), limit: n(b.limit) }, dupEvent);
+          const mb = (x: number) => Math.round(x / 2 ** 20);
+          log(`duplicates ${b.root}: ${r.totalGroups} groups, ${mb(r.wasted)} MB wasted; ${r.candidates} candidates, ${mb(r.readBytes)} MB read in ${r.elapsedMs} ms`
+            + (r.warnings.length ? `; warnings: ${r.warnings.map(w => w.code).join(', ')}` : ''));
+          return json(r);
+        } catch (e) {
+          log(`duplicates ${b.root} failed:`, e instanceof Error ? e.message : e);
+          return fail(e);
+        }
+      }
+      case 'POST /api/duplicates/cancel': return json(engine.cancelDuplicates());
       case 'GET /api/slice': {
         const bytes = engine.slice(num(q.get('root'), -1), num(q.get('min'), 0), num(q.get('max'), 20000));
         return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' } });

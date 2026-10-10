@@ -21,10 +21,12 @@ const EN = {
   'scan.accessDenied': (p: MessageParams) => `${count(p.count, 'folder', 'folders')} could not be read (access denied); their contents are not counted${eg(p)}`,
   'scan.readErrors': (p: MessageParams) => `${count(p.count, 'folder', 'folders')} could not be read because of errors; their contents are not counted${eg(p)}`,
   'scan.demoData': () => 'Demo data: nothing was read from your disk',
+  'dup.readErrors': (p: MessageParams) => `${count(p.count, 'file', 'files')} couldn't be read and ${p.count === 1 ? 'was' : 'were'} left out`,
   'error.invalidPath': (p: MessageParams) => `Invalid path (it must be absolute): ${p.path}`,
   'error.notFolder': (p: MessageParams) => `Not a folder: ${p.path}`,
   'error.cannotOpen': (p: MessageParams) => `Cannot open ${p.path}: ${p.error}`,
   'error.scanBusy': () => 'A scan is already in progress',
+  'error.dupBusy': () => 'A duplicate search is already in progress',
   'error.noScan': () => 'Nothing has been scanned yet',
   'error.invalidNode': (p: MessageParams) => `Unknown node id: ${p.id}`,
   'error.cancelled': () => 'Scan cancelled',
@@ -87,7 +89,7 @@ export function httpStatus(code: string): number {
   switch (code) {
     case 'error.invalidPath': case 'error.notFolder': case 'error.cannotOpen': case 'action.unknown': return 400;
     case 'error.invalidNode': return 404;
-    case 'error.noScan': case 'error.scanBusy': case 'error.cancelled': return 409;
+    case 'error.noScan': case 'error.scanBusy': case 'error.dupBusy': case 'error.cancelled': return 409;
     default: return 500;
   }
 }
