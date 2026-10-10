@@ -123,7 +123,14 @@ for (const z of zips) console.log(`  ${z.split(/[\\/]/).pop()}  ${mb(z)}`);
 if (publish) {
   if (!out(['git', 'tag', '--list', tag])) die(`No existe la etiqueta ${tag}: ejecuta antes "bun run release"`);
   if (!out(['git', 'ls-remote', '--tags', 'origin', tag])) die(`La etiqueta ${tag} no está en GitHub: ejecuta "git push --follow-tags"`);
-  const cmd = ['gh', 'release', 'create', tag, ...zips, join(OUT, 'SHA256SUMS.txt'), '--title', `TesseraFS ${version}`, '--notes-file', join(OUT, 'NOTAS.md'), '--verify-tag'];
-  if (version.includes('-')) cmd.push('--prerelease');
-  run(cmd);
+  const files = [...zips, join(OUT, 'SHA256SUMS.txt')], notesFile = join(OUT, 'NOTAS.md');
+  // Repetible: si la release ya existe (p. ej. al relanzar el flujo), se reemplazan los archivos y las notas
+  if (Bun.spawnSync(['gh', 'release', 'view', tag], { cwd: ROOT }).exitCode === 0) {
+    run(['gh', 'release', 'upload', tag, ...files, '--clobber']);
+    run(['gh', 'release', 'edit', tag, '--title', `TesseraFS ${version}`, '--notes-file', notesFile]);
+  } else {
+    const cmd = ['gh', 'release', 'create', tag, ...files, '--title', `TesseraFS ${version}`, '--notes-file', notesFile, '--verify-tag'];
+    if (version.includes('-')) cmd.push('--prerelease');
+    run(cmd);
+  }
 }
