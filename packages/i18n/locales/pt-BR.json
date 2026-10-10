@@ -150,7 +150,6 @@
   "insp.modified": "Modificado",
   "insp.change": "Mudança",
   "insp.note.hardlink": "Link físico: o mesmo arquivo aparece em outra pasta e o seu espaço só é contado uma vez.",
-  "insp.note.cloud": "Arquivo na nuvem: pode não ocupar espaço local até você abri-lo.",
   "insp.cloud.local": "Arquivo da nuvem baixado neste computador: «Liberar espaço» o deixa somente online.",
   "insp.cloud.online": "Arquivo da nuvem somente online: não ocupa espaço aqui e é baixado ao abri-lo.",
   "insp.saved": "A compactação economiza {saved} no disco ({pct}).",

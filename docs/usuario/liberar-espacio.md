@@ -58,7 +58,7 @@ flowchart TD
 | **Optimización de distribución** | `DeliveryOptimization` de Windows, desde 100 MB | Configuración › Sistema › Almacenamiento › Archivos temporales |
 | **Volcados de memoria e informes de errores** | `C:\Windows\MEMORY.DMP`, `Minidump`, `LiveKernelReports`, `%LOCALAPPDATA%\CrashDumps` e informes de WER, desde 50 MB | El mismo ajuste de Archivos temporales |
 | **Caché de sombreadores** | `D3DSCache` y las de NVIDIA, AMD, Intel y Steam (`shadercache`), desde 200 MB | Bórrala con los juegos cerrados; la de DirectX está también en Archivos temporales. Los primeros arranques pueden ir a tirones. |
-| **OneDrive descargado** | La carpeta de OneDrive de cada usuario (también las de empresa, `OneDrive - Empresa`) cuando lo descargado ocupa más de 200 MB **en disco** | Botón **Liberar espacio** de la tarjeta: deja los archivos sólo en línea, como el Explorador. No se borra nada; se vuelven a descargar al abrirlos |
+| **OneDrive descargado** | La carpeta de OneDrive de cada usuario (también las de empresa, `OneDrive - Empresa`) con **Archivos a petición** activado, cuando lo descargado ocupa más de 200 MB **en disco** | Botón **Liberar espacio** de la tarjeta: deja los archivos sólo en línea, como el Explorador. No se borra nada; se vuelven a descargar al abrirlos |
 
 > [!IMPORTANT]
 > TesseraFS **ignora** las carpetas `node_modules`, `target` y `.venv` que están dentro de programas instalados: `Program Files`, `AppData`, `ProgramData`, extensiones de VS Code… Esas no se regeneran solas: borrarlas rompería el programa.

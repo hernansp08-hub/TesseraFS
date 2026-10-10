@@ -150,7 +150,6 @@
   "insp.modified": "Geändert",
   "insp.change": "Änderung",
   "insp.note.hardlink": "Fester Link: Dieselbe Datei erscheint auch in einem anderen Ordner, ihr Speicher wird nur einmal gezählt.",
-  "insp.note.cloud": "Clouddatei: Sie belegt eventuell erst dann lokalen Speicher, wenn Sie sie öffnen.",
   "insp.cloud.local": "Auf diesen PC heruntergeladene Clouddatei: „Speicherplatz freigeben“ lässt sie nur online.",
   "insp.cloud.online": "Reine Onlinedatei: Sie belegt hier keinen Platz und wird beim Öffnen heruntergeladen.",
   "insp.saved": "Die Komprimierung spart {saved} auf dem Datenträger ({pct}).",

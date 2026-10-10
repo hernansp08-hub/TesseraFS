@@ -562,7 +562,7 @@ export function renderInspector() {
     + `<div><dt>${tx('insp.modified')}</dt><dd>${fmtD(r.mtime)}</dd></div>`
     + (H.cmp && (r.fresh || r.prev != null) ? `<div><dt>${tx('insp.change')}</dt><dd>${deltaHTML(r) || tx('changes.same')}</dd></div>` : '') + `</dl>`
     + (r.flags & FLAG.HARDLINK ? `<p class="note">${tx('insp.note.hardlink')}</p>` : '')
-    + (r.flags & FLAG.CLOUD ? `<p class="note">${tx(r.isDir ? 'insp.note.cloud' : r.alloc ? 'insp.cloud.local' : 'insp.cloud.online')}</p>` : '')
+    + (r.flags & FLAG.CLOUD && !r.isDir ? `<p class="note">${tx(r.alloc ? 'insp.cloud.local' : 'insp.cloud.online')}</p>` : '')
     // Ahorro en disco: en archivos, sólo si están comprimidos (los de la nube ya tienen su nota); en carpetas, puede ser
     // compresión o archivos sólo en línea
     + (savedOnDisk(r) && (r.isDir || r.flags & FLAG.COMPRESSED) ? `<p class="note">${tx(r.flags & FLAG.COMPRESSED ? 'insp.saved' : 'insp.saved.cloud', { saved: fmtB(r.size - r.alloc), pct: fmtP(1 - r.alloc / r.size) })}</p>` : '')
@@ -573,7 +573,7 @@ export function renderInspector() {
 // Primero una regla de limpieza que lo describa (con su riesgo y su orden), después las carpetas conocidas.
 // Se calcula una vez por elemento: alguna regla pregunta al motor por los hijos (CACHEDIR.TAG de Rust).
 async function knownFor(r: NodeRow, path: string): Promise<Known | null> {
-  const tg = { name: r.name, path, isDir: r.isDir, ext: r.ext, size: r.size, alloc: r.alloc };
+  const tg = { name: r.name, path, isDir: r.isDir, ext: r.ext, size: r.size, alloc: r.alloc, flags: r.flags };
   for (const rule of RULES) {
     if (!ruleMatches(rule, tg)) continue;
     if (rule.needs && !(await hasChild(r.id, rule.needs).catch(() => false))) continue;
@@ -601,14 +601,11 @@ function knownHTML(r: NodeRow, path: string | undefined): string {
 // ---------- OneDrive y compresión ----------
 /** Ocupa en disco claramente menos que su tamaño (compresión o archivos sólo en la nube). */
 const savedOnDisk = (r: NodeRow) => r.size >= 1024 ** 2 && r.alloc < r.size * .97;
-const ONEDRIVE = /\\OneDrive( - [^\\]+)?(\\|$)/i;
-/** Hay algo de la nube descargado: un archivo con FLAG.CLOUD que ocupa disco, o una carpeta de OneDrive que ocupa disco. */
-function canFreeUp(r: NodeRow) {
-  if (!r.alloc) return false;
-  if (r.flags & FLAG.CLOUD) return true;
-  const p = S.pathCache.get(r.id);
-  return r.isDir && !!p && ONEDRIVE.test(p + '\\');
-}
+/**
+ * Hay algo de la nube descargado: un archivo o una carpeta con FLAG.CLOUD que ocupa disco. Sin «Archivos a petición»,
+ * OneDrive no marca nada (todo está siempre descargado) y no se ofrece.
+ */
+const canFreeUp = (r: NodeRow) => r.alloc > 0 && !!(r.flags & FLAG.CLOUD);
 /**
  * Deja los archivos de la nube descargados como «sólo en línea» (siguen en OneDrive y vuelven a bajar al abrirlos).
  * El proveedor los vacía en segundo plano: pasados unos segundos se vuelve a escanear la carpeta para verlo.

@@ -207,7 +207,7 @@ function addOneDrive(me) {
   put('Imágenes/Álbum cámara/VID_20250612.mp4', 1.3 * GB, true, 120);
   [7.2, 6.1, 5.8, 6.6, 7.9, 5.4, 6.3, 7.1].forEach((m, i) => put(`Imágenes/Álbum cámara/IMG_${2101 + i}.jpg`, m * MB, i % 3 === 0, 60 + i));
   put('Escritorio/Copia de seguridad del móvil.zip', 3.4 * GB, false, 25);
-  for (const n of N) if (n.cloud || n === od || isUnder(n, od)) n.cloud = n.cloud || n.isDir && n !== od;
+  for (const n of N) if (n === od || isUnder(n, od)) n.cloud = n.cloud || n.isDir; // con «Archivos a petición», también las carpetas
 }
 const isUnder = (n, root) => { for (let p = n.parent; p; p = p.parent) if (p === root) return true; return false; };
 // Agregación ascendente en una pasada: cada padre tiene id menor que sus hijos

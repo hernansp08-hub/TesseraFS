@@ -150,7 +150,6 @@
   "insp.modified": "Modificado",
   "insp.change": "Cambio",
   "insp.note.hardlink": "Enlace duro: el mismo archivo aparece en otra carpeta y su espacio sólo cuenta una vez.",
-  "insp.note.cloud": "Archivo en la nube: puede no ocupar espacio local hasta que lo abras.",
   "insp.cloud.local": "Archivo de la nube descargado en este equipo: «Liberar espacio» lo deja sólo en línea.",
   "insp.cloud.online": "Archivo de la nube sólo en línea: no ocupa espacio aquí y se descarga al abrirlo.",
   "insp.saved": "La compresión ahorra {saved} en disco ({pct}).",

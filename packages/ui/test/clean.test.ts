@@ -1,16 +1,16 @@
 // Reglas de «Liberar espacio» y carpetas conocidas, con rutas reales de Windows.
 import { describe, expect, test } from 'bun:test';
-import { compileQuery } from '@tessera/protocol';
+import { FLAG, compileQuery } from '@tessera/protocol';
 import { RULES, cmdOf, knownId, ruleKind, ruleMatches, titleOf, type Target } from '../src/clean';
 
 const rule = (id: string) => RULES.find(r => r.id === id)!;
-function target(path: string, isDir = true): Target {
+function target(path: string, isDir = true, flags = 0): Target {
   const name = path.slice(path.lastIndexOf('\\') + 1), dot = name.lastIndexOf('.');
-  return { name, path, isDir, ext: !isDir && dot > 0 ? name.slice(dot + 1).toLowerCase() : '' };
+  return { name, path, isDir, ext: !isDir && dot > 0 ? name.slice(dot + 1).toLowerCase() : '', flags };
 }
 /** La consulta de la regla trae el elemento como candidato y su filtro lo acepta. */
-function finds(id: string, path: string, isDir = true): boolean {
-  const r = rule(id), t = target(path, isDir), q = compileQuery(r.q);
+function finds(id: string, path: string, isDir = true, flags = 0): boolean {
+  const r = rule(id), t = target(path, isDir, flags), q = compileQuery(r.q);
   const candidate = q.match({ ...t, size: 1e12, alloc: 1e12, mtime: 0, path: () => path });
   return candidate && ruleMatches(r, t);
 }
@@ -87,10 +87,13 @@ describe('reglas de limpieza', () => {
   });
 
   test('OneDrive: la raíz de cada OneDrive, por espacio en disco y con su propia acción', () => {
-    expect(finds('oneDrive', 'C:\\Users\\ana\\OneDrive')).toBe(true);
-    expect(finds('oneDrive', 'C:\\Users\\ana\\OneDrive - Contoso')).toBe(true);
-    expect(finds('oneDrive', 'C:\\Users\\ana\\OneDrive\\Documentos')).toBe(false);
-    expect(finds('oneDrive', 'D:\\Copias\\OneDrive')).toBe(false);
+    const cloud = (p: string) => finds('oneDrive', p, true, FLAG.DIR | FLAG.CLOUD);
+    expect(cloud('C:\\Users\\ana\\OneDrive')).toBe(true);
+    expect(cloud('C:\\Users\\ana\\OneDrive - Contoso')).toBe(true);
+    expect(cloud('C:\\Users\\ana\\OneDrive\\Documentos')).toBe(false);
+    expect(cloud('D:\\Copias\\OneDrive')).toBe(false);
+    // Sin «Archivos a petición» no lleva la marca de la nube: todo está descargado y no hay nada que liberar
+    expect(finds('oneDrive', 'C:\\Users\\ana\\OneDrive', true, FLAG.DIR)).toBe(false);
     expect(rule('oneDrive')).toMatchObject({ useAlloc: true, action: 'freeUp', risk: 'ok' });
   });
 

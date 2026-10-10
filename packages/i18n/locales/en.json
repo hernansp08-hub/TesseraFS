@@ -150,7 +150,6 @@
   "insp.modified": "Modified",
   "insp.change": "Change",
   "insp.note.hardlink": "Hard link: the same file also appears in another folder and its space only counts once.",
-  "insp.note.cloud": "Cloud file: it may take no local space until you open it.",
   "insp.cloud.local": "Cloud file downloaded on this PC: «Free up space» keeps it online only.",
   "insp.cloud.online": "Online-only cloud file: it takes no space here and downloads when you open it.",
   "insp.saved": "Compression saves {saved} on disk ({pct}).",

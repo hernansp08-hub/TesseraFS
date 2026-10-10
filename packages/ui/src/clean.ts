@@ -2,9 +2,11 @@
 // Sin dependencias de la interfaz para poder probarlas (test/clean.test.ts). Los textos van en el catálogo:
 //   regla:   clean.<id>.title · clean.<id>.why · clean.<how>.how (si `how`)
 //   conocida: known.<id>
+import { FLAG } from '@tessera/protocol';
+
 export type Risk = 'ok' | 'warn' | 'bad';
 /** Lo que una regla necesita de un elemento (una fila de búsqueda cumple esta forma). */
-export interface Target { name: string; path: string; isDir: boolean; ext: string; size?: number; alloc?: number }
+export interface Target { name: string; path: string; isDir: boolean; ext: string; size?: number; alloc?: number; flags?: number }
 export type Key = [key: string, params?: Record<string, string>];
 
 export interface Rule {
@@ -85,9 +87,10 @@ export const RULES: Rule[] = [
   { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: t => ['clean.game.title', { name: t.name }], ok: t => /\\steamapps\\common\\[^\\]+$/i.test(t.path), min: 1 * GB,
     // Sin desinstalarlo: comprimirlo con WOF (se lee igual; sólo si aún no está comprimido)
     cmd: t => uncompressed(t) ? `compact /c /s /i /q /exe:lzx "${t.path}\\*"` : undefined, how: true },
-  // OneDrive: lo descargado en este equipo puede quedarse sólo en la nube sin borrar nada
-  { id: 'oneDrive', q: 'type:dir name:OneDrive', risk: 'ok', useAlloc: true, action: 'freeUp', how: true,
-    ok: t => /^[A-Z]:\\Users\\[^\\]+\\OneDrive( - [^\\]+)?$/i.test(t.path), min: 200 * MB },
+  // OneDrive: lo descargado en este equipo puede quedarse sólo en la nube sin borrar nada. Sólo con «Archivos a
+  // petición» (la carpeta lleva la marca de la nube): sin él todo está siempre descargado y no hay nada que liberar
+  { id: 'oneDrive', q: 'type:dir name:OneDrive attr:cloud', risk: 'ok', useAlloc: true, action: 'freeUp', how: true,
+    ok: t => /^[A-Z]:\\Users\\[^\\]+\\OneDrive( - [^\\]+)?$/i.test(t.path) && !!((t.flags ?? 0) & FLAG.CLOUD), min: 200 * MB },
   { id: 'downloads', q: 'path:Downloads ext:msi,exe,iso,zip,7z size:>100m', risk: 'warn', group: true, min: 200 * MB },
   { id: 'restorePoints', q: 'type:dir name:"System Volume Information"', risk: 'warn', cmd: 'vssadmin list shadowstorage', ok: t => /^[A-Z]:\\System Volume Information$/i.test(t.path), min: 100 * MB },
   // ---- No borrar a mano: lo gestiona Windows ----

@@ -150,7 +150,6 @@
   "insp.modified": "Modifié",
   "insp.change": "Évolution",
   "insp.note.hardlink": "Lien physique : le même fichier apparaît dans un autre dossier et son espace n’est compté qu’une fois.",
-  "insp.note.cloud": "Fichier dans le cloud : il peut n’occuper aucun espace local tant que vous ne l’ouvrez pas.",
   "insp.cloud.local": "Fichier du cloud téléchargé sur ce PC\u00a0: «\u00a0Libérer de l’espace\u00a0» le laisse uniquement en ligne.",
   "insp.cloud.online": "Fichier du cloud uniquement en ligne\u00a0: il n’occupe pas de place ici et se télécharge à l’ouverture.",
   "insp.saved": "La compression économise {saved} sur le disque ({pct}).",
