@@ -8,10 +8,13 @@ rust-version.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 rayon = "1.10"
 regex = { version = "1.11", default-features = false, features = ["std", "unicode", "perf"] }
 memchr = "2.7"
 blake3 = "1.8"
+flate2 = "1.1"
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 trash = "5.2"
@@ -31,6 +34,3 @@ windows-sys = { version = "0.61", features = [
   "Wdk_Foundation",
   "Wdk_Storage_FileSystem",
 ] }
-
-[dev-dependencies]
-serde_json.workspace = true

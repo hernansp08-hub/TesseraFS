@@ -169,6 +169,35 @@ Reglas comunes:
 
 Los dos motores dan los mismos grupos, candidatos y bytes leídos. Para comprobarlo en un disco real: `tessera-cli scan <ruta> --dups <bytes> --dups-out dups.json`. Medido sobre la carpeta `target` del repositorio (7,75 GiB, 14.049 archivos, mínimo 1 MiB): 268 candidatos, 241 enlaces duros fuera, 3 grupos y 132 MiB leídos en 1,0 s.
 
+## Historial y comparación
+
+`crates/tessera-core/src/history.rs` y `packages/core-bun/src/history.ts` escriben y leen **los mismos archivos**: un resumen guardado con una edición se compara desde la otra (formato en [el contrato](../ARQUITECTURA.md)).
+
+```mermaid
+flowchart LR
+    S["Escaneo cargado"] -->|"historySave"| W["Preorden: carpetas +<br/>archivos ≥ 1 MiB"]
+    W --> G["&lt;id&gt;.snap.gz<br/>(gzip, JSON)"] --> M["&lt;id&gt;.json<br/>(HistoryEntry)"]
+    M -->|"compare"| E["Emparejar por nombre<br/>sin mayúsculas, desde la raíz"]
+    E --> P["prev / fresh por nodo<br/>(comparación activa)"]
+    P --> R["grew · shrank · removed"]
+```
+
+- **id** = fecha UTC del guardado + FNV-1a de 32 bits de la ruta en minúsculas (`20261010T174512Z-1cf80bec`). Se escribe primero el `.snap.gz` y después el `.json`, que es el que «confirma» el resumen. Se conservan los 20 más recientes de cada ruta.
+- **Emparejamiento:** raíz con raíz y, bajando, cada nodo del resumen con el hijo actual del mismo nombre (sin distinguir mayúsculas) y mismo tipo. Lo emparejado tiene `prev`; lo que no estaba es `fresh` si es una carpeta, un archivo de 1 MiB o más, o cuelga de algo `fresh`; un archivo pequeño sin pareja queda «desconocido».
+- **Lo que explica el cambio:** en `grew` entra un nodo que creció si ningún hijo explica el 75 % o más de su crecimiento; así, una carpeta nueva con un único archivo aparece como el archivo, no como toda la cadena de carpetas padre. `shrank` es simétrico y `removed` lista lo más alto de lo que ya no existe.
+- **Comparación activa:** queda en el árbol cargado (Rust, con su propio cerrojo para no esperar a una búsqueda de duplicados; Bun, en `store.cmp`) y todas las filas salen con `prev`/`fresh`; `children` admite `sort: 'delta'`. Un escaneo nuevo la quita.
+
+| | Rust | Bun |
+|---|---|---|
+| Compresión | gzip, nivel más rápido | `Bun.gzipSync` |
+| `C:\Windows` (317 k entradas, ≈114 k nodos guardados) | guardar ≈0,2 s (2,2 MiB) · comparar ≈0,5 s | guardar ≈0,5 s (1,8 MiB) · comparar ≈0,3–0,4 s |
+
+Para comprobar a mano: `tessera-cli scan <ruta> --history-save`, `tessera-cli scan <ruta> --history-compare <id> [--children]` y `tessera-cli history [list | delete <id> | clear]`, con `TESSERA_HISTORY_DIR` para no tocar el historial real.
+
+## Exportar
+
+`exportFile` escribe en `Descargas\TesseraFS` (carpeta conocida de Descargas, o `TESSERA_EXPORT_DIR`): el nombre no puede llevar rutas ni caracteres reservados, y si ya existe se añade « (2)». `revealExport` sólo abre el Explorador para archivos dentro de esa carpeta. Los CSV, JSON, informes HTML y PNG los compone la interfaz; el motor sólo guarda los bytes.
+
 ## Slice: el subárbol para el mapa
 
 ```mermaid

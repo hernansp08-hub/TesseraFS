@@ -24,6 +24,13 @@ function grow<A extends Uint8Array | Uint16Array | Uint32Array | Int32Array | Fl
   return b;
 }
 
+/**
+ * Comparación activa con un resumen del historial (ver history.ts): `prev` = tamaño anterior y `st` = estado
+ * por id (1 = emparejado, se conoce `prev`; 2 = nuevo; 0 = desconocido).
+ */
+export interface CompareState { prev: Float64Array; st: Uint8Array }
+export const CMP_MATCHED = 1, CMP_FRESH = 2;
+
 export class Store implements SliceSource {
   n = 0;
   par: Uint32Array; sz: Float64Array; al: Float64Array; nf: Uint32Array; nd: Uint32Array;
@@ -39,6 +46,8 @@ export class Store implements SliceSource {
   readonly rootId = 0;
   rootPath = '';
   version = 0; // cambia al borrar nodos (invalida cachés)
+  /** Comparación activa: las filas llevan `prev`/`fresh` y `childRows` admite el orden 'delta'. */
+  cmp: CompareState | null = null;
   private extCache = new Map<number, ExtStat[]>();
   private orderCache = new Map<string, Uint32Array>();
 
@@ -208,11 +217,32 @@ export class Store implements SliceSource {
   }
 
   row(id: number): NodeRow {
-    return {
+    const r: NodeRow = {
       id, parentId: id === this.rootId || this.par[id] === NONE ? -1 : this.par[id], name: this.name(id), isDir: this.isDir(id),
       size: this.sz[id], alloc: this.al[id], files: this.nf[id], dirs: this.nd[id], mtime: this.mt[id], ext: this.ext(id),
       flags: this.fl[id] & 0xFF, childCount: this.kidCount[id] ?? 0,
     };
+    const c = this.cmp;
+    if (c) {
+      const st = c.st[id];
+      if (st & CMP_MATCHED) r.prev = c.prev[id];
+      else if (st & CMP_FRESH) r.fresh = true;
+    }
+    return r;
+  }
+
+  /** Activa (o quita, con null) una comparación. */
+  setCompare(c: CompareState | null) {
+    this.cmp = c;
+    this.orderCache.clear();
+  }
+
+  /** Crecimiento desde el escaneo comparado: size − prev; lo nuevo cuenta entero; lo desconocido (o sin comparación), 0. */
+  delta(id: number): number {
+    const c = this.cmp;
+    if (!c) return 0;
+    const st = c.st[id];
+    return st & CMP_MATCHED ? this.sz[id] - c.prev[id] : st & CMP_FRESH ? this.sz[id] : 0;
   }
 
   /** Hijos paginados y ordenados; empata por nombre. */
@@ -226,8 +256,10 @@ export class Store implements SliceSource {
       const lname = (i: number) => { let s = nm.get(i); if (s === undefined) { s = this.name(i).toLowerCase(); nm.set(i, s); } return s; };
       const byName = (a: number, b: number) => { const x = lname(a), y = lname(b); return x < y ? -1 : x > y ? 1 : a - b; };
       const col: ArrayLike<number> | null = sort === 'size' ? this.sz : sort === 'alloc' ? this.al : sort === 'files' ? this.nf : sort === 'mtime' ? this.mt : null;
+      // 'delta' se calcula al vuelo (los tamaños cambian al borrar); sin comparación, todo 0 → por nombre
+      const val = sort === 'delta' ? (i: number) => this.delta(i) : col ? (i: number) => col[i] : null;
       const s = desc ? -1 : 1;
-      ids.sort(col ? (a, b) => (col[a] - col[b]) * s || byName(a, b) : (a, b) => byName(a, b) * s);
+      ids.sort(val ? (a, b) => (val(a) - val(b)) * s || byName(a, b) : (a, b) => byName(a, b) * s);
       order = Uint32Array.from(ids);
       if (this.orderCache.size > 16) this.orderCache.clear();
       this.orderCache.set(ck, order);

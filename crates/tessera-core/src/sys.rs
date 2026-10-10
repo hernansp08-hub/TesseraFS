@@ -66,8 +66,8 @@ mod imp {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::UI::Shell::Common::ITEMIDLIST;
     use windows_sys::Win32::UI::Shell::{
-        SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOASYNC,
-        SHELLEXECUTEINFOW,
+        FOLDERID_Downloads, FOLDERID_LocalAppData, SHGetKnownFolderPath, SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteExW,
+        ShellExecuteW, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -174,6 +174,29 @@ mod imp {
             return Err(msg::elevation_failed(&super::last_error_text()));
         }
         Ok(())
+    }
+
+    /// Carpeta conocida del usuario (`FOLDERID_*`), tal como la tenga configurada (puede estar movida).
+    fn known_folder(id: &windows_sys::core::GUID) -> Option<std::path::PathBuf> {
+        use std::os::windows::ffi::OsStringExt;
+        let mut p: *mut u16 = std::ptr::null_mut();
+        let hr = unsafe { SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut p) };
+        let r = (hr >= 0 && !p.is_null()).then(|| {
+            let len = (0..).take_while(|&i| unsafe { *p.add(i) } != 0).count();
+            std::path::PathBuf::from(std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(p, len) }))
+        });
+        unsafe { CoTaskMemFree(p as *const _) };
+        r
+    }
+
+    /// Carpeta de Descargas del usuario.
+    pub fn downloads_dir() -> Option<std::path::PathBuf> {
+        known_folder(&FOLDERID_Downloads)
+    }
+
+    /// `%LOCALAPPDATA%`.
+    pub fn local_app_data() -> Option<std::path::PathBuf> {
+        known_folder(&FOLDERID_LocalAppData).or_else(|| std::env::var_os("LOCALAPPDATA").map(Into::into))
     }
 
     fn last_action_error() -> EngineMessage {
@@ -306,6 +329,12 @@ mod imp {
     }
     pub fn relaunch_elevated(_args: &str) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())
+    }
+    pub fn downloads_dir() -> Option<std::path::PathBuf> {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Downloads"))
+    }
+    pub fn local_app_data() -> Option<std::path::PathBuf> {
+        std::env::var_os("LOCALAPPDATA").map(Into::into)
     }
     pub fn open(_p: &[u16]) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())

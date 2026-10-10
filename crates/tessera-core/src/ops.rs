@@ -22,12 +22,16 @@ pub fn children(t: &Tree, id: u32, offset: u32, limit: u32, sort: SortKey, desc:
         (offset as usize..end).map(|i| kids.get(i)).collect()
     } else {
         let mut v = kids.to_vec();
+        // Sin comparación activa, delta = 0 en todos (queda el orden por nombre)
+        let cmp = if sort == SortKey::Delta { t.comparison() } else { None };
+        let delta = |id: u32| cmp.as_deref().map_or(0, |c| c.delta(id, t.size(id)));
         let key = |a: u32, b: u32| -> Ordering {
             match sort {
                 SortKey::Size => t.size(a).cmp(&t.size(b)),
                 SortKey::Alloc => t.alloc(a).cmp(&t.alloc(b)),
                 SortKey::Files => t.files(a).cmp(&t.files(b)),
                 SortKey::Mtime => t.mtime(a).cmp(&t.mtime(b)),
+                SortKey::Delta => delta(a).cmp(&delta(b)),
                 SortKey::Name => Ordering::Equal,
             }
         };

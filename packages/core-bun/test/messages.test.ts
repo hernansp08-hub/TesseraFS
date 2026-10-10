@@ -14,11 +14,13 @@ const CONTRACT = [
   'error.cancelled', 'error.unsupportedPlatform', 'error.internal',
   'action.trashed', 'action.trashRoot', 'action.trashNotMoved', 'action.cancelled', 'action.failed', 'action.unknown',
   'elevation.failed',
+  'history.notFound', 'history.otherRoot', 'history.saveFailed', 'history.readFailed',
+  'export.invalidName', 'export.failed', 'export.notFound',
 ];
 
 test('messages: exactamente los códigos del contrato, con texto en inglés sin marcadores sueltos', () => {
   expect(([...MESSAGE_CODES] as string[]).sort()).toEqual([...CONTRACT].sort());
-  const p = { fs: 'FAT32', error: 'boom', count: 2, path: 'C:\\x', id: 7, kind: 'zap' };
+  const p = { fs: 'FAT32', error: 'boom', count: 2, path: 'C:\\x', id: 7, kind: 'zap', name: 'r.html' };
   for (const c of MESSAGE_CODES) {
     const m = msg(c, p);
     expect(isEngineMessage(m)).toBe(true);
@@ -37,6 +39,10 @@ test('messages: forma del objeto y plurales en inglés', () => {
   expect(msg('scan.mftOrphans', { count: 1536 }).message).toBe('1,536 entries without a valid parent folder are not shown');
   expect(msg('dup.readErrors', { count: 1 }).message).toBe("1 file couldn't be read and was left out");
   expect(msg('dup.readErrors', { count: 3 }).message).toBe("3 files couldn't be read and were left out");
+  expect(msg('history.otherRoot', { path: 'D:\\' })).toEqual({
+    code: 'history.otherRoot', params: { path: 'D:\\' }, message: 'That snapshot is of another folder (D:\\)',
+  });
+  expect(msg('export.invalidName', { name: 'a/b' }).message).toBe('Invalid file name: a/b');
 });
 
 test('walkWarnings: sólo dos recuentos (con rutas de muestra), nunca una línea por carpeta', () => {
@@ -77,6 +83,13 @@ test('http: estados por código y cuerpo JSON que es un EngineMessage', async ()
     [engineError('error.cancelled'), 409],
     [engineError('error.internal', { error: 'x' }), 500],
     [new Error('kaboom'), 500],
+    [engineError('history.notFound', { id: 'x' }), 404],
+    [engineError('history.otherRoot', { path: 'C:\\a' }), 409],
+    [engineError('history.saveFailed', { error: 'x' }), 500],
+    [engineError('history.readFailed', { error: 'x' }), 500],
+    [engineError('export.invalidName', { name: 'a/b' }), 400],
+    [engineError('export.failed', { error: 'x' }), 500],
+    [engineError('export.notFound', { path: 'C:\\x' }), 404],
   ];
   for (const [err, status] of cases) {
     const r = errorResponse(err);

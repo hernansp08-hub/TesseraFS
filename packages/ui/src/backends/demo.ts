@@ -1,7 +1,8 @@
 // Motor de demostración: árbol de ejemplo en memoria que cumple el mismo contrato que los motores reales.
 import {
-  FLAG, compileQuery, encodeSlice, type Backend, type ChildrenRequest, type DupGroup, type DupProgress, type DupRequest, type DupResult,
-  type NodeRow, type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest, type SliceSource, type VolumeInfo,
+  FLAG, compileQuery, encodeSlice, type Backend, type ChangeRow, type ChildrenRequest, type CompareResult, type DupGroup, type DupProgress,
+  type DupRequest, type DupResult, type HistoryEntry, type NodeRow, type RemovedRow, type ScanProgress, type ScanRequest, type ScanResult,
+  type SearchRequest, type SearchRow, type SliceSource, type VolumeInfo,
 } from '@tessera/protocol';
 // @ts-ignore módulo JS sin tipos
 import { buildSample } from './sample.js';
@@ -9,7 +10,7 @@ import { fail } from './errors';
 
 interface DNode {
   id: number; name: string; parent: DNode | null; isDir: boolean; size: number; alloc: number; files: number; dirs: number;
-  mtime: number; ext: string; kids: DNode[] | null; mk: DNode[] | null; comp: boolean; hl: boolean; hidden: boolean; depth: number;
+  mtime: number; ext: string; kids: DNode[] | null; mk: DNode[] | null; comp: boolean; hl: boolean; hidden: boolean; depth: number; copy?: boolean;
 }
 
 const GB = 1024 ** 3;
@@ -24,6 +25,9 @@ export class DemoBackend implements Backend {
   private cancelled = false;
   private dupRunning = false;
   private dupCancelled = false;
+  /** Historial en memoria: un resumen simulado de hace 30 días y los que se guarden en esta sesión. */
+  private snaps: { entry: HistoryEntry; prev: Map<number, number>; fresh: Set<number>; removed: RemovedRow[] }[] = [];
+  private cmp: { prev: Map<number, number>; fresh: Set<number> } | null = null;
 
   private ensure() {
     if (this.ready) return;
@@ -33,8 +37,14 @@ export class DemoBackend implements Backend {
     return (n.isDir ? FLAG.DIR : 0) | (n.hidden ? FLAG.HIDDEN : 0) | (n.hl ? FLAG.HARDLINK : 0) | (n.comp ? FLAG.COMPRESSED : 0);
   }
   private row(n: DNode): NodeRow {
-    return { id: n.id, parentId: n.parent ? n.parent.id : -1, name: n.parent ? n.name : 'C:\\', isDir: n.isDir, size: n.size, alloc: n.alloc,
+    const r: NodeRow = { id: n.id, parentId: n.parent ? n.parent.id : -1, name: n.parent ? n.name : 'C:\\', isDir: n.isDir, size: n.size, alloc: n.alloc,
       files: n.files, dirs: n.dirs, mtime: n.mtime, ext: n.ext, flags: this.flags(n), childCount: n.kids ? n.kids.length : 0 };
+    if (this.cmp) { if (this.cmp.fresh.has(n.id)) r.fresh = true; else if (this.cmp.prev.has(n.id)) r.prev = this.cmp.prev.get(n.id); }
+    return r;
+  }
+  private delta(n: DNode) {
+    const c = this.cmp; if (!c) return 0;
+    return c.fresh.has(n.id) ? n.size : c.prev.has(n.id) ? n.size - c.prev.get(n.id)! : 0;
   }
   private path(n: DNode) {
     if (!n.parent) return 'C:\\';
@@ -83,7 +93,7 @@ export class DemoBackend implements Backend {
   async children(r: ChildrenRequest) {
     const n = this.node(r.id); const kids = (n.kids || []).slice();
     const key = r.sort, dir = r.desc ? -1 : 1;
-    const val = (k: DNode): number | string => key === 'name' ? k.name.toLowerCase() : key === 'size' ? k.size : key === 'alloc' ? k.alloc : key === 'files' ? k.files : k.mtime;
+    const val = (k: DNode): number | string => key === 'name' ? k.name.toLowerCase() : key === 'size' ? k.size : key === 'alloc' ? k.alloc : key === 'files' ? k.files : key === 'delta' ? this.delta(k) : k.mtime;
     kids.sort((a, b) => { const va = val(a), vb = val(b); return (va < vb ? -1 : va > vb ? 1 : 0) * dir || a.name.localeCompare(b.name); });
     return { total: kids.length, rows: kids.slice(r.offset, r.offset + r.limit).map(k => this.row(k)) };
   }
@@ -161,6 +171,76 @@ export class DemoBackend implements Backend {
     };
   }
   async cancelDuplicates() { if (!this.dupRunning) return false; this.dupCancelled = true; return true; }
+
+  // ---------- Historial simulado ----------
+  private entry(id: string, at: number, bytes: number, files: number, dirs: number): HistoryEntry {
+    return { id, path: 'C:\\', scannedAt: Math.round(at), engine: 'mft', bytes, files, dirs, nodes: 0, fileBytes: 0 };
+  }
+  /** Hace 30 días: sin las copias recientes, sin un modelo y un juego nuevos, con menos disco de Docker y más temporales, y con dos cosas que ya no están. */
+  private pastSnapshot() {
+    this.ensure();
+    const N = this.N, GB = 1024 ** 3, fresh = new Set<number>(), prev = new Map<number, number>();
+    const at = (p: string) => N.find(n => this.path(n).toLowerCase() === p.toLowerCase());
+    const mark = (n: DNode | undefined) => { if (!n) return; const st = [n]; while (st.length) { const x = st.pop()!; fresh.add(x.id); if (x.kids) st.push(...x.kids); } };
+    for (const n of N) if (n.copy) mark(n);
+    mark(at('C:\\Users\\usuario\\AppData\\Local\\lm-studio\\models\\qwen3-14b-instruct-q4_k_m.gguf'));
+    mark(at('C:\\Program Files (x86)\\Steam\\steamapps\\common\\Hades II'));
+    const scale = (p: string, f: number) => { const d = at(p); if (!d) return; const st = [d]; while (st.length) { const x = st.pop()!; if (x.kids) st.push(...x.kids); else prev.set(x.id, Math.round(x.size * f)); } };
+    scale('C:\\apps\\lamina-rs\\target\\debug', .55);
+    scale('C:\\Users\\usuario\\AppData\\Local\\Temp', 1.8);
+    const vhdx = at('C:\\Users\\usuario\\AppData\\Local\\Docker\\wsl\\docker_data.vhdx'); if (vhdx) prev.set(vhdx.id, Math.round(vhdx.size - 2.1 * GB));
+    const removed: RemovedRow[] = [
+      { path: 'C:\\Users\\usuario\\Downloads\\ubuntu-24.04.2-desktop-amd64.iso', isDir: false, size: Math.round(5.9 * GB) },
+      { path: 'C:\\Users\\usuario\\Videos\\Grabaciones', isDir: true, size: Math.round(3.2 * GB) },
+    ];
+    const extra = new Map<number, number>();
+    for (const r of removed) { const p = at(r.path.slice(0, r.path.lastIndexOf('\\'))); if (p) extra.set(p.id, (extra.get(p.id) || 0) + r.size); }
+    // Carpetas: suma de lo que ya existía más lo que se borró dentro (los hijos tienen id mayor que su padre)
+    for (let i = N.length - 1; i >= 0; i--) {
+      const n = N[i]; if (fresh.has(n.id)) continue;
+      if (!n.kids) { if (!prev.has(n.id)) prev.set(n.id, n.size); continue; }
+      let s = extra.get(n.id) || 0; for (const k of n.kids) if (!fresh.has(k.id)) s += prev.get(k.id)!; prev.set(n.id, s);
+    }
+    let files = 0, dirs = 0; for (const n of N) if (n.parent && !fresh.has(n.id)) n.isDir ? dirs++ : files++;
+    const entry = this.entry('20260907T093000Z-demo', Date.now() / 1000 - 30 * 86400, prev.get(this.root.id)!, files + 2, dirs + 1);
+    return { entry, prev, fresh, removed };
+  }
+  private seeded = false;
+  private ensureSnaps() { if (!this.seeded) { this.seeded = true; this.snaps.push(this.pastSnapshot()); } }
+  async historySave() {
+    this.ensureSnaps(); const r = this.root, prev = new Map(this.N.map(n => [n.id, n.size] as [number, number]));
+    const e = this.entry(new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z-demo', Date.now() / 1000, r.size, r.files, r.dirs);
+    if (this.snaps.some(s => s.entry.id === e.id)) e.id += '-2';
+    this.snaps.push({ entry: e, prev, fresh: new Set(), removed: [] });
+    return e;
+  }
+  async historyList() { this.ensureSnaps(); return this.snaps.map(s => s.entry).sort((a, b) => b.scannedAt - a.scannedAt); }
+  async historyDelete(id: string) { const i = this.snaps.findIndex(s => s.entry.id === id); if (i >= 0) this.snaps.splice(i, 1); return i >= 0; }
+  async historyClear() { this.ensureSnaps(); const n = this.snaps.length; this.snaps = []; this.cmp = null; return n; }
+  async compare(id: string, limit: number): Promise<CompareResult> {
+    this.ensureSnaps();
+    const s = this.snaps.find(x => x.entry.id === id); if (!s) throw fail('history.notFound', `Snapshot not found: ${id}`, { id });
+    this.cmp = { prev: s.prev, fresh: s.fresh };
+    const lim = Math.max(1, Math.min(1000, limit)), d = (n: DNode) => this.delta(n);
+    const pick = (sign: 1 | -1) => this.N.filter(n => n.parent && sign * d(n) > 0 && (!n.kids || n.kids.every(k => sign * d(k) < .75 * sign * d(n))))
+      .sort((a, b) => sign * (d(b) - d(a)) || this.path(a).localeCompare(this.path(b))).slice(0, lim)
+      .map((n): ChangeRow => ({ ...(this.row(n) as SearchRow), path: this.path(n), prev: s.fresh.has(n.id) ? null : s.prev.get(n.id) ?? null }));
+    const r = this.root;
+    return {
+      entry: s.entry, before: { bytes: s.entry.bytes, files: s.entry.files, dirs: s.entry.dirs }, after: { bytes: r.size, files: r.files, dirs: r.dirs },
+      grew: pick(1), shrank: pick(-1), removed: [...s.removed].sort((a, b) => b.size - a.size).slice(0, lim),
+    };
+  }
+  async compareClear() { this.cmp = null; }
+  // ---------- Exportar: en la demo, descarga del navegador ----------
+  async exportFile(name: string, data: string, base64: boolean) {
+    const bytes = base64 ? Uint8Array.from(atob(data), c => c.charCodeAt(0)) : new TextEncoder().encode(data);
+    const url = URL.createObjectURL(new Blob([bytes]));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return { path: name };
+  }
+  async revealExport() { return { ok: false, code: 'demo.unavailable', message: 'Action not available in the demo.' }; }
 
   async nodePath(id: number) { return this.path(this.node(id)); }
   async nodeInfo(id: number) { return this.row(this.node(id)); }

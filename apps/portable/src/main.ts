@@ -30,7 +30,7 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 // errores de la API: estado 4xx/5xx con un EngineMessage como cuerpo JSON (ver docs/ARQUITECTURA.md)
 const fail = errorResponse;
 const num = (v: string | null, def: number) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? n : def; };
-const SORTS: SortKey[] = ['size', 'alloc', 'name', 'files', 'mtime'];
+const SORTS: SortKey[] = ['size', 'alloc', 'name', 'files', 'mtime', 'delta'];
 const ACTIONS: ActionKind[] = ['open', 'reveal', 'properties', 'trash'];
 const ENGINES: EngineChoice[] = ['auto', 'mft', 'walk'];
 
@@ -162,6 +162,39 @@ async function main() {
         }
       }
       case 'POST /api/duplicates/cancel': return json(engine.cancelDuplicates());
+      // historial y comparación: guardar y comparar → error.scanBusy durante un escaneo (no durante los duplicados)
+      case 'POST /api/history/save': {
+        const e = engine.historySave();
+        log(`history: saved ${e.id} (${e.nodes} nodes, ${e.fileBytes} bytes)`);
+        return json(e);
+      }
+      case 'GET /api/history': return json(engine.historyList());
+      case 'POST /api/history/delete': {
+        const b = await req.json().catch(() => null) as { id?: unknown } | null;
+        if (!b || typeof b.id !== 'string') return fail(msg('history.notFound', { id: String(b?.id ?? '') }));
+        return json(engine.historyDelete(b.id));
+      }
+      case 'POST /api/history/clear': return json(engine.historyClear());
+      case 'POST /api/compare': {
+        const b = await req.json().catch(() => null) as { id?: unknown; limit?: unknown } | null;
+        if (!b || typeof b.id !== 'string') return fail(msg('history.notFound', { id: String(b?.id ?? '') }));
+        return json(engine.compare(b.id, typeof b.limit === 'number' ? b.limit : NaN)); // NaN → límite por defecto
+      }
+      case 'POST /api/compare/clear': engine.compareClear(); return json(null);
+      case 'POST /api/export': {
+        server.timeout(req, 0); // cuerpo de hasta 64 MiB
+        const b = await req.json().catch(() => null) as { name?: unknown; data?: unknown; base64?: unknown } | null;
+        if (!b || typeof b.name !== 'string') return fail(msg('export.invalidName', { name: String(b?.name ?? '') }));
+        if (typeof b.data !== 'string') return fail(msg('export.failed', { error: 'data must be a string' }), 400);
+        const r = engine.exportFile(b.name, b.data, b.base64 === true);
+        log(`export: ${r.path}`);
+        return json(r);
+      }
+      case 'POST /api/export/reveal': {
+        const b = await req.json().catch(() => null) as { path?: unknown } | null;
+        if (!b || typeof b.path !== 'string') return fail(msg('export.notFound', { path: String(b?.path ?? '') }));
+        return json(engine.revealExport(b.path));
+      }
       case 'GET /api/slice': {
         const bytes = engine.slice(num(q.get('root'), -1), num(q.get('min'), 0), num(q.get('max'), 20000));
         return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' } });
@@ -201,7 +234,7 @@ async function main() {
     hostname: '127.0.0.1',
     port: Number(process.env.TESSERA_PORT) || 0,
     idleTimeout: 60,
-    maxRequestBodySize: 1 << 20,
+    maxRequestBodySize: 64 * 2 ** 20, // exportación: un informe HTML con una imagen incrustada ocupa varios MB
     development: false,
     async fetch(req) {
       const url = new URL(req.url);

@@ -48,6 +48,7 @@
       </div>
     </div>
     <div class="top-tools">
+      <button class="icon-btn" id="exportBtn" type="button" aria-haspopup="menu" data-i18n-title="export.menu" data-i18n-aria="export.menu"><svg class="i" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg></button>
       <button class="icon-btn" id="langBtn" type="button" aria-haspopup="menu" data-i18n-title="header.language" data-i18n-aria="header.language"><svg class="i" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg></button>
       <button class="icon-btn" id="themeBtn" type="button"></button>
       <button class="btn ghost" id="notesBtn" type="button"><svg class="i" viewBox="0 0 16 16"><path d="M3 2.5h7.5a2 2 0 0 1 2 2v9H5a2 2 0 0 1-2-2z"/><path d="M3 11.5a2 2 0 0 1 2-2h7.5"/></svg><span data-i18n="header.guide">Guide</span></button>
@@ -63,14 +64,16 @@
           <button class="tab" role="tab" type="button" data-tab="files" aria-selected="false"><span data-i18n="tab.files">Files</span> <span class="count" id="filesCount"></span></button>
           <button class="tab" role="tab" type="button" data-tab="clean" aria-selected="false"><span data-i18n="tab.clean">Free up space</span> <span class="count" id="cleanCount"></span></button>
           <button class="tab" role="tab" type="button" data-tab="dups" aria-selected="false"><span data-i18n="tab.dups">Duplicates</span> <span class="count" id="dupsCount"></span></button>
+          <button class="tab" role="tab" type="button" data-tab="changes" aria-selected="false"><span data-i18n="tab.changes">Changes</span></button>
           <button class="tab" role="tab" type="button" data-tab="basket" aria-selected="false"><span data-i18n="tab.basket">To delete</span> <span class="count danger" id="basketCount"></span></button>
         </div>
       </div>
       <div class="view" id="view-tree">
-        <div class="tbl tbl-tree">
+        <div class="tbl tbl-tree" id="treeTbl">
           <div class="thead" id="treeHead">
             <button type="button" class="c-name" data-sort="name" data-i18n="tree.col.name">Name</button>
             <button type="button" class="c-size r" data-sort="size" data-i18n="tree.col.size">Size</button>
+            <button type="button" class="c-delta r" data-sort="delta" data-i18n="tree.col.delta" data-i18n-title="tree.col.delta.title">Δ</button>
             <span class="c-pct r" data-i18n="tree.col.pct">%</span>
             <button type="button" class="c-alloc r" data-sort="alloc" data-i18n="tree.col.alloc">On disk</button>
             <button type="button" class="c-items r" data-sort="files" data-i18n="tree.col.items">Items</button>
@@ -88,6 +91,7 @@
       </div>
       <div class="view" id="view-clean" hidden><div class="clean" id="cleanBody"></div></div>
       <div class="view" id="view-dups" hidden><div class="dups" id="dupsBody"></div></div>
+      <div class="view" id="view-changes" hidden><div class="dups" id="changesBody"></div></div>
       <div class="view" id="view-basket" hidden><div class="basket" id="basketBody"></div></div>
     </section>
     <div class="split" id="split1" role="separator" aria-orientation="vertical" data-i18n-aria="split.tree" tabindex="0" data-i18n-title="split.title"></div>

@@ -39,6 +39,13 @@ const EN = {
   'action.failed': (p: MessageParams) => `The operation failed: ${p.error}`,
   'action.unknown': (p: MessageParams) => `Unknown action: ${p.kind}`,
   'elevation.failed': (p: MessageParams) => `Could not relaunch as administrator: ${p.error}`,
+  'history.notFound': (p: MessageParams) => `Snapshot not found: ${p.id}`,
+  'history.otherRoot': (p: MessageParams) => `That snapshot is of another folder (${p.path})`,
+  'history.saveFailed': (p: MessageParams) => `Couldn't save the scan to the history: ${p.error}`,
+  'history.readFailed': (p: MessageParams) => `Couldn't read the snapshot: ${p.error}`,
+  'export.invalidName': (p: MessageParams) => `Invalid file name: ${p.name}`,
+  'export.failed': (p: MessageParams) => `Couldn't save the file: ${p.error}`,
+  'export.notFound': (p: MessageParams) => `Not an exported file: ${p.path}`,
 } satisfies Record<string, (p: MessageParams) => string>;
 
 export type MessageCode = keyof typeof EN;
@@ -84,12 +91,12 @@ export function toEngineMessage(e: unknown): EngineMessage {
   return msg('error.internal', { error: errorText(e) });
 }
 
-/** Estado HTTP para un código de error: 400 entrada no válida, 404 nodo desconocido, 409 estado, 500 interno. */
+/** Estado HTTP para un código de error: 400 entrada no válida, 404 nodo/resumen/archivo desconocido, 409 estado, 500 interno. */
 export function httpStatus(code: string): number {
   switch (code) {
-    case 'error.invalidPath': case 'error.notFolder': case 'error.cannotOpen': case 'action.unknown': return 400;
-    case 'error.invalidNode': return 404;
-    case 'error.noScan': case 'error.scanBusy': case 'error.dupBusy': case 'error.cancelled': return 409;
+    case 'error.invalidPath': case 'error.notFolder': case 'error.cannotOpen': case 'action.unknown': case 'export.invalidName': return 400;
+    case 'error.invalidNode': case 'history.notFound': case 'export.notFound': return 404;
+    case 'error.noScan': case 'error.scanBusy': case 'error.dupBusy': case 'error.cancelled': case 'history.otherRoot': return 409;
     default: return 500;
   }
 }

@@ -52,7 +52,22 @@ Tipos en [`packages/protocol/src/types.ts`](../packages/protocol/src/types.ts). 
 | Cancelar escaneo | `cancel_scan` | `POST /api/cancel` | `boolean` (había un escaneo en curso); el `scan` pendiente se rechaza con `error.cancelled` |
 | Duplicados | `duplicates {root, minSize, limit, onProgress: Channel<DupProgress>}` | `POST /api/duplicates` `{root, minSize, limit}` + eventos SSE `event: dup` en `GET /api/events` | `DupResult` |
 | Cancelar duplicados | `cancel_duplicates` | `POST /api/duplicates/cancel` | `boolean`; el `duplicates` pendiente se rechaza con `error.cancelled` |
+| Guardar en el historial | `history_save` | `POST /api/history/save` | `HistoryEntry` |
+| Historial | `history_list` | `GET /api/history` | `HistoryEntry[]` (más reciente primero) |
+| Borrar un resumen | `history_delete {id}` | `POST /api/history/delete` `{id}` | `boolean` |
+| Borrar el historial | `history_clear` | `POST /api/history/clear` | `number` (borrados) |
+| Comparar | `compare {id, limit}` | `POST /api/compare` `{id, limit}` | `CompareResult`; activa `prev`/`fresh` en las filas y `sort: 'delta'` |
+| Quitar la comparación | `compare_clear` | `POST /api/compare/clear` | — |
+| Exportar | `export_file {name, data, base64}` | `POST /api/export` `{name, data, base64}` (hasta 64 MiB) | `ExportResult` |
+| Mostrar lo exportado | `reveal_export {path}` | `POST /api/export/reveal` `{path}` | `ActionResult` |
 | Elevación | `elevation` / `relaunch_elevated` | `GET /api/elevation` / `POST /api/relaunch-elevated` | `ElevationInfo` |
+
+Historial: cada resumen son dos archivos en `%LOCALAPPDATA%\TesseraFS\history`, con el mismo formato en las dos ediciones:
+
+- `<id>.json`: el `HistoryEntry`.
+- `<id>.snap.gz`: JSON comprimido con gzip, `{"v":1,"path":…,"scannedAt":…,"nodes":[[parent,name,isDir,size,alloc,files,dirs,mtime],…]}`. `nodes[0]` es la raíz (`parent` −1, `name` = la ruta) y cada nodo va después de su padre. Se guardan todas las carpetas y los archivos de 1 MiB o más; `isDir` es 0 o 1.
+
+La comparación empareja por nombre sin distinguir mayúsculas, bajando desde la raíz. Un archivo de menos de 1 MiB que no está en el resumen no tiene `prev` (se desconoce); uno de 1 MiB o más, o una carpeta, que no está, es `fresh`.
 
 Eventos SSE de la portable: el progreso del escaneo va sin nombre (`data: ScanProgress`) y el de los duplicados con `event: dup` (`data: DupProgress`), por el mismo `GET /api/events`.
 

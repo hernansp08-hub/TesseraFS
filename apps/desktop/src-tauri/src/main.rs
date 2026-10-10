@@ -9,8 +9,9 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State, WebviewWindowBuilder};
 use tessera_core::{
-    msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, DupProgress, DupResult, ElevationInfo, EngineChoice, EngineMessage,
-    ExtStat, NodeRow, Scan, ScanOptions, ScanProgress, ScanResult, SearchResponse, SortKey, VolumeInfo,
+    export, msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult, ElevationInfo, EngineChoice,
+    EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, Scan, ScanOptions, ScanProgress, ScanResult, SearchResponse, SortKey,
+    VolumeInfo,
 };
 
 type Res<T> = Result<T, EngineMessage>;
@@ -51,6 +52,11 @@ async fn with_scan<T: Send + 'static>(st: &St<'_>, f: impl FnOnce(&Scan) -> Res<
     })
     .await
     .map_err(join_error)?
+}
+
+/// Ejecuta `f` en un hilo de trabajo (E/S de disco sin bloquear la ventana).
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Res<T> + Send + 'static) -> Res<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(join_error)?
 }
 
 fn check(s: &Scan, id: u32) -> Res<()> {
@@ -266,6 +272,63 @@ fn cancel_duplicates(st: St<'_>) -> bool {
     busy
 }
 
+/// Guarda el escaneo cargado en el historial. Se permite durante una búsqueda de duplicados
+/// (los dos leen el árbol); no durante un escaneo.
+#[tauri::command]
+async fn history_save(st: St<'_>) -> Res<HistoryEntry> {
+    if st.busy.load(SeqCst) {
+        return Err(msg::scan_busy());
+    }
+    with_scan(&st, |s| History::open()?.save(s)).await
+}
+
+#[tauri::command]
+async fn history_list() -> Res<Vec<HistoryEntry>> {
+    blocking(|| History::open()?.list()).await
+}
+
+#[tauri::command]
+async fn history_delete(id: String) -> Res<bool> {
+    blocking(move || History::open()?.delete(&id)).await
+}
+
+#[tauri::command]
+async fn history_clear() -> Res<u64> {
+    blocking(|| History::open()?.clear()).await
+}
+
+/// Compara con un resumen y deja la comparación activa en el árbol. La comparación se cambia con
+/// el árbol bajo lectura (cerrojo propio), así que no espera a una búsqueda de duplicados.
+#[tauri::command]
+async fn compare(st: St<'_>, id: String, limit: u32) -> Res<CompareResult> {
+    if st.busy.load(SeqCst) {
+        return Err(msg::scan_busy());
+    }
+    with_scan(&st, move |s| History::open()?.compare(s, &id, limit)).await
+}
+
+#[tauri::command]
+async fn compare_clear(st: St<'_>) -> Res<()> {
+    let st = st.inner().clone();
+    blocking(move || {
+        if let Some(s) = st.scan.read().map_err(poisoned)?.as_ref() {
+            s.tree.set_comparison(None);
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn export_file(name: String, data: String, base64: Option<bool>) -> Res<ExportResult> {
+    blocking(move || export::export_file(&name, &data, base64.unwrap_or(false))).await
+}
+
+#[tauri::command]
+async fn reveal_export(path: String) -> Res<ActionResult> {
+    blocking(move || export::reveal_export(&path)).await
+}
+
 #[tauri::command]
 fn elevation() -> ElevationInfo {
     sys::elevation()
@@ -305,6 +368,14 @@ fn main() {
             action,
             duplicates,
             cancel_duplicates,
+            history_save,
+            history_list,
+            history_delete,
+            history_clear,
+            compare,
+            compare_clear,
+            export_file,
+            reveal_export,
             elevation,
             relaunch_elevated
         ])

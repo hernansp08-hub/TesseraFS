@@ -210,6 +210,12 @@ pub struct NodeRow {
     pub ext: String,
     pub flags: u16,
     pub child_count: u32,
+    /// Sólo con una comparación activa (ver [`crate::history`]): tamaño en el escaneo anterior, si se conoce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev: Option<u64>,
+    /// Sólo con una comparación activa: `Some(true)` si no existía en el escaneo anterior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -221,6 +227,8 @@ pub enum SortKey {
     Name,
     Files,
     Mtime,
+    /// Crecimiento desde el escaneo comparado: size − prev; lo nuevo cuenta entero; lo desconocido, 0.
+    Delta,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -381,6 +389,87 @@ pub struct DupResult {
     pub warnings: Vec<EngineMessage>,
 }
 
+// ---------- Historial, comparación y exportación (ver crate::history y crate::export) ----------
+
+/// Número JSON entero no negativo; admite también decimales (los de otra edición) y los trunca.
+fn de_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    let n = f64::deserialize(d)?;
+    Ok(if n.is_finite() && n > 0.0 { n as u64 } else { 0 })
+}
+
+/// Resumen de un escaneo guardado en el historial (`<id>.json`; formato en docs/ARQUITECTURA.md).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    /// `20261010T174512Z-1a2b3c4d`: fecha UTC del guardado + FNV-1a de la ruta en minúsculas.
+    pub id: String,
+    pub path: String,
+    /// Cuándo terminó el escaneo, en segundos Unix.
+    #[serde(deserialize_with = "de_u64")]
+    pub scanned_at: u64,
+    pub engine: Engine,
+    #[serde(deserialize_with = "de_u64")]
+    pub bytes: u64,
+    #[serde(deserialize_with = "de_u64")]
+    pub files: u64,
+    #[serde(deserialize_with = "de_u64")]
+    pub dirs: u64,
+    /// Nodos guardados.
+    #[serde(deserialize_with = "de_u64")]
+    pub nodes: u64,
+    /// Lo que ocupa el `.snap.gz`.
+    #[serde(deserialize_with = "de_u64")]
+    pub file_bytes: u64,
+}
+
+/// Un elemento actual con su tamaño anterior; `prev: null` = no existía.
+/// (El `prev` de la fila va aquí, no en `row.node.prev`.)
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeRow {
+    #[serde(flatten)]
+    pub row: SearchRow,
+    pub prev: Option<u64>,
+}
+
+/// Lo que existía y ya no: sólo el elemento más alto (no sus descendientes).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedRow {
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Totals {
+    pub bytes: u64,
+    pub files: u64,
+    pub dirs: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareResult {
+    pub entry: HistoryEntry,
+    pub before: Totals,
+    pub after: Totals,
+    /// Lo que creció (o es nuevo) sin que un solo hijo explique el 75 % o más; delta desc.
+    pub grew: Vec<ChangeRow>,
+    /// Igual para lo que se redujo, el que más primero.
+    pub shrank: Vec<ChangeRow>,
+    /// Por tamaño desc.
+    pub removed: Vec<RemovedRow>,
+}
+
+/// Archivo exportado en Descargas\TesseraFS.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub path: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,5 +556,106 @@ mod tests {
         assert_eq!(q, DupRequest { root: 3, min_size: 1 << 20, limit: 200 });
         assert_eq!(msg::dup_read_errors(2).message, "2 files couldn't be read and were left out");
         assert_eq!(msg::dup_busy().code, "error.dupBusy");
+    }
+
+    fn node(prev: Option<u64>, fresh: Option<bool>) -> NodeRow {
+        NodeRow {
+            id: 3,
+            parent_id: 0,
+            name: "a.bin".into(),
+            is_dir: false,
+            size: 5,
+            alloc: 8,
+            files: 0,
+            dirs: 0,
+            mtime: 9,
+            ext: "bin".into(),
+            flags: 0,
+            child_count: 0,
+            prev,
+            fresh,
+        }
+    }
+
+    #[test]
+    fn history_json() {
+        // Sin comparación no aparecen prev ni fresh
+        let base = serde_json::json!({
+            "id": 3, "parentId": 0, "name": "a.bin", "isDir": false, "size": 5, "alloc": 8, "files": 0, "dirs": 0,
+            "mtime": 9, "ext": "bin", "flags": 0, "childCount": 0,
+        });
+        assert_eq!(serde_json::to_value(node(None, None)).unwrap(), base);
+        let mut with = base.clone();
+        with["prev"] = serde_json::json!(2);
+        assert_eq!(serde_json::to_value(node(Some(2), None)).unwrap(), with);
+        let mut fresh = base.clone();
+        fresh["fresh"] = serde_json::json!(true);
+        assert_eq!(serde_json::to_value(node(None, Some(true))).unwrap(), fresh);
+        let back: NodeRow = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(back, node(None, None));
+        assert_eq!(serde_json::to_string(&SortKey::Delta).unwrap(), "\"delta\"");
+        assert_eq!(serde_json::from_str::<SortKey>("\"delta\"").unwrap(), SortKey::Delta);
+
+        // ChangeRow: la fila + path + prev (null si es nuevo)
+        let c = ChangeRow { row: SearchRow { node: node(None, Some(true)), path: "C:\\a.bin".into() }, prev: None };
+        let mut j = fresh.clone();
+        j["path"] = serde_json::json!("C:\\a.bin");
+        j["prev"] = serde_json::Value::Null;
+        assert_eq!(serde_json::to_value(&c).unwrap(), j);
+        let back: ChangeRow = serde_json::from_value(j).unwrap();
+        assert_eq!((back.prev, back.row.node.fresh, back.row.node.prev), (None, Some(true), None));
+        let c = ChangeRow { row: SearchRow { node: node(None, None), path: "C:\\a.bin".into() }, prev: Some(2) };
+        assert_eq!(serde_json::to_value(&c).unwrap()["prev"], 2);
+
+        let e = HistoryEntry {
+            id: "20261010T174512Z-1a2b3c4d".into(),
+            path: "C:\\".into(),
+            scanned_at: 1_791_654_312,
+            engine: Engine::Mft,
+            bytes: 10,
+            files: 2,
+            dirs: 1,
+            nodes: 3,
+            file_bytes: 99,
+        };
+        let ej = serde_json::json!({
+            "id": "20261010T174512Z-1a2b3c4d", "path": "C:\\", "scannedAt": 1_791_654_312u64, "engine": "mft",
+            "bytes": 10, "files": 2, "dirs": 1, "nodes": 3, "fileBytes": 99,
+        });
+        assert_eq!(serde_json::to_value(&e).unwrap(), ej);
+        assert_eq!(serde_json::from_value::<HistoryEntry>(ej).unwrap(), e);
+        // Números con decimales (otra edición) se truncan
+        let f: HistoryEntry = serde_json::from_str(
+            r#"{"id":"x","path":"C:\\","scannedAt":1791654312.7,"engine":"walk","bytes":10.0,"files":2,"dirs":1,"nodes":3,"fileBytes":99}"#,
+        )
+        .unwrap();
+        assert_eq!((f.scanned_at, f.bytes, f.engine), (1_791_654_312, 10, Engine::Walk));
+
+        let r = CompareResult {
+            entry: e,
+            before: Totals { bytes: 1, files: 2, dirs: 3 },
+            after: Totals { bytes: 4, files: 5, dirs: 6 },
+            grew: vec![],
+            shrank: vec![],
+            removed: vec![RemovedRow { path: "C:\\old".into(), is_dir: true, size: 7 }],
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["before"], serde_json::json!({ "bytes": 1, "files": 2, "dirs": 3 }));
+        assert_eq!(v["after"], serde_json::json!({ "bytes": 4, "files": 5, "dirs": 6 }));
+        assert_eq!(v["removed"], serde_json::json!([{ "path": "C:\\old", "isDir": true, "size": 7 }]));
+        assert_eq!(v["entry"]["fileBytes"], 99);
+        for k in ["entry", "before", "after", "grew", "shrank", "removed"] {
+            assert!(v.get(k).is_some(), "falta {k}");
+        }
+        assert_eq!(serde_json::to_string(&ExportResult { path: "C:\\x.csv".into() }).unwrap(), r#"{"path":"C:\\x.csv"}"#);
+        // Mensajes nuevos
+        let m = serde_json::to_value(msg::history_other_root("D:\\")).unwrap();
+        assert_eq!(m, serde_json::json!({ "code": "history.otherRoot", "params": { "path": "D:\\" }, "message": "That snapshot is of another folder (D:\\)" }));
+        assert_eq!(msg::history_not_found("x").get("id"), Some(&Param::Str("x".into())));
+        assert_eq!(msg::history_save_failed("disk full").code, "history.saveFailed");
+        assert_eq!(msg::history_read_failed("bad gzip").get("error"), Some(&Param::Str("bad gzip".into())));
+        assert_eq!(msg::export_invalid_name("a/b").get("name"), Some(&Param::Str("a/b".into())));
+        assert_eq!(msg::export_failed("e").code, "export.failed");
+        assert_eq!(msg::export_not_found("C:\\x").get("path"), Some(&Param::Str("C:\\x".into())));
     }
 }

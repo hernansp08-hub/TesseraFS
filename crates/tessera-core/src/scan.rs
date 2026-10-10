@@ -95,6 +95,8 @@ impl Default for ScanOptions {
 pub struct Scan {
     pub tree: Tree,
     pub result: ScanResult,
+    /// Cuándo terminó, en segundos Unix (para el historial).
+    pub scanned_at: u64,
 }
 
 /// Normaliza a ruta absoluta: "C:" → "C:\\", sin barra final salvo en la raíz.
@@ -199,7 +201,7 @@ pub fn scan(
         detail: None,
         fraction: Some(1.0),
     });
-    Ok(Scan { tree, result })
+    Ok(Scan { tree, result, scanned_at: crate::query::now_secs() as u64 })
 }
 
 #[allow(clippy::too_many_arguments)]

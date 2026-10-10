@@ -7,7 +7,9 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::sync::{Arc, PoisonError, RwLock};
 
+use crate::history::Comparison;
 use crate::names;
 use crate::types::{flag, NodeRow};
 
@@ -35,6 +37,9 @@ pub struct Tree {
     /// Nodos quitados (papelera) y carpetas cuyo orden de hijos hay que recalcular.
     pub(crate) removed: HashSet<u32>,
     pub(crate) dirty: HashSet<u32>,
+    /// Comparación activa con un resumen del historial. Se cambia con el árbol bajo lectura
+    /// (sin esperar a una búsqueda de duplicados); un escaneo nuevo trae un árbol sin ella.
+    pub(crate) cmp: RwLock<Option<Arc<Comparison>>>,
 }
 
 /// Hijos directos de una carpeta, ya ordenados por tamaño desc.
@@ -196,8 +201,23 @@ impl Tree {
             .then_with(|| a.cmp(&b))
     }
 
+    /// Comparación activa, si la hay.
+    pub fn comparison(&self) -> Option<Arc<Comparison>> {
+        self.cmp.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Activa (o quita, con `None`) la comparación.
+    pub fn set_comparison(&self, c: Option<Arc<Comparison>>) {
+        *self.cmp.write().unwrap_or_else(PoisonError::into_inner) = c;
+    }
+
+    /// Fila del contrato; con una comparación activa lleva `prev`/`fresh`.
     pub fn row(&self, id: u32) -> NodeRow {
         let dir = self.is_dir(id);
+        let (prev, fresh) = match self.comparison() {
+            Some(c) => (c.prev(id), c.is_fresh(id).then_some(true)),
+            None => (None, None),
+        };
         NodeRow {
             id,
             parent_id: self.parent(id).map_or(-1, |p| p as i64),
@@ -211,6 +231,8 @@ impl Tree {
             ext: if dir { String::new() } else { self.ext(id).to_string() },
             flags: self.flags(id),
             child_count: self.child_count(id),
+            prev,
+            fresh,
         }
     }
 

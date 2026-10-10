@@ -175,6 +175,7 @@ function postProcess(root) {
 }
 // Copias para la búsqueda de duplicados de la demo. Van al final y sin números aleatorios: el resto de la muestra no cambia.
 function addCopies(root) {
+  const first = N.length;
   const at = (...names) => names.reduce((p, nm) => p.kids.find(k => k.name === nm) || dir(p, nm), root);
   const me = ['Users', 'usuario'], t = d => T1 - d * 86400;
   const dl = at(...me, 'Downloads'), docs = at(...me, 'Documents'), pics = at(...me, 'Pictures'), vids = at(...me, 'Videos');
@@ -188,6 +189,7 @@ function addCopies(root) {
   const y25 = at(...me, 'Pictures', '2025'), imp = at(...me, 'Pictures', 'Importado del móvil');
   [3.4, 4.1, 2.9, 5.2, 3.7, 4.6].forEach((m, i) => twice(`IMG_20${41 + i}.jpg`, m * MB + i * 4093, t(300 - i * 9), [y25], [imp]));
   void pics;
+  for (let i = first; i < N.length; i++) N[i].copy = true; // para el historial simulado: llegaron «hace poco»
 }
 // Agregación ascendente en una pasada: cada padre tiene id menor que sus hijos
 function aggregate() {

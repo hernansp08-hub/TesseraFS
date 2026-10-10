@@ -273,6 +273,7 @@ pub fn build(mut raw: RawTree, root_path: String, sub: &[String]) -> Result<Tree
         root_path,
         removed: Default::default(),
         dirty: Default::default(),
+        cmp: Default::default(),
     })
 }
 

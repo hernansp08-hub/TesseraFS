@@ -19,6 +19,9 @@ TesseraFS te muestra **qué ocupa tu disco** en unos segundos. Dibuja la unidad 
 8. [Panel de detalle y acciones](#8-panel-de-detalle-y-acciones)
 9. [Filtrar](#9-filtrar)
 10. [Liberar espacio](#10-liberar-espacio)
+    - [Archivos duplicados](#archivos-duplicados)
+    - [Qué ha cambiado: historial y comparación](#qué-ha-cambiado-historial-y-comparación)
+    - [Exportar e informes](#exportar-e-informes)
 11. [Atajos de teclado](#11-atajos-de-teclado)
 12. [Personalizar](#12-personalizar)
 13. [Privacidad y seguridad](#13-privacidad-y-seguridad)
@@ -334,6 +337,40 @@ Sólo se lee lo imprescindible: la mayoría de archivos se descartan por tamaño
 > [!TIP]
 > Si todas las copias de un grupo quedan marcadas, el grupo se pone en rojo para que conserves al menos una. **Resaltar en el mapa** muestra dónde están todas las copias.
 
+### Qué ha cambiado: historial y comparación
+
+Después de cada escaneo, TesseraFS guarda un **resumen** en tu equipo: el tamaño de todas las carpetas y de los archivos de 1 MB o más. La pestaña **Cambios** lista los escaneos anteriores de la misma unidad o carpeta y, con **Comparar**, muestra:
+
+- cuánto creció o se redujo todo desde entonces, y cuántos archivos más o menos hay;
+- **lo que más creció**: las carpetas y archivos que explican el crecimiento, marcados como **nuevo** si no existían. No se repiten las carpetas padre cuando una sola subcarpeta explica casi todo;
+- lo que **se redujo** y lo que **ya no existe**.
+
+Mientras la comparación está activa, el árbol de Carpetas tiene una columna **Δ** (pulsa su cabecera para ordenar por cambio) y el panel de detalle muestra el cambio de lo seleccionado. **Resaltar lo que creció** lo marca en el mapa; **Dejar de comparar** lo quita todo.
+
+```mermaid
+flowchart LR
+    A["Escaneo de hoy"] --> C{"Comparar"}
+    H[("Resúmenes guardados<br/>%LOCALAPPDATA%\TesseraFS\history")] --> C
+    C --> D["Lo que más creció · se redujo · ya no existe"]
+    C --> T["Columna Δ en Carpetas"]
+```
+
+> [!NOTE]
+> Los resúmenes se quedan en `%LOCALAPPDATA%\TesseraFS\history` (unos pocos MB por unidad completa) y se conservan los 20 últimos de cada ubicación. Puedes desactivar el guardado automático, guardar a mano o borrar el historial desde la propia pestaña. Las dos ediciones comparten el mismo historial.
+
+### Exportar e informes
+
+El botón de **Exportar** de la cabecera (la flecha hacia abajo) guarda en `Descargas\TesseraFS`:
+
+| Opción | Qué genera |
+|---|---|
+| **Informe** (HTML) | Una página autocontenida, lista para enviar o imprimir: resumen, mapa, composición, carpetas y archivos más grandes, y, si los tienes, Liberar espacio, duplicados y cambios |
+| **Mapa como imagen** (PNG) | El mapa tal como se ve |
+| **Hoja de cálculo** (CSV) | La lista de la pestaña activa: el contenido de la carpeta del mapa, los archivos, los candidatos, los duplicados, los cambios o lo marcado para borrar. Se abre directamente en Excel (con «;» si tu idioma usa coma decimal) |
+| **Datos para scripts** (JSON) | Lo mismo, con todos los campos |
+
+Al terminar, el aviso tiene un botón **Mostrar** que abre el Explorador con el archivo seleccionado.
+
 ---
 
 ## 11. Atajos de teclado
@@ -360,7 +397,7 @@ Sólo se lee lo imprescindible: la mayoría de archivos se descartan por tamaño
 - **Idioma:** el botón del globo, en la cabecera, elige entre automático (el idioma de Windows) y English, Español, Português (Brasil), Français o Deutsch. El cambio es inmediato y no pierde el escaneo; la elección se recuerda.
 - **Tema:** el botón de la cabecera alterna entre sistema, oscuro y claro. Los colores de las teselas son los mismos en los dos temas.
 - **Divisores:** arrastra la línea entre paneles para cambiar su ancho (o su alto en pantallas medianas). El doble clic la restablece. Se recuerda entre sesiones.
-- **Enlaces directos:** abre la interfaz en una vista concreta añadiendo a la dirección `#archivos`, `#limpieza`, `#extension`, `#antiguedad`, `#relieve` o `#guia` (o sus nombres en inglés: `#files`, `#clean`, `#age`, `#relief`, `#guide`). `#lang=fr` fuerza un idioma. Se pueden combinar: `#lang=de,relieve,extension`.
+- **Enlaces directos:** abre la interfaz en una vista concreta añadiendo a la dirección `#archivos`, `#limpieza`, `#duplicados`, `#cambios`, `#extension`, `#antiguedad`, `#relieve` o `#guia` (o sus nombres en inglés: `#files`, `#clean`, `#duplicates`, `#changes`, `#age`, `#relief`, `#guide`). `#lang=fr` fuerza un idioma. Se pueden combinar: `#lang=de,relieve,extension`.
 
 ![Tema claro](../img/claro.png)
 

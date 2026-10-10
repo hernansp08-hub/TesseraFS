@@ -1,7 +1,7 @@
 // Motores reales: Tauri (Rust en el mismo proceso) y HTTP local (edición portable con Bun).
 import type {
-  ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, DupProgress, DupRequest, DupResult, ElevationInfo, ExtStat,
-  NodeRow, ScanProgress, ScanRequest, ScanResult, SearchRequest, SearchResponse, VolumeInfo,
+  ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, CompareResult, DupProgress, DupRequest, DupResult, ElevationInfo,
+  ExportResult, ExtStat, HistoryEntry, NodeRow, ScanProgress, ScanRequest, ScanResult, SearchRequest, SearchResponse, VolumeInfo,
 } from '@tessera/protocol';
 import { engineFailure, isEngineMessage } from './errors';
 
@@ -28,6 +28,14 @@ export class TauriBackend implements Backend {
     return this.call<DupResult>('duplicates', { root: req.root, minSize: req.minSize, limit: req.limit, onProgress: ch });
   }
   cancelDuplicates() { return this.call<boolean>('cancel_duplicates'); }
+  historySave() { return this.call<HistoryEntry>('history_save'); }
+  historyList() { return this.call<HistoryEntry[]>('history_list'); }
+  historyDelete(id: string) { return this.call<boolean>('history_delete', { id }); }
+  historyClear() { return this.call<number>('history_clear'); }
+  compare(id: string, limit: number) { return this.call<CompareResult>('compare', { id, limit }); }
+  compareClear() { return this.call<void>('compare_clear'); }
+  exportFile(name: string, data: string, base64: boolean) { return this.call<ExportResult>('export_file', { name, data, base64 }); }
+  revealExport(path: string) { return this.call<ActionResult>('reveal_export', { path }); }
   async slice(root: number, minBytes: number, maxNodes: number) {
     const r = await this.call<ArrayBuffer | number[]>('slice', { root, minBytes, maxNodes });
     return r instanceof ArrayBuffer ? r : new Uint8Array(r).buffer;
@@ -89,6 +97,14 @@ export class HttpBackend implements Backend {
     return this.withEvents('dup', d => { if ((d as DupProgress)?.phase) onProgress(d as DupProgress); }, () => this.post<DupResult>('/api/duplicates', req));
   }
   cancelDuplicates() { return this.post<boolean>('/api/duplicates/cancel', {}); }
+  historySave() { return this.post<HistoryEntry>('/api/history/save', {}); }
+  historyList() { return this.get<HistoryEntry[]>('/api/history'); }
+  historyDelete(id: string) { return this.post<boolean>('/api/history/delete', { id }); }
+  historyClear() { return this.post<number>('/api/history/clear', {}); }
+  compare(id: string, limit: number) { return this.post<CompareResult>('/api/compare', { id, limit }); }
+  async compareClear() { await this.post('/api/compare/clear', {}); }
+  exportFile(name: string, data: string, base64: boolean) { return this.post<ExportResult>('/api/export', { name, data, base64 }); }
+  revealExport(path: string) { return this.post<ActionResult>('/api/export/reveal', { path }); }
   async slice(root: number, minBytes: number, maxNodes: number) {
     return (await this.req('/api/slice?' + this.qs({ root, min: minBytes, max: maxNodes }))).arrayBuffer();
   }

@@ -3,13 +3,14 @@ import { ptr } from 'bun:ffi';
 import { win32 as winPath } from 'node:path';
 import { availableParallelism } from 'node:os';
 import {
-  encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type DupProgress, type DupRequest,
-  type DupResult, type ElevationInfo, type Engine,
-  type EngineMessage, type ExtStat, type NodeRow, type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest,
-  type SearchResponse, type VolumeInfo,
+  encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type CompareResult, type DupProgress,
+  type DupRequest, type DupResult, type ElevationInfo, type Engine,
+  type EngineMessage, type ExportResult, type ExtStat, type HistoryEntry, type NodeRow, type ScanProgress, type ScanRequest,
+  type ScanResult, type SearchRequest, type SearchResponse, type VolumeInfo,
 } from '../../protocol/src/index.ts';
 import { EngineError, engineError, errorText, msg, type MessageCode, type MessageParams } from './messages.ts';
 import { findDuplicates } from './dup.ts';
+import { clearHistory, compareHistory, deleteHistory, exportFile, exportedFile, listHistory, saveHistory } from './history.ts';
 import { mftScan } from './mft.ts';
 import { Store } from './store.ts';
 import { checkRoot, walkScan, type WalkOutcome } from './walk.ts';
@@ -111,6 +112,15 @@ const DE_OPCANCELLED = 0x75, ERROR_CANCELLED = 1223;
 const result = (ok: boolean, code: MessageCode, params?: MessageParams): ActionResult => ({ ok, ...msg(code, params) });
 const failed = (error: string) => result(false, 'action.failed', { error });
 
+/** Abre el Explorador con `path` seleccionado (o, con `openFolder`, la carpeta misma). */
+export function revealPath(path: string, openFolder = false): ActionResult {
+  ensureCom();
+  const r = openFolder
+    ? Number(shell32().ShellExecuteW(0n, wstr('open'), wstr(path), null, null, 1))
+    : Number(shell32().ShellExecuteW(0n, wstr('open'), wstr('explorer.exe'), wstr(`/select,"${path}"`), null, 1));
+  return r > 32 ? { ok: true } : failed(winErrorText(r));
+}
+
 function exists(path: string): boolean {
   const d = new Uint8Array(36);
   return kernel32().GetFileAttributesExW(wstr(path), 0, d) !== 0;
@@ -146,6 +156,8 @@ export function walkWarnings(w: Pick<WalkOutcome, 'denied' | 'deniedSample' | 'f
 export class TesseraEngine {
   store: Store | null = null;
   result: ScanResult | null = null;
+  /** Cuándo terminó el escaneo cargado (segundos Unix): el `scannedAt` del historial. */
+  scannedAt = 0;
   scanning = false;
   dupRunning = false;
   private cancelled = false;
@@ -169,7 +181,8 @@ export class TesseraEngine {
     this.scanning = true; this.cancelled = false;
     const isCancelled = () => this.cancelled;
     // el árbol anterior se suelta ya: sus ids dejan de valer al terminar y así no conviven dos árboles en memoria
-    this.store = null; this.result = null;
+    // (y con él la comparación activa, que vive en el almacén)
+    this.store = null; this.result = null; this.scannedAt = 0;
     Bun.gc(true);
     const t0 = performance.now();
     const ms = () => Math.round(performance.now() - t0);
@@ -222,6 +235,7 @@ export class TesseraEngine {
         bytes: store.sz[root], elapsedMs: ms(), volume: vol, warnings,
       };
       this.result = result;
+      this.scannedAt = Math.floor(Date.now() / 1000);
       onProgress({ phase: 'done', entries: result.entries, bytes: result.bytes, elapsedMs: result.elapsedMs });
       Bun.gc(true); // devuelve al sistema la basura del escaneo (lotes, crecimiento de arreglos)
       return result;
@@ -261,6 +275,34 @@ export class TesseraEngine {
     return true;
   }
 
+  // ---------- historial y comparación (history.ts) ----------
+  /** Guarda el escaneo cargado en el historial. Se permite durante una búsqueda de duplicados, no durante un escaneo. */
+  historySave(): HistoryEntry {
+    if (this.scanning) throw engineError('error.scanBusy');
+    const s = this.store, r = this.result;
+    if (!s || !r) throw engineError('error.noScan');
+    return saveHistory(s, r.engine, this.scannedAt);
+  }
+
+  historyList(): HistoryEntry[] { return listHistory(); }
+  historyDelete(id: string): boolean { return deleteHistory(id); }
+  historyClear(): number { return clearHistory(); }
+
+  /** Compara con un resumen de la misma ruta y deja la comparación activa (hasta compareClear o un escaneo nuevo). */
+  compare(id: string, limit: number): CompareResult {
+    if (this.scanning) throw engineError('error.scanBusy');
+    if (!this.store) throw engineError('error.noScan');
+    return compareHistory(this.store, id, limit);
+  }
+
+  compareClear(): void { this.store?.setCompare(null); }
+
+  // ---------- exportación ----------
+  exportFile(name: string, data: string, base64: boolean): ExportResult { return exportFile(name, data, base64); }
+
+  /** Abre el Explorador con un archivo exportado seleccionado (sólo dentro de la carpeta de exportación). */
+  revealExport(path: string): ActionResult { return revealPath(exportedFile(path)); }
+
   private need(id: number): Store {
     const s = this.store;
     if (!s) throw engineError('error.noScan');
@@ -296,13 +338,7 @@ export class TesseraEngine {
         const r = Number(shell32().ShellExecuteW(0n, wstr('open'), wstr(path), null, null, 1));
         return r > 32 ? { ok: true } : failed(winErrorText(r));
       }
-      case 'reveal': {
-        ensureCom();
-        const r = id === s.rootId
-          ? Number(shell32().ShellExecuteW(0n, wstr('open'), wstr(path), null, null, 1))
-          : Number(shell32().ShellExecuteW(0n, wstr('open'), wstr('explorer.exe'), wstr(`/select,"${path}"`), null, 1));
-        return r > 32 ? { ok: true } : failed(winErrorText(r));
-      }
+      case 'reveal': return revealPath(path, id === s.rootId);
       case 'properties': {
         const err = shellExecuteEx('properties', path, null, null, 5, 0x0000000C /* INVOKEIDLIST */ | 0x00000400 /* FLAG_NO_UI */);
         return err === ERROR_CANCELLED ? result(false, 'action.cancelled') : err ? failed(winErrorText(err)) : { ok: true };

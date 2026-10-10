@@ -1,11 +1,12 @@
 // Interfaz de TesseraFS: un único estado y una selección que une el árbol, el mapa y el panel de detalle.
 import {
-  FLAG, decodeSlice, type ActionKind, type Backend, type DupGroup, type DupProgress, type DupResult, type ExtStat, type NodeRow, type ScanProgress, type ScanResult,
+  FLAG, decodeSlice, type ActionKind, type Backend, type ChangeRow, type CompareResult, type DupGroup, type DupProgress, type DupResult, type ExtStat,
+  type HistoryEntry, type NodeRow, type RemovedRow, type ScanProgress, type ScanResult,
   type SearchRow, type SliceNode, type SortKey, type VolumeInfo,
 } from '@tessera/protocol';
 import { layout, raster, type Layout, type Tile } from './render';
 import { AGE_BINS, CATEGORIES, REST_COLOR, ageBin, ageColor, ageName, catName, categoryById, categoryOf, extColor, rgb, setExtRanking, type ColorMode, type RGB } from './colors';
-import { GB, MB, ageText, esc, fmtB, fmtD, fmtN, fmtP, fmtS } from './format';
+import { GB, MB, ageText, esc, fmtB, fmtD, fmtN, fmtP, fmtS, joinPath } from './format';
 import { LOCALES, PSEUDO, html, i18n, msgText, onLocaleChange, preference, setPreference, systemLocale, t, tk, translateDom, type MessageKey } from './i18n';
 import { RULES, cmdOf, howKey, knownId, ruleMatches, titleOf, type Key, type Risk, type Rule } from './clean';
 
@@ -68,9 +69,15 @@ const rowColor = (r: NodeRow) => nodeColor(r.ext, r.isDir, r.mtime);
 
 // ---------- Avisos ----------
 let toastT = 0;
-export function toast(msg: string) {
-  const t = $('toast'); t.textContent = msg; t.hidden = false; requestAnimationFrame(() => t.classList.add('show'));
-  clearTimeout(toastT); toastT = window.setTimeout(() => { t.classList.remove('show'); setTimeout(() => { t.hidden = true; }, 200); }, 4200);
+/** `action`: un botón dentro del aviso (p. ej. «Mostrar» tras exportar). */
+export function toast(msg: string, action?: { label: string; run: () => void }) {
+  const el = $('toast'); el.textContent = msg;
+  if (action) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'toast-act'; b.textContent = action.label;
+    b.onclick = () => { action.run(); el.classList.remove('show'); }; el.append(' ', b);
+  }
+  el.hidden = false; requestAnimationFrame(() => el.classList.add('show'));
+  clearTimeout(toastT); toastT = window.setTimeout(() => { el.classList.remove('show'); setTimeout(() => { el.hidden = true; }, 200); }, action ? 8000 : 4200);
 }
 function copyText(text: string, ok: MessageKey = 'toast.copied') {
   const fail = () => toast(t('toast.copyFailed', { text }));
@@ -443,7 +450,7 @@ function rowHTML(i: number) {
   return `<div class="${cls}" role="row" data-i="${i}" aria-level="${tr.depth + 1}"${r.isDir ? ` aria-expanded="${open}"` : ''} aria-selected="${sel}">`
     + (tr.depth ? `<span class="share" style="left:${10 + ind}px;width:calc((100% - ${18 + ind}px) * ${pct.toFixed(4)})"></span>` : '')
     + `<span class="c-name" style="--ind:${ind}px">${tw}${icon}<span class="nm" data-fit="name" title="${esc(r.name)}">${esc(nameOf(r))}</span></span>`
-    + `<span class="c-size num">${fmtB(r.size)}</span><span class="c-pct num">${tr.depth ? fmtP(pct) : ''}</span><span class="c-alloc num">${fmtB(r.alloc)}</span>`
+    + `<span class="c-size num">${fmtB(r.size)}</span>${H.cmp ? `<span class="c-delta num">${deltaHTML(r)}</span>` : ''}<span class="c-pct num">${tr.depth ? fmtP(pct) : ''}</span><span class="c-alloc num">${fmtB(r.alloc)}</span>`
     + `<span class="c-items num">${items}</span><span class="c-mod num">${fmtD(r.mtime)}</span></div>`;
 }
 const treeVL = new VList(treeBody, 26, rowHTML, fitTexts);
@@ -550,7 +557,8 @@ export function renderInspector() {
     + `<div><dt>${tx('insp.ofFolder')}</dt><dd>${r.parentId >= 0 ? fmtP(r.size / (ps || 1)) : '—'}</dd></div>`
     + (r.isDir ? `<div><dt>${tx('insp.files')}</dt><dd>${fmtN(r.files)}</dd></div><div><dt>${tx('insp.folders')}</dt><dd>${fmtN(r.dirs)}</dd></div>`
       : `<div><dt>${tx('insp.attributes')}</dt><dd>${esc(attrs(r.flags))}</dd></div><div><dt>${tx('insp.age')}</dt><dd>${esc(ageText(r.mtime))}</dd></div>`)
-    + `<div><dt>${tx('insp.modified')}</dt><dd>${fmtD(r.mtime)}</dd></div></dl>`
+    + `<div><dt>${tx('insp.modified')}</dt><dd>${fmtD(r.mtime)}</dd></div>`
+    + (H.cmp && (r.fresh || r.prev != null) ? `<div><dt>${tx('insp.change')}</dt><dd>${deltaHTML(r) || tx('changes.same')}</dd></div>` : '') + `</dl>`
     + (r.flags & FLAG.HARDLINK ? `<p class="note">${tx('insp.note.hardlink')}</p>` : '')
     + (r.flags & FLAG.CLOUD ? `<p class="note">${tx('insp.note.cloud')}</p>` : '')
     + (inMarked ? `<p class="note marked-note">${tx('basket.alreadyIn', { name: inMarked.row.name })}</p>` : '')
@@ -728,12 +736,13 @@ $('cleanBody').addEventListener('click', async e => {
 export function setTab(t: string) {
   S.tab = t;
   for (const b of document.querySelectorAll('.tab')) b.setAttribute('aria-selected', String((b as HTMLElement).dataset.tab === t));
-  for (const v of ['tree', 'files', 'clean', 'dups', 'basket']) $('view-' + v).hidden = v !== t;
+  for (const v of ['tree', 'files', 'clean', 'dups', 'changes', 'basket']) $('view-' + v).hidden = v !== t;
   if (t === 'tree') treeVL.paint();
   if (t === 'files') loadFiles();
   if (t === 'clean') renderClean();
   if (t === 'basket') renderBasket();
   if (t === 'dups') renderDups();
+  if (t === 'changes') renderChanges();
 }
 
 // ---------- Duplicados ----------
@@ -848,6 +857,262 @@ $('dupsBody').addEventListener('dblclick', e => {
 });
 $('dupsBody').addEventListener('change', e => {
   const s = (e.target as HTMLElement).closest('[data-dp="min"]') as HTMLSelectElement; if (s) D.min = +s.value;
+});
+
+// ---------- Historial y cambios ----------
+// Tras cada escaneo se guarda un resumen (si está activado). «Comparar» activa la comparación en el motor: las filas
+// traen prev/fresh, el árbol muestra la columna Δ y se puede ordenar por cambio. Un escaneo nuevo la quita.
+const HIST_KEY = 'tesserafs-history';
+const H = { entries: [] as HistoryEntry[], loaded: false, savedId: '', cmp: null as CompareResult | null, busy: false, confirmClear: false };
+function autoHistory() { try { return localStorage.getItem(HIST_KEY) !== 'off'; } catch { return true; } }
+const signedB = (d: number) => (d > 0 ? '+' : d < 0 ? '−' : '') + fmtB(Math.abs(d));
+const signedN = (d: number) => (d > 0 ? '+' : d < 0 ? '−' : '') + fmtN(Math.abs(d));
+function deltaHTML(r: NodeRow) {
+  if (r.fresh) return `<span class="delta up">${tx('changes.new')}</span>`;
+  const d = r.prev != null ? r.size - r.prev : 0; if (!d) return '';
+  return `<span class="delta ${d > 0 ? 'up' : 'down'}">${esc(signedB(d))}</span>`;
+}
+const asRow = (r: ChangeRow): NodeRow => ({ ...r, prev: r.prev ?? undefined, fresh: r.prev === null ? true : undefined });
+async function saveHistory() {
+  try { const e = await B.historySave(); H.savedId = e.id; H.loaded = false; if (S.tab === 'changes') renderChanges(); }
+  catch (e) { toast(msgText(e)); }
+}
+function resetChanges() {
+  H.cmp = null; H.loaded = false; H.savedId = ''; H.confirmClear = false; $('treeTbl').classList.remove('cmp');
+  if (S.sort.key === 'delta') { S.sort = { key: 'size', desc: true }; updateSortHead(); }
+}
+/** Las filas en caché no traen prev/fresh: al activar o quitar la comparación se vuelven a pedir. */
+async function reloadRows() {
+  S.kids.clear(); S.rowCache.clear();
+  if (S.root) S.root = remember(await B.nodeInfo(S.root.id));
+  S.chain = await Promise.all(S.chain.map(z => B.nodeInfo(z.id).then(remember).catch(() => z)));
+  if (S.sel) { const id = S.sel.id; S.sel = await B.nodeInfo(id).then(remember).catch(() => S.sel); }
+  await rebuildTree(); renderInspector(); renderStatus();
+}
+async function runCompare(id: string) {
+  if (H.busy) return; H.busy = true; renderChanges();
+  try {
+    const c = await B.compare(id, 100);
+    for (const r of [...c.grew, ...c.shrank]) S.pathCache.set(r.id, r.path);
+    H.cmp = c; $('treeTbl').classList.add('cmp'); await reloadRows();
+  } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
+  finally { H.busy = false; renderChanges(); }
+}
+async function stopCompare() {
+  await B.compareClear().catch(() => { }); H.cmp = null; $('treeTbl').classList.remove('cmp');
+  if (S.sort.key === 'delta') { S.sort = { key: 'size', desc: true }; updateSortHead(); }
+  await reloadRows(); if (S.tab === 'changes') renderChanges();
+}
+function changeRowHTML(r: ChangeRow) {
+  const icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(rowColor(asRow(r)))}"></i>`, d = r.size - (r.prev ?? 0);
+  return `<div class="ch-row${S.sel?.id === r.id ? ' sel' : ''}" data-id="${r.id}">${icon}<span class="dp-name"><span class="nm">${esc(r.name)}${r.prev === null ? ` <span class="badge">${tx('changes.new')}</span>` : ''}</span><code title="${esc(r.path)}">${esc(parentPath(r.path))}</code></span>`
+    + `<span class="num ch-was">${r.prev === null ? '' : esc(fmtB(r.prev)) + ' → '}${esc(fmtB(r.size))}</span><span class="num delta ${d >= 0 ? 'up' : 'down'}">${esc(signedB(d))}</span></div>`;
+}
+function removedRowHTML(r: RemovedRow) {
+  const i = r.path.lastIndexOf('\\'), icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(REST_COLOR)}"></i>`;
+  return `<div class="ch-row gone">${icon}<span class="dp-name"><span class="nm">${esc(r.path.slice(i + 1))}</span><code title="${esc(r.path)}">${esc(r.path.slice(0, Math.max(3, i)))}</code></span>`
+    + `<span class="num ch-was">${esc(fmtB(r.size))}</span><span class="num delta down">${esc(signedB(-r.size))}</span></div>`;
+}
+async function renderChanges() {
+  const el = $('changesBody');
+  if (!S.root || !S.scan) { el.innerHTML = `<div class="cl-loading">${tx('changes.noScan')}</div>`; return; }
+  if (!H.loaded) { H.loaded = true; H.entries = await B.historyList().catch(() => []); }
+  const root = lc(S.scan.rootPath), mine = H.entries.filter(e => lc(e.path) === root && e.id !== H.savedId), c = H.cmp;
+  let h = `<p class="dp-intro">${tx('changes.intro')}</p>`;
+  if (c) {
+    const d = c.after.bytes - c.before.bytes;
+    h += `<div class="dp-sum"><div class="bk-sum"><b class="delta ${d >= 0 ? 'up' : 'down'}">${esc(signedB(d))}</b><span>${tx('changes.since', { when: i18n.relative(c.entry.scannedAt), date: i18n.dateTime(c.entry.scannedAt) })}</span>`
+      + `<small>${tx('changes.totals', { before: fmtB(c.before.bytes), after: fmtB(c.after.bytes), files: signedN(c.after.files - c.before.files) })}</small></div>`
+      + `<div class="bk-acts"><button class="btn sm" type="button" data-ch="hl"${c.grew.length ? '' : ' disabled'}>${tx('changes.highlight')}</button><button class="btn sm" type="button" data-ch="stop">${tx('changes.stop')}</button></div></div>`
+      + `<h3 class="ch-h">${tx('changes.grew')}</h3>` + (c.grew.length ? `<div class="ch-list">${c.grew.map(changeRowHTML).join('')}</div>` : `<p class="note">${tx('changes.nothing')}</p>`)
+      + (c.shrank.length ? `<h3 class="ch-h">${tx('changes.shrank')}</h3><div class="ch-list">${c.shrank.map(changeRowHTML).join('')}</div>` : '')
+      + (c.removed.length ? `<h3 class="ch-h">${tx('changes.removed')}</h3><div class="ch-list">${c.removed.map(removedRowHTML).join('')}</div>` : '');
+  }
+  h += `<h3 class="ch-h">${tx('changes.history')}</h3>`;
+  h += mine.length ? `<div class="ch-list">` + mine.map(e => {
+    const d = S.root!.size - e.bytes, on = c?.entry.id === e.id;
+    return `<div class="ch-entry${on ? ' on' : ''}" data-entry="${esc(e.id)}"><span class="dp-name"><b>${esc(i18n.relative(e.scannedAt))}</b><code>${esc(i18n.dateTime(e.scannedAt))} · ${esc(fmtB(e.bytes))}</code></span>`
+      + `<span class="num delta ${d >= 0 ? 'up' : 'down'}" title="${tx('changes.vsNow')}">${esc(signedB(d))}</span>`
+      + `<button class="btn sm${on ? ' on' : ''}" type="button" data-ch="cmp"${H.busy ? ' disabled' : ''}>${tx(on ? 'changes.comparing' : 'changes.compare')}</button>`
+      + `<button class="icon-btn sm" type="button" data-ch="del" title="${tx('changes.delete')}" aria-label="${tx('changes.delete')}">${ICON_X}</button></div>`;
+  }).join('') + `</div>` : `<div class="cl-loading">${tx(H.savedId ? 'changes.firstSaved' : 'changes.none')}</div>`;
+  h += `<div class="ch-foot"><label><input type="checkbox" data-ch="auto"${autoHistory() ? ' checked' : ''}> ${tx('changes.auto')}</label>`
+    + (H.savedId ? '' : `<button class="btn sm" type="button" data-ch="save">${tx('changes.saveNow')}</button>`)
+    + (H.confirmClear
+      ? `<span class="ch-confirm">${tx('changes.clearConfirm', { count: H.entries.length })} <button class="btn sm" type="button" data-ch="clearNo">${tx('insp.cancel')}</button> <button class="btn sm danger solid" type="button" data-ch="clearYes">${tx('changes.clear')}</button></span>`
+      : `<button class="btn sm danger" type="button" data-ch="clear"${H.entries.length ? '' : ' disabled'}>${tx('changes.clear')}</button>`)
+    + `</div><p class="note">${tx('changes.where')}</p>`;
+  el.innerHTML = h;
+}
+const changeRow = (id: number) => H.cmp ? [...H.cmp.grew, ...H.cmp.shrank].find(r => r.id === id) ?? null : null;
+$('changesBody').addEventListener('click', async e => {
+  const el = e.target as HTMLElement, b = el.closest('[data-ch]') as HTMLElement, entry = (el.closest('[data-entry]') as HTMLElement | null)?.dataset.entry;
+  switch (b?.dataset.ch) {
+    case 'cmp': if (entry) { if (H.cmp?.entry.id === entry) await stopCompare(); else await runCompare(entry); } return;
+    case 'stop': await stopCompare(); return;
+    case 'del':
+      if (entry) { if (H.cmp?.entry.id === entry) await stopCompare(); await B.historyDelete(entry).catch(err => toast(msgText(err))); H.loaded = false; renderChanges(); }
+      return;
+    case 'hl': if (H.cmp) { const ids = new Set(H.cmp.grew.map(r => r.id)); setHL({ type: 'search', ids, query: '', count: ids.size }); } return;
+    case 'save': await saveHistory(); renderChanges(); return;
+    case 'clear': H.confirmClear = true; renderChanges(); return;
+    case 'clearNo': H.confirmClear = false; renderChanges(); return;
+    case 'clearYes': {
+      H.confirmClear = false; if (H.cmp) await stopCompare();
+      const n = await B.historyClear().catch(err => { toast(msgText(err)); return 0; });
+      H.loaded = false; H.savedId = ''; toast(t('changes.cleared', { count: n })); renderChanges(); return;
+    }
+    case 'auto': return; // lo gestiona «change»
+  }
+  const row = el.closest('.ch-row') as HTMLElement | null, r = row ? changeRow(+row.dataset.id!) : null;
+  if (r) { select(asRow(r)); renderChanges(); }
+});
+$('changesBody').addEventListener('dblclick', e => {
+  const row = (e.target as HTMLElement).closest('.ch-row') as HTMLElement | null, r = row ? changeRow(+row.dataset.id!) : null;
+  if (r) { setTab('tree'); locate(asRow(r)); }
+});
+$('changesBody').addEventListener('change', e => {
+  const c = (e.target as HTMLElement).closest('[data-ch="auto"]') as HTMLInputElement | null; if (!c) return;
+  try { localStorage.setItem(HIST_KEY, c.checked ? 'on' : 'off'); } catch { }
+  if (c.checked && !H.savedId && S.root) saveHistory(); else renderChanges();
+});
+
+// ---------- Exportar: CSV, JSON, informe HTML y mapa PNG (a Descargas\TesseraFS) ----------
+const stamp = () => { const d = new Date(), p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; };
+const isoDate = (s: number) => s ? new Date(s * 1000).toISOString().slice(0, 19).replace('T', ' ') : '';
+const VIEW_KEY: Record<string, MessageKey> = {
+  tree: 'export.view.tree', files: 'export.view.files', clean: 'export.view.clean', dups: 'export.view.dups', changes: 'export.view.changes', basket: 'export.view.basket',
+};
+async function saveExport(name: string, data: string, base64 = false) {
+  try {
+    const r = await B.exportFile(name, data, base64);
+    toast(t('export.saved', { name: r.path }), B.kind === 'demo' ? undefined : {
+      label: t('export.show'), run: () => { B.revealExport(r.path).then(x => { if (!x.ok) toast(msgText(x)); }).catch(err => toast(msgText(err))); },
+    });
+  } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
+}
+interface Table { name: string; cols: string[]; rows: (string | number)[][]; items: unknown }
+/** CSV para Excel: UTF-8 con BOM y «;» si el idioma usa coma decimal. Tamaños en bytes y fechas ISO. */
+function csv(tb: Table) {
+  const sep = i18n.percent(.5).includes(',') || i18n.number(1.5).includes(',') ? ';' : ',';
+  const cell = (v: string | number) => { const s = String(v); return /[";,\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  return '\ufeff' + [tb.cols, ...tb.rows].map(r => r.map(cell).join(sep)).join('\r\n') + '\r\n';
+}
+async function currentTable(): Promise<Table | null> {
+  const kind = (r: NodeRow) => t(r.isDir ? 'export.kind.dir' : 'export.kind.file');
+  const base = [t('export.col.path'), t('tree.col.name'), t('export.col.kind'), t('export.col.bytes'), t('export.col.alloc'), t('tree.col.modified')];
+  const line = (r: NodeRow, path: string) => [path, r.name, kind(r), r.size, r.alloc, isoDate(r.mtime)];
+  switch (S.tab) {
+    case 'tree': {
+      const z = zoomRow(); if (!z) return null;
+      const [res, zp] = await Promise.all([B.children({ id: z.id, offset: 0, limit: 10000, sort: 'size', desc: true }), pathOf(z.id)]);
+      const rows = res.rows.map(r => ({ ...r, path: joinPath(zp, r.name) }));
+      return { name: 'folder', cols: [...base, t('insp.files'), t('insp.folders')], rows: rows.map(r => [...line(r, r.path), r.files, r.dirs]), items: rows };
+    }
+    case 'files': return { name: 'files', cols: base, rows: S.files.map(r => line(r, r.path)), items: S.files };
+    case 'clean': {
+      if (!S.clean) await loadClean(); const L = S.clean || [];
+      return { name: 'cleanup', cols: [t('export.col.title'), t('export.col.risk'), t('export.col.path'), t('export.col.bytes'), t('export.col.command')],
+        rows: L.map(c => [keyText(c.title), riskName(c.rule.risk), c.path, c.row.size, c.cmd || '']),
+        items: L.map(c => ({ rule: c.rule.id, title: keyText(c.title), risk: c.rule.risk, path: c.path, size: c.row.size, command: c.cmd ?? null, files: c.count ?? null })) };
+    }
+    case 'dups': {
+      const r = D.result; if (!r) return null; const rows: (string | number)[][] = [];
+      r.groups.forEach((g, i) => g.files.forEach(f => rows.push([i + 1, f.path, g.size, isoDate(f.mtime), g.hash])));
+      return { name: 'duplicates', cols: [t('export.col.group'), t('export.col.path'), t('export.col.bytes'), t('tree.col.modified'), 'hash'], rows, items: r };
+    }
+    case 'changes': {
+      const c = H.cmp; if (!c) return null; const rows: (string | number)[][] = [];
+      const ch = (k: string, r: ChangeRow) => rows.push([k, r.path, r.prev ?? '', r.size, r.size - (r.prev ?? 0)]);
+      c.grew.forEach(r => ch(t('export.change.grew'), r)); c.shrank.forEach(r => ch(t('export.change.shrank'), r));
+      c.removed.forEach(r => rows.push([t('export.change.removed'), r.path, r.size, 0, -r.size]));
+      return { name: 'changes', cols: [t('export.col.change'), t('export.col.path'), t('export.col.before'), t('export.col.after'), t('export.col.delta')], rows, items: c };
+    }
+    case 'basket': {
+      const L = [...S.marked.values()];
+      return { name: 'to-delete', cols: base, rows: L.map(m => line(m.row, m.path)), items: L.map(m => ({ ...m.row, path: m.path })) };
+    }
+  }
+  return null;
+}
+const REPORT_CSS = `:root{color-scheme:light}body{margin:0;padding:32px clamp(16px,4vw,48px);font:14px/1.5 system-ui,"Segoe UI",sans-serif;color:#1d2125;background:#f6f7f8}
+main{max-width:1000px;margin:auto}h1{margin:0;font-size:26px}h2{margin:32px 0 10px;font-size:18px}.meta{color:#5d666d;margin:4px 0 20px}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.kpi div{padding:12px 14px;background:#fff;border:1px solid #dde2e6;border-radius:10px}
+.kpi b{display:block;font-size:20px}.kpi span{color:#5d666d;font-size:12px}figure{margin:16px 0;background:#fff;border:1px solid #dde2e6;border-radius:10px;padding:8px}
+figure img{width:100%;display:block;border-radius:6px}figcaption{color:#5d666d;font-size:12px;padding:6px 4px 0}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #dde2e6;border-radius:10px;overflow:hidden}th,td{padding:7px 10px;border-bottom:1px solid #eef1f3;text-align:left;vertical-align:top}
+th{font-size:12px;color:#5d666d;font-weight:600;background:#fafbfc}td.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}td small{display:block;color:#7b848b;word-break:break-all}
+.bar{display:inline-block;width:90px;height:6px;border-radius:3px;background:#e8ecef;vertical-align:middle;margin-left:8px;overflow:hidden}.bar i{display:block;height:100%}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}.up{color:#b4471f}.down{color:#1b7f47}
+.risk{font-size:11px;padding:1px 6px;border-radius:9px;background:#eef1f3}.risk.ok{color:#1b7f47}.risk.warn{color:#8a5a00}.risk.bad{color:#b42318}
+footer{margin:36px 0 0;color:#7b848b;font-size:12px}@media print{body{background:#fff;padding:0}figure,table,.kpi div{break-inside:avoid}}`;
+async function buildReport(): Promise<string> {
+  const root = S.root!, scan = S.scan!, z = zoomRow() || root;
+  const [kids, top, ext] = await Promise.all([
+    B.children({ id: root.id, offset: 0, limit: 15, sort: 'size', desc: true }), B.search({ query: '', root: root.id, limit: 25 }), B.extStats(root.id),
+  ]);
+  if (!S.clean) await loadClean().catch(() => { });
+  const pct = (x: number) => esc(fmtP(x)), total = root.size || 1;
+  const bar = (f: number, color: string) => `<span class="bar"><i style="width:${(Math.min(1, f) * 100).toFixed(1)}%;background:${color}"></i></span>`;
+  const table = (head: string[], rows: string[][]) => `<table><thead><tr>${head.map((h, i) => `<th${i ? ' style="text-align:right"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>`
+    + `<tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${i ? ' class="n"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const cats = new Map<string, { size: number; count: number }>();
+  for (const e of ext) { const c = categoryOf(e.ext); const g = cats.get(c.id) || { size: 0, count: 0 }; g.size += e.size; g.count += e.count; cats.set(c.id, g); }
+  const v = scan.volume;
+  let h = `<h1>${tx('report.title')}</h1><p class="meta">${tx('report.meta', { path: scan.rootPath, engine: t(scan.engine === 'mft' ? 'header.engine.mft' : 'header.engine.walk'), time: fmtS(scan.elapsedMs), date: i18n.dateTime(Date.now() / 1000) })}</p>`
+    + `<div class="kpi"><div><b>${esc(fmtB(root.size))}</b><span>${tx('tree.col.size')}</span></div><div><b>${esc(fmtN(root.files))}</b><span>${tx('insp.files')}</span></div>`
+    + `<div><b>${esc(fmtN(root.dirs))}</b><span>${tx('insp.folders')}</span></div>`
+    + (v && v.total ? `<div><b>${esc(fmtB(v.free))}</b><span>${tx('report.free', { total: fmtB(v.total) })}</span></div>` : '') + `</div>`
+    + (S.slice ? `<figure><img alt="" src="${mapC.toDataURL('image/png')}"><figcaption>${tx('report.map', { folder: S.pathCache.get(z.id) || nameOf(z) })}</figcaption></figure>` : '')
+    + `<h2>${tx('comp.title.category')}</h2>` + table([t('report.category'), t('insp.files'), t('tree.col.size'), '%'],
+      [...cats.entries()].sort((a, b) => b[1].size - a[1].size).map(([id, g]) => { const c = categoryById(id);
+        return [`<span class="sw" style="background:${rgb(c.color)}"></span>${esc(catName(c))}`, esc(fmtN(g.count)), esc(fmtB(g.size)), pct(g.size / total) + bar(g.size / total, rgb(c.color))]; }))
+    + `<h2>${tx('report.topFolders')}</h2>` + table([t('tree.col.name'), t('tree.col.size'), '%'],
+      kids.rows.map(r => [`${esc(r.name)}${r.isDir ? '\\' : ''}`, esc(fmtB(r.size)), pct(r.size / total) + bar(r.size / total, '#5a7fd6')]))
+    + `<h2>${tx('report.topFiles')}</h2>` + table([t('tree.col.name'), t('tree.col.size'), t('tree.col.modified')],
+      top.rows.map(r => [`${esc(r.name)}<small>${esc(parentPath(r.path))}</small>`, esc(fmtB(r.size)), esc(fmtD(r.mtime))]));
+  if (S.clean?.length) {
+    const sum = (k: Risk) => S.clean!.filter(c => c.rule.risk === k).reduce((s, c) => s + c.row.size, 0);
+    h += `<h2>${tx('tab.clean')}</h2><div class="kpi">${(['ok', 'warn', 'bad'] as Risk[]).map(k => `<div><b>${esc(fmtB(sum(k)))}</b><span class="risk ${k}">${esc(riskName(k))}</span></div>`).join('')}</div><br>`
+      + table([t('export.col.title'), t('tree.col.size'), t('export.col.risk')],
+        S.clean.slice(0, 12).map(c => [`${esc(keyText(c.title))}<small>${esc(c.path)}</small>`, esc(fmtB(c.row.size)), `<span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span>`]));
+  }
+  if (D.result?.groups.length) {
+    const r = D.result;
+    h += `<h2>${tx('tab.dups')}</h2><p>${tx('report.dups', { wasted: fmtB(r.wasted), groups: r.totalGroups })}</p>`
+      + table([t('tree.col.name'), t('export.col.copies'), t('dups.recoverable')],
+        r.groups.slice(0, 12).map(g => [`${esc(g.files[0].name)}<small>${g.files.map(f => esc(parentPath(f.path))).join('<br>')}</small>`, esc(fmtN(g.files.length)), esc(fmtB((g.files.length - 1) * g.size))]));
+  }
+  if (H.cmp) {
+    const c = H.cmp, d = c.after.bytes - c.before.bytes;
+    h += `<h2>${tx('report.changes', { date: i18n.dateTime(c.entry.scannedAt) })}</h2><p><b class="${d >= 0 ? 'up' : 'down'}">${esc(signedB(d))}</b> · ${tx('changes.totals', { before: fmtB(c.before.bytes), after: fmtB(c.after.bytes), files: signedN(c.after.files - c.before.files) })}</p>`
+      + table([t('tree.col.name'), t('export.col.before'), t('export.col.after'), 'Δ'],
+        [...c.grew.slice(0, 12).map(r => [`${esc(r.name)}<small>${esc(parentPath(r.path))}</small>`, r.prev === null ? esc(t('changes.new')) : esc(fmtB(r.prev)), esc(fmtB(r.size)), `<span class="up">${esc(signedB(r.size - (r.prev ?? 0)))}</span>`]),
+         ...c.removed.slice(0, 6).map(r => [`${esc(r.path)}`, esc(fmtB(r.size)), '—', `<span class="down">${esc(signedB(-r.size))}</span>`])]);
+  }
+  h += `<footer>${tx('report.footer', { version: VERSION })}</footer>`;
+  return `<!doctype html><html lang="${esc(document.documentElement.lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>${tx('report.title')} · ${esc(scan.rootPath)}</title><style>${REPORT_CSS}</style></head><body><main>${h}</main></body></html>`;
+}
+async function runExport(kind: string) {
+  if (!S.root) return;
+  if (kind === 'png') return saveExport(`TesseraFS-map-${stamp()}.png`, mapC.toDataURL('image/png').split(',')[1], true);
+  if (kind === 'report') { toast(t('export.building')); return saveExport(`TesseraFS-report-${stamp()}.html`, await buildReport()); }
+  const tb = await currentTable(); if (!tb) return;
+  if (kind === 'csv') return saveExport(`TesseraFS-${tb.name}-${stamp()}.csv`, csv(tb));
+  return saveExport(`TesseraFS-${tb.name}-${stamp()}.json`,
+    JSON.stringify({ app: 'TesseraFS', version: VERSION, exportedAt: new Date().toISOString(), root: S.scan?.rootPath ?? null, view: S.tab, items: tb.items }, null, 2));
+}
+$('exportBtn').addEventListener('click', e => {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect(), has = !!S.root && !S.scanning;
+  const listOk = has && (S.tab !== 'dups' || !!D.result) && (S.tab !== 'changes' || !!H.cmp);
+  openMenu(`<div class="menu-h">${tx('export.menu')}</div>`
+    + `<button type="button" role="menuitem" data-m="report"${has ? '' : ' disabled'}>${tx('export.report')}<span>HTML</span></button>`
+    + `<button type="button" role="menuitem" data-m="png"${has && S.slice ? '' : ' disabled'}>${tx('export.png')}<span>PNG</span></button><hr>`
+    + `<div class="menu-h">${tx('export.list', { view: tk(VIEW_KEY[S.tab] ?? 'export.view.tree') })}</div>`
+    + `<button type="button" role="menuitem" data-m="csv"${listOk ? '' : ' disabled'}>${tx('export.csv')}<span>CSV</span></button>`
+    + `<button type="button" role="menuitem" data-m="json"${listOk ? '' : ' disabled'}>${tx('export.json')}<span>JSON</span></button>`,
+    r.left, r.bottom + 6, 'export');
 });
 
 // ---------- Cesta «Para borrar» ----------
@@ -974,6 +1239,7 @@ menu.addEventListener('click', e => {
   const m = b.dataset.m!, kind = menu.dataset.kind; closeMenus();
   if (kind === 'vol') { if (m === 'vol') { S.vol = S.vols[+b.dataset.v!]; S.target = S.vol.path; renderVolume(); startScan(); } return; }
   if (kind === 'lang') { setPreference(b.dataset.v!); return; }
+  if (kind === 'export') { runExport(m); return; }
   rowOf(+menu.dataset.id!).then(r => {
     switch (m) {
       case 'open': case 'reveal': case 'properties': doAction(m, r); break;
@@ -1104,7 +1370,7 @@ export async function startScan() {
   scanCard = null; showProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0 });
   try {
     const res = await B.scan({ path: S.target, engine: 'auto' }, showProgress);
-    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.known.clear(); resetDups(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
+    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.known.clear(); resetDups(); resetChanges(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
     S.root = remember(await B.nodeInfo(res.rootId)); S.pathCache.set(res.rootId, res.rootPath);
     S.chain = [S.root]; S.expanded = new Set([S.root.id]); S.slice = null;
     if (res.volume) { S.vol = S.vols.find(v => v.path === res.volume!.path) || res.volume; }
@@ -1118,6 +1384,7 @@ export async function startScan() {
     $('cleanCount').textContent = ''; if (S.tab === 'clean') renderClean(); if (S.tab === 'files') loadFiles();
     if (res.warnings.length && B.kind !== 'demo') toast(res.warnings.map(msgText).join(' · '));
     applyHash();
+    if (autoHistory()) saveHistory();
   } catch (e) {
     if ((e as { code?: string }).code === 'error.cancelled') await afterCancel();
     else mapState(() => `<h2>${tx('state.error.title')}</h2><p>${esc(msgText(e))}</p>`);
@@ -1134,7 +1401,7 @@ async function cancelScan() {
 async function afterCancel() {
   const kept = S.root ? await B.nodeInfo(S.root.id).then(() => true, () => false) : false;
   if (kept) { fadeMapState(); renderScanSummary(); toast(t('toast.scanCancelled')); return; }
-  S.scan = null; S.root = null; S.chain = []; S.slice = null; S.sel = null; S.hl = null; S.clean = null; S.files = []; S.ext = [];
+  S.scan = null; S.root = null; S.chain = []; S.slice = null; S.sel = null; S.hl = null; S.clean = null; S.files = []; S.ext = []; resetChanges();
   S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.expanded.clear();
   $('enginePill').hidden = true; $('scanTxt').textContent = ''; $('hlChip').hidden = true; $('cleanCount').textContent = ''; $('filesCount').textContent = '';
   await rebuildTree(); renderMap(); updateCrumbs(); renderComposition(); renderInspector(); renderStatus(); filesVL.setCount(0);
@@ -1185,6 +1452,8 @@ function applyHash() {
   if (has('age', 'antiguedad')) setColorMode('age');
   if (has('relief', 'relieve')) ($('styleSeg').querySelector('[data-style="relief"]') as HTMLElement).click();
   if (has('guide', 'guia')) $('notesBtn').click();
+  if (has('duplicates', 'duplicados')) setTab('dups');
+  if (has('changes', 'cambios')) setTab('changes');
 }
 export function renderStatus() {
   const r = S.sel || zoomRow(), z = zoomRow();
@@ -1265,6 +1534,7 @@ function relocalize() {
   if (S.tab === 'clean') renderClean();
   renderBasketCount(); if (S.tab === 'basket') renderBasket();
   if (S.tab === 'dups') renderDups();
+  if (S.tab === 'changes') renderChanges();
 }
 export async function startApp(backend: Backend) {
   B = backend;

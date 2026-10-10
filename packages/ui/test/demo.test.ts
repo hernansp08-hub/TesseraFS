@@ -49,6 +49,28 @@ test('demo: duplicados con sus tres pasadas, orden por espacio recuperable y can
   await expect(p).rejects.toMatchObject({ code: 'error.cancelled' });
 }, 20000); // escaneo simulado (2,6 s) + búsqueda simulada (1,8 s)
 
+test('demo: historial simulado, comparación, orden por cambio y borrado', async () => {
+  const b = new DemoBackend(), GB = 1024 ** 3;
+  const res = await b.scan({ path: 'C:\\', engine: 'auto' }, () => { });
+  const [past] = await b.historyList();
+  expect(past.path).toBe('C:\\');
+  const c = await b.compare(past.id, 50);
+  expect(c.after.bytes - c.before.bytes).toBeGreaterThan(10 * GB); // creció
+  expect(c.grew.some(r => r.name === 'Hades II' && r.prev === null)).toBe(true); // juego nuevo
+  expect(c.grew.some(r => r.name === 'Steam')).toBe(false); // no se repiten los padres de lo que creció
+  expect(c.shrank.some(r => r.name === 'Temp')).toBe(true);
+  expect(c.removed.map(r => r.path)).toContain('C:\\Users\\usuario\\Downloads\\ubuntu-24.04.2-desktop-amd64.iso');
+  const kids = await b.children({ id: res.rootId, offset: 0, limit: 50, sort: 'delta', desc: true });
+  const d = (r: { size: number; prev?: number; fresh?: boolean }) => r.fresh ? r.size : r.size - (r.prev ?? r.size);
+  expect(kids.rows.map(d)).toEqual([...kids.rows.map(d)].sort((x, y) => y - x));
+  await b.compareClear();
+  expect((await b.nodeInfo(res.rootId)).prev).toBeUndefined();
+  const saved = await b.historySave();
+  expect((await b.historyList())[0].id).toBe(saved.id);
+  expect(await b.historyClear()).toBe(2);
+  expect(await b.historyList()).toEqual([]);
+}, 20000);
+
 test('demo: cancelar el escaneo lo rechaza con error.cancelled', async () => {
   const b = new DemoBackend();
   expect(await b.cancelScan()).toBe(false);

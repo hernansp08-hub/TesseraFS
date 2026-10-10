@@ -144,6 +144,37 @@ pub fn elevation_failed(error: &str) -> EngineMessage {
     EngineMessage::new("elevation.failed", format!("Could not restart with administrator rights: {error}")).param("error", error)
 }
 
+// ---- Historial y exportación ----
+
+pub fn history_not_found(id: &str) -> EngineMessage {
+    EngineMessage::new("history.notFound", format!("Snapshot not found: \"{id}\"")).param("id", id)
+}
+
+/// `path`: la ruta del resumen.
+pub fn history_other_root(path: &str) -> EngineMessage {
+    EngineMessage::new("history.otherRoot", format!("That snapshot is of another folder ({path})")).param("path", path)
+}
+
+pub fn history_save_failed(error: &str) -> EngineMessage {
+    EngineMessage::new("history.saveFailed", format!("Couldn't save the scan to the history: {error}")).param("error", error)
+}
+
+pub fn history_read_failed(error: &str) -> EngineMessage {
+    EngineMessage::new("history.readFailed", format!("Couldn't read the snapshot: {error}")).param("error", error)
+}
+
+pub fn export_invalid_name(name: &str) -> EngineMessage {
+    EngineMessage::new("export.invalidName", format!("Invalid file name: \"{name}\"")).param("name", name)
+}
+
+pub fn export_failed(error: &str) -> EngineMessage {
+    EngineMessage::new("export.failed", format!("Couldn't save the file: {error}")).param("error", error)
+}
+
+pub fn export_not_found(path: &str) -> EngineMessage {
+    EngineMessage::new("export.notFound", format!("Not an exported file: {path}")).param("path", path)
+}
+
 // ---- Errores de sintaxis de la búsqueda (SearchResponse.error), igual que packages/protocol/src/query.ts ----
 
 pub fn query_invalid_value(value: &str) -> EngineMessage {

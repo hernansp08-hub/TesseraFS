@@ -5,10 +5,14 @@
 //! - [`slice::encode_slice`], [`ops::children`], [`ops::search`] y [`ops::ext_stats`]
 //!   responden a la interfaz según el contrato de `docs/ARQUITECTURA.md`.
 //! - [`dup::duplicates`] busca archivos duplicados (tamaño, primeros 64 KiB y BLAKE3 completo).
+//! - [`history::History`] guarda resúmenes de los escaneos y compara el escaneo cargado con uno de ellos.
+//! - [`export`] guarda los archivos exportados en Descargas\TesseraFS.
 
 pub mod attrs;
 pub mod build;
 pub mod dup;
+pub mod export;
+pub mod history;
 pub mod mft;
 pub mod msg;
 pub mod names;
@@ -23,6 +27,7 @@ pub mod types;
 pub mod walk;
 
 pub use dup::duplicates;
+pub use history::{Comparison, History};
 pub use scan::{scan, Progress, Scan, ScanOptions};
 pub use tree::Tree;
 pub use types::*;

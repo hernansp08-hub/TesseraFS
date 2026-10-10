@@ -71,7 +71,7 @@ export class I18n {
   private readonly messages: Catalog;
   private readonly cache = new Map<string, IntlMessageFormat>();
   private readonly fmt: {
-    int: Intl.NumberFormat; pct: Intl.NumberFormat; date: Intl.DateTimeFormat; rel: Intl.RelativeTimeFormat;
+    int: Intl.NumberFormat; pct: Intl.NumberFormat; date: Intl.DateTimeFormat; dateTime: Intl.DateTimeFormat; rel: Intl.RelativeTimeFormat;
     unit: Map<string, Intl.NumberFormat>;
   };
   onMissing: (key: string, locale: string) => void = () => { };
@@ -90,6 +90,7 @@ export class I18n {
       int,
       pct: new Intl.NumberFormat(this.intl, { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 }),
       date: new Intl.DateTimeFormat(this.intl, { year: 'numeric', month: '2-digit', day: '2-digit' }),
+      dateTime: new Intl.DateTimeFormat(this.intl, { dateStyle: 'medium', timeStyle: 'short' }),
       rel: new Intl.RelativeTimeFormat(this.intl, { numeric: 'auto' }),
       unit: new Map(),
     };
@@ -122,6 +123,8 @@ export class I18n {
     return new Intl.NumberFormat(this.intl, { style: 'percent', minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
   }
   date(unixSeconds: number): string { return unixSeconds ? this.fmt.date.format(new Date(unixSeconds * 1000)) : '—'; }
+  /** «7 oct 2026, 9:30», «Oct 7, 2026, 9:30 AM». */
+  dateTime(unixSeconds: number): string { return unixSeconds ? this.fmt.dateTime.format(new Date(unixSeconds * 1000)) : '—'; }
 
   private unit(unit: string, digits: number, display: 'short' | 'narrow' = 'short'): Intl.NumberFormat {
     const k = unit + digits + display; let f = this.fmt.unit.get(k);

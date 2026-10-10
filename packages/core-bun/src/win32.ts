@@ -1,6 +1,6 @@
 // Enlaces bun:ffi a la API de Windows. Los HANDLE viajan como u64 (bigint o number).
 // Las bibliotecas se cargan bajo demanda: los workers sólo necesitan kernel32 y ntdll.
-import { dlopen, FFIType as T, ptr, toArrayBuffer, type Pointer } from 'bun:ffi';
+import { dlopen, FFIType as T, ptr, read, toArrayBuffer, type Pointer } from 'bun:ffi';
 
 const { u8, u32, i32, u64, i64, ptr: P } = T;
 
@@ -47,6 +47,7 @@ export const shell32 = lazy(() => dlopen('shell32.dll', {
   ShellExecuteExW: { args: [P], returns: i32 },
   SHFileOperationW: { args: [P], returns: i32 },
   IsUserAnAdmin: { args: [], returns: i32 },
+  SHGetKnownFolderPath: { args: [P, u32, u64, P], returns: i32 },
 }).symbols);
 
 export const user32 = lazy(() => dlopen('user32.dll', {
@@ -67,6 +68,7 @@ export const advapi32 = lazy(() => dlopen('advapi32.dll', {
 
 export const ole32 = lazy(() => dlopen('ole32.dll', {
   CoInitializeEx: { args: [P, u32], returns: i32 },
+  CoTaskMemFree: { args: [P], returns: T.void },
 }).symbols);
 
 // ---------- constantes ----------
@@ -210,6 +212,44 @@ export function hasVisibleWindow(pid: number, cls = 'Chrome_WidgetWin_1'): boole
     if (out[0] === pid && u.IsWindowVisible(h)) return true;
   }
   return false;
+}
+
+// ---------- carpetas conocidas ----------
+export const FOLDERID = {
+  Downloads: '{374DE290-123F-4565-9164-39C4925E467B}',
+  LocalAppData: '{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}',
+} as const;
+
+/** GUID en texto → los 16 bytes de la estructura GUID (Data1..3 little-endian, Data4 tal cual). */
+export function guidBytes(g: string): Uint8Array {
+  const h = g.replace(/[{}-]/g, '');
+  const b = new Uint8Array(16), dv = new DataView(b.buffer);
+  dv.setUint32(0, parseInt(h.slice(0, 8), 16), true);
+  dv.setUint16(4, parseInt(h.slice(8, 12), 16), true);
+  dv.setUint16(6, parseInt(h.slice(12, 16), 16), true);
+  for (let i = 0; i < 8; i++) b[8 + i] = parseInt(h.slice(16 + 2 * i, 18 + 2 * i), 16);
+  return b;
+}
+
+/** Ruta de una carpeta conocida (SHGetKnownFolderPath, p. ej. FOLDERID.Downloads); null si falla. */
+export function knownFolder(id: string): string | null {
+  try {
+    const out = new BigUint64Array(1);
+    const hr = shell32().SHGetKnownFolderPath(guidBytes(id), 0, 0n, out);
+    const p = Number(out[0]) as Pointer;
+    try {
+      if (hr !== 0 || !p) return null;
+      let s = '';
+      for (let off = 0; off < 0x10000; off += 2) {
+        const c = read.u16(p, off);
+        if (!c) break;
+        s += String.fromCharCode(c);
+      }
+      return s || null;
+    } finally {
+      if (p) ole32().CoTaskMemFree(p); // se libera también si falló
+    }
+  } catch { return null; }
 }
 
 /** Valor REG_SZ del registro; null si no existe. */

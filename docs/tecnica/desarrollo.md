@@ -46,6 +46,9 @@ bun run desktop:dev
 | `bun run package --publish` | Además crea (o actualiza) la release en GitHub con `gh`; normalmente lo hace GitHub Actions |
 | `bun run i18n:check` | Estado de las traducciones: claves que faltan, que sobran o idénticas al inglés (`--same`, `--strict`) |
 | `bun packages/ui/scripts/serve.ts` | Sirve la interfaz compilada con el motor demo en `http://127.0.0.1:47801` (prueba con `#lang=de` o `#pseudo`) |
+| `TESSERA_HISTORY_DIR=… TESSERA_EXPORT_DIR=… bun run portable:dev` | La portable con historial y exportaciones en carpetas de prueba (la configuración `portable-pruebas` de `.claude/launch.json` usa `dist/pruebas/`) |
+| `tessera-cli scan <ruta> --history-save` · `--history-compare <id>` · `tessera-cli history list` | Historial desde la línea de comandos, para comprobar resúmenes entre motores |
+| `tessera-cli scan <ruta> --dups <bytes> [--dups-out f.json]` | Búsqueda de duplicados desde la línea de comandos |
 | `pwsh scripts/capturas.ps1 [-Lang es]` | Regenera las capturas de la documentación (en español por defecto) |
 
 > [!IMPORTANT]

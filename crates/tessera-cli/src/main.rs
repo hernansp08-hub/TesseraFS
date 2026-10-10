@@ -5,10 +5,11 @@ use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use tessera_core::{ops, slice, DupProgress, EngineChoice, ScanOptions, ScanPhase, ScanProgress, Tree};
+use tessera_core::{ops, slice, ChangeRow, DupProgress, EngineChoice, History, ScanOptions, ScanPhase, ScanProgress, SortKey, Tree};
 
 const USO: &str = "Uso:
   tessera-cli scan <ruta> [opciones]
+  tessera-cli history [list | delete <id> | clear]   Historial (JSON; respeta TESSERA_HISTORY_DIR)
 
 Opciones:
   --engine auto|walk|mft   Motor (por defecto auto)
@@ -25,8 +26,11 @@ Opciones:
   --dups BYTES             Busca duplicados de al menos BYTES (lee los archivos; --limit grupos)
   --dups-out f.json        Escribe el DupResult en JSON
   --compare                Escanea con MFT y con recorrido y compara la raíz y sus hijos
+  --history-compare ID     Compara con un resumen del historial (--limit filas por lista)
+  --compare-out f.json     Escribe el CompareResult en JSON
+  --history-save           Guarda el escaneo en el historial (después de comparar) e imprime el HistoryEntry
   --flags                  Estadísticas de flags (enlaces duros, comprimidos, nube…)
-  --children               Lista los hijos de la raíz con sus totales
+  --children               Lista los hijos de la raíz con sus totales (con --history-compare, por delta)
   --progress               Muestra el progreso
   --repeat N               Repite el escaneo N veces (medición)";
 
@@ -72,8 +76,45 @@ fn dump_json(t: &Tree) -> serde_json::Value {
     serde_json::json!({ "rootPath": t.root_path(), "nodes": nodes })
 }
 
+fn fail(e: tessera_core::EngineMessage) -> ! {
+    eprintln!("Error: [{}] {}", e.code, e.message);
+    std::process::exit(1)
+}
+
+/// `tessera-cli history [list | delete <id> | clear]`
+fn history_cmd(args: &[String]) {
+    let h = History::open().unwrap_or_else(|e| fail(e));
+    match (args.first().map(String::as_str), args.get(1)) {
+        (None | Some("list"), None) => println!("{}", serde_json::to_string_pretty(&h.list().unwrap_or_else(|e| fail(e))).unwrap()),
+        (Some("delete"), Some(id)) => println!("{}", h.delete(id).unwrap_or_else(|e| fail(e))),
+        (Some("clear"), None) => println!("{}", h.clear().unwrap_or_else(|e| fail(e))),
+        _ => {
+            eprintln!("{USO}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn signed(d: i64) -> String {
+    format!("{}{}", if d < 0 { "-" } else { "+" }, human(d.unsigned_abs()))
+}
+
+fn change_line(c: &ChangeRow) -> String {
+    let n = &c.row.node;
+    let d = n.size as i64 - c.prev.unwrap_or(0) as i64;
+    let what = match c.prev {
+        Some(p) => format!("antes {}", human(p)),
+        None => "nuevo".into(),
+    };
+    format!("  {:>12}  {}{}  ({what}, ahora {})", signed(d), c.row.path, if n.is_dir { "\\" } else { "" }, human(n.size))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("history") {
+        history_cmd(&args[1..]);
+        return;
+    }
     if args.first().map(String::as_str) != Some("scan") || args.len() < 2 {
         eprintln!("{USO}");
         std::process::exit(2);
@@ -90,6 +131,7 @@ fn main() {
     let mut show_children = false;
     let mut show_flags = false;
     let mut compare = false;
+    let (mut history_save, mut history_compare, mut compare_out) = (false, None, None);
     let mut i = 2;
     while i < args.len() {
         let next = |i: usize| -> String {
@@ -122,6 +164,13 @@ fn main() {
             "--dups" => dups_min = Some(num(next(i)).max(0.0) as u64),
             "--dups-out" => dups_out = Some(next(i)),
             "--repeat" => repeat = num(next(i)).max(1.0) as usize,
+            "--history-compare" => history_compare = Some(next(i)),
+            "--compare-out" => compare_out = Some(next(i)),
+            "--history-save" => {
+                history_save = true;
+                i += 1;
+                continue;
+            }
             "--compare" => {
                 compare = true;
                 i += 1;
@@ -202,6 +251,39 @@ fn main() {
     for w in &res.warnings {
         println!("Aviso:     [{}] {}", w.code, w.message);
     }
+    if history_compare.is_some() || history_save {
+        let h = History::open().unwrap_or_else(|e| fail(e));
+        if let Some(id) = &history_compare {
+            let t0 = Instant::now();
+            let r = h.compare(&scan, id, limit).unwrap_or_else(|e| fail(e));
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let (b, a) = (r.before, r.after);
+            println!("\nComparación con {} ({}, {} nodos guardados, {ms:.1} ms):", r.entry.id, r.entry.path, sep(r.entry.nodes));
+            println!("  Antes:   {} · {} archivos · {} carpetas", human(b.bytes), sep(b.files), sep(b.dirs));
+            println!("  Ahora:   {} · {} archivos · {} carpetas ({})", human(a.bytes), sep(a.files), sep(a.dirs), signed(a.bytes as i64 - b.bytes as i64));
+            println!("  Creció ({}):", r.grew.len());
+            for c in r.grew.iter().take(top.max(5)) {
+                println!("{}", change_line(c));
+            }
+            println!("  Se redujo ({}):", r.shrank.len());
+            for c in r.shrank.iter().take(top.max(5)) {
+                println!("{}", change_line(c));
+            }
+            println!("  Ya no está ({}):", r.removed.len());
+            for x in r.removed.iter().take(top.max(5)) {
+                println!("  {:>12}  {}{}", human(x.size), x.path, if x.is_dir { "\\" } else { "" });
+            }
+            if let Some(f) = &compare_out {
+                std::fs::write(f, serde_json::to_vec(&r).unwrap()).expect("escribir comparación");
+            }
+        }
+        if history_save {
+            let t0 = Instant::now();
+            let e = h.save(&scan).unwrap_or_else(|e| fail(e));
+            eprintln!("Historial: {} · {} nodos · {} · {:.1} ms", h.dir().join(format!("{}.snap.gz", e.id)).display(), sep(e.nodes), human(e.file_bytes), t0.elapsed().as_secs_f64() * 1000.0);
+            println!("{}", serde_json::to_string_pretty(&e).unwrap());
+        }
+    }
     if show_flags {
         use tessera_core::types::flag;
         let names = [(flag::HIDDEN, "oculto"), (flag::SYSTEM, "sistema"), (flag::HARDLINK, "enlace duro"), (flag::COMPRESSED, "comprimido"), (flag::REPARSE, "reparse"), (flag::CLOUD, "nube"), (flag::SPARSE, "disperso")];
@@ -233,11 +315,18 @@ Flags (archivos y carpetas):");
         println!("  asignado 0 (>4 KiB, sin enlace/nube/disperso): {} archivos, {}", sep(c), human(sz));
     }
     if show_children {
-        let r = ops::children(t, 0, 0, u32::MAX, tessera_core::SortKey::Size, true).unwrap();
+        let compared = t.comparison().is_some();
+        let r = ops::children(t, 0, 0, u32::MAX, if compared { SortKey::Delta } else { SortKey::Size }, true).unwrap();
         println!("
 Hijos de la raíz ({}):", r.total);
         for row in &r.rows {
-            println!("  {:>12} {:>10} arch {:>9} carp  {}{}", human(row.size), sep(row.files as u64), sep(row.dirs as u64), row.name, if row.is_dir { "\\" } else { "" });
+            let change = match (row.prev, row.fresh) {
+                (Some(p), _) => format!(" ({}, antes {})", signed(row.size as i64 - p as i64), human(p)),
+                (None, Some(true)) => " (nuevo)".into(),
+                _ if compared => " (desconocido)".into(),
+                _ => String::new(),
+            };
+            println!("  {:>12} {:>10} arch {:>9} carp  {}{}{change}", human(row.size), sep(row.files as u64), sep(row.dirs as u64), row.name, if row.is_dir { "\\" } else { "" });
         }
     }
     if top > 0 {

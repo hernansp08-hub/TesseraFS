@@ -370,6 +370,26 @@ body.resizing iframe,body.resizing canvas{pointer-events:none}
 .known p{margin:0;color:var(--fg);line-height:1.45}
 .known .known-t{font-weight:600}
 .known .how{color:var(--muted)}
+/* Columna Δ (con una comparación activa) */
+.tbl-tree.cmp{--cols:minmax(150px,1fr) 78px 84px 54px 78px 76px 84px}
+.tbl-tree:not(.cmp) .c-delta{display:none}
+@container treepane (max-width:760px){.tbl-tree.cmp{--cols:minmax(140px,1fr) 76px 80px 52px 76px}.tbl-tree.cmp .c-items,.tbl-tree.cmp .c-mod{display:none}}
+@container treepane (max-width:560px){.tbl-tree.cmp{--cols:minmax(120px,1fr) 74px 78px}.tbl-tree.cmp .c-pct,.tbl-tree.cmp .c-alloc{display:none}}
+.delta.up{color:var(--warn)}.delta.down{color:var(--ok)}
+.badge{display:inline-block;padding:0 6px;border-radius:8px;font-size:10.5px;font-weight:600;background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn);vertical-align:1px}
+/* Cambios */
+.ch-h{margin:6px 0 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.ch-list{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.ch-row,.ch-entry{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:6px 10px;border-top:1px solid var(--line)}
+.ch-entry{grid-template-columns:minmax(0,1fr) auto auto auto}
+.ch-list>:first-child{border-top:0}
+.ch-row:hover{background:var(--raised)}.ch-row.sel,.ch-entry.on{background:var(--accent-soft)}
+.ch-row.gone .nm{color:var(--muted);text-decoration:line-through}
+.ch-was{color:var(--muted);font-size:11.5px}
+.ch-foot{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;font-size:12.5px}
+.ch-foot label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.ch-confirm{display:flex;flex-wrap:wrap;gap:6px;align-items:center;color:var(--bad)}
+.toast-act{margin-left:6px;padding:0;border:0;background:none;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer}
 /* Duplicados */
 .dups{display:flex;flex-direction:column;gap:10px;padding:12px;height:100%;overflow:auto}
 .dups>*,.basket>*{flex:none}

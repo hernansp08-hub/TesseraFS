@@ -22,6 +22,21 @@
       ],
       "port": 47801,
       "url": "http://127.0.0.1:47801"
+    },
+    {
+      "name": "portable-pruebas",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": [
+        "apps/portable/src/main.ts",
+        "--no-window"
+      ],
+      "env": {
+        "TESSERA_PORT": "47802",
+        "TESSERA_HISTORY_DIR": "dist/pruebas/history",
+        "TESSERA_EXPORT_DIR": "dist/pruebas/export"
+      },
+      "port": 47802,
+      "url": "http://127.0.0.1:47802"
     }
   ]
 }

@@ -65,9 +65,14 @@ export interface NodeRow {
   ext: string;       // minúsculas, sin punto; "" en carpetas o sin extensión
   flags: number;
   childCount: number;
+  /** Sólo con una comparación activa (ver `compare`): tamaño en el escaneo anterior, si se conoce. */
+  prev?: number;
+  /** Sólo con una comparación activa: no existía en el escaneo anterior. */
+  fresh?: boolean;
 }
 
-export type SortKey = 'size' | 'alloc' | 'name' | 'files' | 'mtime';
+/** `delta`: crecimiento desde el escaneo comparado (size − prev; lo nuevo cuenta entero; lo desconocido, 0). */
+export type SortKey = 'size' | 'alloc' | 'name' | 'files' | 'mtime' | 'delta';
 
 export interface ChildrenRequest { id: number; offset: number; limit: number; sort: SortKey; desc: boolean }
 export interface ChildrenResponse { total: number; rows: NodeRow[] }
@@ -117,6 +122,42 @@ export interface DupResult {
   warnings: EngineMessage[]; // p. ej. { code: 'dup.readErrors', params: { count } }
 }
 
+// ---------- Historial y comparación ----------
+/**
+ * Resumen de un escaneo guardado en %LOCALAPPDATA%\TesseraFS\history: todas las carpetas y los archivos de
+ * 1 MiB o más. Lo comparten las dos ediciones (formato en docs/ARQUITECTURA.md).
+ */
+export interface HistoryEntry {
+  id: string;          // "20261010T174512Z-1a2b3c4d": fecha UTC + hash de la ruta
+  path: string;        // raíz escaneada, "C:\\"
+  scannedAt: number;   // segundos Unix
+  engine: Engine;
+  bytes: number;
+  files: number;
+  dirs: number;
+  nodes: number;       // nodos guardados
+  fileBytes: number;   // lo que ocupa el resumen en disco
+}
+/** Un elemento actual con su tamaño anterior; `prev: null` = no existía. */
+export interface ChangeRow extends Omit<SearchRow, 'prev' | 'fresh'> { prev: number | null }
+/** Lo que existía y ya no: sólo el elemento más alto (no sus descendientes). */
+export interface RemovedRow { path: string; isDir: boolean; size: number }
+export interface CompareResult {
+  entry: HistoryEntry;
+  before: { bytes: number; files: number; dirs: number };
+  after: { bytes: number; files: number; dirs: number };
+  /**
+   * Lo que explica el crecimiento, de más a menos: elementos que crecieron (o son nuevos) sin que un solo hijo
+   * explique el 75 % o más de su crecimiento; así no se repiten todas las carpetas padre. Hasta `limit`.
+   */
+  grew: ChangeRow[];
+  shrank: ChangeRow[];   // igual, para lo que se redujo (el que más primero)
+  removed: RemovedRow[]; // hasta `limit`, por tamaño
+}
+
+/** Archivo exportado en Descargas\TesseraFS. */
+export interface ExportResult { path: string }
+
 /** Lo que la interfaz necesita de un motor. Implementaciones: demo, tauri, http. */
 export interface Backend {
   readonly kind: 'demo' | 'tauri' | 'http';
@@ -135,6 +176,23 @@ export interface Backend {
   duplicates(req: DupRequest, onProgress: (p: DupProgress) => void): Promise<DupResult>;
   /** Pide parar la búsqueda de duplicados: `duplicates` se rechaza con `error.cancelled`. False si no había ninguna. */
   cancelDuplicates(): Promise<boolean>;
+  /** Guarda en el historial el escaneo cargado. Conserva los 20 más recientes de cada ruta. */
+  historySave(): Promise<HistoryEntry>;
+  /** Todo el historial, el más reciente primero. */
+  historyList(): Promise<HistoryEntry[]>;
+  historyDelete(id: string): Promise<boolean>;
+  /** Borra todo el historial; devuelve cuántos resúmenes borró. */
+  historyClear(): Promise<number>;
+  /**
+   * Compara el escaneo cargado con un resumen de la misma ruta y deja la comparación activa: desde entonces
+   * las filas llevan `prev`/`fresh` y `children` admite `sort: 'delta'`. Un escaneo nuevo la desactiva.
+   */
+  compare(id: string, limit: number): Promise<CompareResult>;
+  compareClear(): Promise<void>;
+  /** Guarda un archivo en Descargas\TesseraFS (nombre sin rutas; si existe, añade « (2)»…). */
+  exportFile(name: string, data: string, base64: boolean): Promise<ExportResult>;
+  /** Abre el Explorador con un archivo exportado seleccionado (sólo dentro de Descargas\TesseraFS). */
+  revealExport(path: string): Promise<ActionResult>;
   elevation(): Promise<ElevationInfo>;
   relaunchElevated(): Promise<void>;
 }
