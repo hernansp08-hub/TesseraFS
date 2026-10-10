@@ -13,7 +13,9 @@ type TRow = { row: NodeRow; depth: number; more?: undefined } | { more: number; 
 type HL = { type: 'cat'; id: string } | { type: 'ext'; ext: string } | { type: 'age'; bin: number }
   | { type: 'search'; ids: Set<number>; query: string; count: number };
 type Risk = 'ok' | 'warn' | 'bad';
-interface CleanCard { row: NodeRow; path: string; rule: Rule; name: string; count?: number }
+interface CleanCard { row: NodeRow; path: string; rule: Rule; name: string; count?: number; rows?: SearchRow[] }
+/** Elemento de la cesta «Para borrar». `error`: por qué no se pudo mover la última vez. */
+interface Marked { row: NodeRow; path: string; error?: string }
 /** Texto traducido y escapado para insertarlo en HTML. */
 const tx = (key: MessageKey, params?: Parameters<typeof t>[1]) => esc(t(key, params));
 
@@ -43,6 +45,7 @@ const S = {
   query: '', files: [] as SearchRow[], filesTotal: 0, filesBytes: 0,
   ext: [] as ExtStat[], clean: null as CleanCard[] | null, confirmTrash: false,
   rowCache: new Map<number, NodeRow>(), pathCache: new Map<number, string>(),
+  marked: new Map<number, Marked>(), basketConfirm: false, basketBusy: false,
 };
 const zoomRow = () => S.chain[S.chain.length - 1] || null;
 const remember = (r: NodeRow) => { S.rowCache.set(r.id, r); return r; };
@@ -189,6 +192,7 @@ function hoverNode(): { n: SliceNode; rest: boolean; head: boolean } | null {
 export function drawOverlay() {
   if (!M) return; const d = M.dpr; octx.clearRect(0, 0, M.W, M.H);
   const z = zoomRow();
+  drawMarked();
   if (S.sel && z && S.sel.id !== z.id) { const r = rectFor(S.sel.id); if (r) box(r, css('--accent'), 3 * d, true); }
   const h = hoverNode();
   if (h && !S.scanning) {
@@ -198,6 +202,19 @@ export function drawOverlay() {
       const r = S.L!.rects.get(h.n.id); if (r) box(r, '#ffffff', 1.5 * d, true);
     }
   }
+}
+// Lo marcado para borrar se tiñe de rojo; si la vista entera está dentro de una carpeta marcada, se tiñe todo
+function drawMarked() {
+  if (!S.marked.size || !S.L || !M) return;
+  const danger = css('--bad') || '#f27d72', d = M.dpr;
+  octx.save(); octx.fillStyle = danger; octx.strokeStyle = danger; octx.lineWidth = 1.5 * d;
+  if (S.chain.some(c => S.marked.has(c.id))) { octx.globalAlpha = .18; octx.fillRect(0, 0, M.W, M.H); }
+  else for (const id of S.marked.keys()) {
+    const r = S.L.rects.get(id); if (!r) continue;
+    octx.globalAlpha = .32; octx.fillRect(r[0], r[1], r[2], r[3]);
+    octx.globalAlpha = .9; octx.strokeRect(r[0] + d / 2, r[1] + d / 2, Math.max(1, r[2] - d), Math.max(1, r[3] - d));
+  }
+  octx.restore();
 }
 function slicePath(n: SliceNode) {
   const names: string[] = []; for (let x: SliceNode | null = n; x && x.parent; x = x.parent) names.push(x.name);
@@ -241,7 +258,9 @@ ovC.addEventListener('pointermove', e => {
 ovC.addEventListener('pointerleave', () => { S.hover = null; tipKey = ''; tip.hidden = true; drawOverlay(); });
 ovC.addEventListener('click', e => {
   if (S.scanning) return; S.hover = hitAt(e); const h = hoverNode(); if (!h) return;
-  const r = sliceRow(h.n); if (S.tab !== 'tree') setTab('tree'); locate(r, sliceAncestors(h.n));
+  const r = sliceRow(h.n);
+  if ((e.ctrlKey || e.metaKey) && !h.rest) { select(r); toggleMark(r); return; }
+  if (S.tab !== 'tree') setTab('tree'); locate(r, sliceAncestors(h.n));
 });
 ovC.addEventListener('dblclick', e => {
   if (S.scanning) return; S.hover = hitAt(e); const h = hoverNode(); if (!h) return;
@@ -414,7 +433,7 @@ function rowHTML(i: number) {
   const tr = S.rows[i];
   if (tr.more) return `<div class="row more-row" role="row" data-i="${i}"><span class="c-name" style="--ind:${indent(tr.depth)}px"><span class="tw none"></span>${tx('tree.more', { count: Math.min(PAGE, tr.remaining), remaining: tr.remaining })}</span></div>`;
   const r = tr.row!, ps = parentSize(r), pct = ps > 0 ? r.size / ps : 0, open = r.isDir && S.expanded.has(r.id), sel = S.sel?.id === r.id;
-  const cls = 'row' + (sel ? ' sel' : '') + (r.isDir ? ' dir' : '') + (r.flags & FLAG.HIDDEN ? ' hid' : '') + (r.flags & FLAG.HARDLINK ? ' hl' : '');
+  const cls = 'row' + (sel ? ' sel' : '') + (r.isDir ? ' dir' : '') + (r.flags & FLAG.HIDDEN ? ' hid' : '') + (r.flags & FLAG.HARDLINK ? ' hl' : '') + markClass(r);
   const tw = r.isDir && r.childCount ? `<span class="tw${open ? ' open' : ''}" data-tw="1"></span>` : '<span class="tw none"></span>';
   const icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(rowColor(r))}"></i>`;
   const items = r.isDir ? fmtN(r.files + r.dirs) : '', ind = indent(tr.depth);
@@ -478,6 +497,7 @@ treeBody.addEventListener('click', async e => {
   if (t.more) { await ensureKids(t.more, true); await rebuildTree(); return; }
   if ((e.target as HTMLElement).closest('[data-tw]')) { toggle(t.row!); return; }
   select(t.row!);
+  if (e.ctrlKey || e.metaKey) toggleMark(t.row!);
 });
 treeBody.addEventListener('dblclick', e => { const t = rowAt(e); if (!t?.row || (e.target as HTMLElement).closest('[data-tw]')) return; if (t.row.isDir) toggle(t.row, true); zoomToRow(t.row); });
 treeBody.addEventListener('contextmenu', e => { const t = rowAt(e); if (!t?.row) return; e.preventDefault(); select(t.row); nodeMenu(t.row, (e as MouseEvent).clientX, (e as MouseEvent).clientY); });
@@ -490,6 +510,7 @@ treeBody.addEventListener('keydown', async e => {
     case 'ArrowRight': if (r.isDir) { if (!S.expanded.has(r.id)) await toggle(r, true); else move(i + 1); } break;
     case 'ArrowLeft': if (r.isDir && S.expanded.has(r.id) && r.parentId >= 0) await toggle(r, false); else if (r.parentId >= 0) move(rowIndex(r.parentId)); break;
     case 'Enter': zoomToRow(r); break;
+    case ' ': toggleMark(r); break;
     default: return;
   }
   e.preventDefault();
@@ -515,7 +536,10 @@ export function renderInspector() {
   const canZoom = r.id !== zoomRow()?.id;
   const acts = S.confirmTrash
     ? `<div class="confirm"><p>${tx('insp.confirmTrash', { name: r.name, size: fmtB(r.size) })}</p><div><button class="btn sm" type="button" data-act="cancel">${tx('insp.cancel')}</button><button class="btn sm danger solid" type="button" data-act="trash-ok">${tx('insp.trashConfirm')}</button></div></div>`
-    : `<div class="actions"><button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button><button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button><button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button></div>`;
+    : `<div class="actions"><button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button><button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button>`
+      + `<button class="btn sm${S.marked.has(r.id) ? ' on' : ''}" type="button" data-act="mark" aria-pressed="${S.marked.has(r.id)}"${r.parentId >= 0 ? '' : ' disabled'}>${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}</button>`
+      + `<button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button></div>`;
+  const inMarked = markedAncestor(r);
   el.innerHTML = `<div class="insp-top"><span class="sw lg" style="background:${rgb(rowColor(r))}"></span><div class="insp-id"><div class="insp-kind">${esc(kind)}</div><h2 class="insp-name" title="${esc(r.name)}">${esc(nameOf(r))}</h2></div></div>`
     + `<div class="insp-size"><span class="big">${fmtB(r.size)}</span><span class="sub">${S.root ? tx('insp.ofScanned', { value: fmtP(r.size / (S.root.size || 1)) }) : ''}</span></div>`
     + `<div class="insp-path"><code>${path ? esc(path).replace(/\\/g, '\\<wbr>') : '…'}</code><button class="icon-btn sm" type="button" data-act="copy" title="${tx('insp.copyPath')}">${ICON_COPY}</button></div>`
@@ -526,22 +550,26 @@ export function renderInspector() {
     + `<div><dt>${tx('insp.modified')}</dt><dd>${fmtD(r.mtime)}</dd></div></dl>`
     + (r.flags & FLAG.HARDLINK ? `<p class="note">${tx('insp.note.hardlink')}</p>` : '')
     + (r.flags & FLAG.CLOUD ? `<p class="note">${tx('insp.note.cloud')}</p>` : '')
+    + (inMarked ? `<p class="note marked-note">${tx('basket.alreadyIn', { name: inMarked.row.name })}</p>` : '')
     + acts;
 }
 async function doAction(kind: ActionKind, r: NodeRow) {
   try {
     const res = await B.action(kind, r.id);
     toast(res.code ? msgText(res) : res.message || t(res.ok ? 'toast.done' : 'toast.actionFailed'));
-    if (kind === 'trash' && res.ok) await refreshAfterChange(r);
+    if (kind === 'trash' && res.ok) { S.marked.delete(r.id); await refreshAfterChange(r); }
   } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
 }
-async function refreshAfterChange(r: NodeRow) {
+async function refreshAfterChange(r: NodeRow | null) {
   S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null;
   S.root = remember(await B.nodeInfo(S.root!.id));
   const chain: NodeRow[] = []; for (const z of S.chain) { try { chain.push(remember(await B.nodeInfo(z.id))); } catch { break; } }
   S.chain = chain.length ? chain : [S.root];
-  S.sel = S.chain[S.chain.length - 1]; if (r.parentId >= 0) S.sel = await rowOf(r.parentId).catch(() => S.sel!);
-  updateCrumbs(); await rebuildTree(); await loadSlice(true); loadComposition(); renderInspector(); renderStatus();
+  S.sel = S.chain[S.chain.length - 1]; if (r && r.parentId >= 0) S.sel = await rowOf(r.parentId).catch(() => S.sel!);
+  // Lo marcado que ya no existe (dentro de lo borrado) sale de la cesta; lo demás se actualiza
+  for (const [id, m] of S.marked) { try { m.row = remember(await B.nodeInfo(id)); } catch { S.marked.delete(id); } }
+  updateCrumbs(); await rebuildTree(); await loadSlice(true); loadComposition(); renderInspector(); renderStatus(); renderBasketCount();
+  if (S.tab === 'basket') renderBasket();
 }
 $('insp').addEventListener('click', e => {
   const b = (e.target as HTMLElement).closest('[data-act]') as HTMLElement; if (!b) return; const r = S.sel || zoomRow(); if (!r) return;
@@ -552,6 +580,7 @@ $('insp').addEventListener('click', e => {
     case 'trash': S.confirmTrash = true; renderInspector(); ($('insp').querySelector('[data-act="trash-ok"]') as HTMLElement).focus(); break;
     case 'cancel': S.confirmTrash = false; renderInspector(); break;
     case 'trash-ok': S.confirmTrash = false; renderInspector(); doAction('trash', r); break;
+    case 'mark': toggleMark(r); break;
   }
 });
 
@@ -560,7 +589,7 @@ const filesBody = $('filesBody');
 const parentPath = (p: string) => { const i = p.lastIndexOf('\\'); return i > 2 ? p.slice(0, i) : p.slice(0, 3); };
 function fileRowHTML(i: number) {
   const r = S.files[i], sel = S.sel?.id === r.id, icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(rowColor(r))}"></i>`;
-  return `<div class="row${sel ? ' sel' : ''}" role="row" data-i="${i}"><span class="c-name">${icon}<span class="nm" data-fit="name" title="${esc(r.name)}">${esc(r.name)}</span></span>`
+  return `<div class="row${sel ? ' sel' : ''}${markClass(r)}" role="row" data-i="${i}"><span class="c-name">${icon}<span class="nm" data-fit="name" title="${esc(r.name)}">${esc(r.name)}</span></span>`
     + `<span class="c-path" data-fit="path" title="${esc(r.path)}">${esc(parentPath(r.path))}</span><span class="c-size num">${fmtB(r.size)}</span><span class="c-mod num">${fmtD(r.mtime)}</span></div>`;
 }
 const filesVL = new VList(filesBody, 26, fileRowHTML, fitTexts);
@@ -577,7 +606,19 @@ async function loadFiles() {
   $('filesCount').textContent = searching ? fmtN(res.total) : '';
   filesVL.setCount(S.files.length);
 }
-filesBody.addEventListener('click', e => { const el = (e.target as HTMLElement).closest('.row') as HTMLElement; if (el) select(S.files[+el.dataset.i!]); });
+filesBody.addEventListener('click', e => {
+  const el = (e.target as HTMLElement).closest('.row') as HTMLElement; if (!el) return;
+  const r = S.files[+el.dataset.i!]; select(r); if (e.ctrlKey || e.metaKey) toggleMark(r);
+});
+filesBody.addEventListener('keydown', e => {
+  const i = S.files.findIndex(r => r.id === S.sel?.id);
+  const move = (j: number) => { const r = S.files[j]; if (r) { select(r); filesVL.scrollTo(j); } };
+  if (e.key === 'ArrowDown') move(Math.min(S.files.length - 1, i + 1));
+  else if (e.key === 'ArrowUp') move(Math.max(0, i - 1));
+  else if (e.key === ' ' && i >= 0) toggleMark(S.files[i]);
+  else return;
+  e.preventDefault();
+});
 filesBody.addEventListener('dblclick', e => { const el = (e.target as HTMLElement).closest('.row') as HTMLElement; if (!el) return; const r = S.files[+el.dataset.i!]; setTab('tree'); locate(r); });
 filesBody.addEventListener('contextmenu', e => { const el = (e.target as HTMLElement).closest('.row') as HTMLElement; if (!el) return; e.preventDefault(); const r = S.files[+el.dataset.i!]; select(r); nodeMenu(r, (e as MouseEvent).clientX, (e as MouseEvent).clientY); });
 let qT = 0; const q = $('q') as HTMLInputElement;
@@ -640,7 +681,7 @@ async function loadClean() {
         const size = list.reduce((s, r) => s + r.size, 0); if (rule.min && size < rule.min) continue;
         const parent = await rowOf(list[0].parentId).catch(() => null); if (!parent) continue;
         const path = await pathOf(parent.id).catch(() => parentPath(list[0].path));
-        cards.push({ row: { ...parent, size }, path, rule, name: list[0].name, count: list.length });
+        cards.push({ row: { ...parent, size }, path, rule, name: list[0].name, count: list.length, rows: list });
       }
     } else for (const r of rows) cards.push({ row: r, path: r.path, rule, name: r.name });
   }
@@ -659,11 +700,20 @@ async function renderClean() {
     + L.map((c, i) => `<article class="cl"><div><h3>${esc(cardTitle(c))}</h3><code class="cl-path">${esc(c.path)}</code><p>${esc(tk(`clean.${c.rule.id}.why`))}${c.count ? ' ' + tx('clean.fileCount', { count: c.count }) : ''}</p>`
       + (c.rule.cmd ? `<div class="cmd"><code>${esc(c.rule.cmd)}</code><button class="icon-btn sm" type="button" data-copy="${i}" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div>` : '')
       + (c.rule.how ? `<p class="how">${esc(tk(`clean.${c.rule.id}.how`))}</p>` : '')
-      + `</div><div class="cl-side"><span class="cl-size">${fmtB(c.row.size)}</span><span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span><button class="btn sm" type="button" data-loc="${i}">${tx('clean.locate')}</button></div></article>`).join('');
+      + `</div><div class="cl-side"><span class="cl-size">${fmtB(c.row.size)}</span><span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span><button class="btn sm" type="button" data-loc="${i}">${tx('clean.locate')}</button>`
+      // Lo que gestiona Windows no se marca; en las tarjetas agrupadas se marcan los archivos, no su carpeta
+      + (c.rule.risk === 'bad' ? '' : `<button class="btn sm${cardMarked(c) ? ' on' : ''}" type="button" data-mark="${i}" aria-pressed="${cardMarked(c)}">${tx(cardMarked(c) ? 'mark.remove' : c.rows ? 'clean.markFiles' : 'clean.mark')}</button>`)
+      + `</div></article>`).join('');
 }
 $('cleanBody').addEventListener('click', async e => {
   const t = e.target as HTMLElement, cp = t.closest('[data-copy]') as HTMLElement;
   if (cp) { copyText(S.clean![+cp.dataset.copy!].rule.cmd!, 'toast.commandCopied'); return; }
+  const mk = t.closest('[data-mark]') as HTMLElement;
+  if (mk) {
+    const c = S.clean![+mk.dataset.mark!], rows: NodeRow[] = c.rows || [c.row], on = cardMarked(c);
+    for (const r of rows) if (S.marked.has(r.id) === on) await toggleMark(r, true);
+    afterMarksChanged(); renderClean(); return;
+  }
   const lb = t.closest('[data-loc]') as HTMLElement; if (!lb) return;
   const r = S.clean![+lb.dataset.loc!].row; setTab('tree'); await locate(r); zoomToRow(r);
 });
@@ -672,11 +722,98 @@ $('cleanBody').addEventListener('click', async e => {
 export function setTab(t: string) {
   S.tab = t;
   for (const b of document.querySelectorAll('.tab')) b.setAttribute('aria-selected', String((b as HTMLElement).dataset.tab === t));
-  for (const v of ['tree', 'files', 'clean']) $('view-' + v).hidden = v !== t;
+  for (const v of ['tree', 'files', 'clean', 'basket']) $('view-' + v).hidden = v !== t;
   if (t === 'tree') treeVL.paint();
   if (t === 'files') loadFiles();
   if (t === 'clean') renderClean();
+  if (t === 'basket') renderBasket();
 }
+
+// ---------- Cesta «Para borrar» ----------
+// Se marca con Ctrl+clic (mapa y listas), Espacio (listas), el panel de detalle, el menú o las tarjetas de limpieza.
+// No se cuenta dos veces: marcar una carpeta quita lo marcado dentro de ella, y lo que ya está dentro de una carpeta marcada no se añade.
+const lc = (p: string) => p.toLowerCase().replace(/\\+$/, '');
+function markedAncestor(r: NodeRow): Marked | null {
+  const p = S.pathCache.get(r.id);
+  if (p) { const lp = lc(p); for (const m of S.marked.values()) if (m.row.isDir && m.row.id !== r.id && lp.startsWith(lc(m.path) + '\\')) return m; return null; }
+  for (let id = r.parentId; id >= 0; id = S.rowCache.get(id)?.parentId ?? -1) { const m = S.marked.get(id); if (m) return m; }
+  return null;
+}
+const markClass = (r: NodeRow) => S.marked.has(r.id) ? ' marked' : S.marked.size && markedAncestor(r) ? ' marked-in' : '';
+const cardMarked = (c: CleanCard) => (c.rows || [c.row]).every(r => S.marked.has(r.id));
+/** `quiet`: sin repintar ni avisos (marcado por lotes desde una tarjeta). */
+async function toggleMark(r: NodeRow, quiet = false) {
+  if (r.parentId < 0) return; // la raíz del escaneo no se borra
+  if (S.marked.has(r.id)) { S.marked.delete(r.id); if (!quiet) afterMarksChanged(); return; }
+  const path = await pathOf(r.id).catch(() => ''); if (!path) return;
+  const lp = lc(path);
+  for (const m of S.marked.values()) if (m.row.isDir && lp.startsWith(lc(m.path) + '\\')) { if (!quiet) toast(t('basket.alreadyIn', { name: m.row.name })); return; }
+  if (r.isDir) for (const [id, m] of S.marked) if (lc(m.path).startsWith(lp + '\\')) S.marked.delete(id);
+  S.marked.set(r.id, { row: remember(r), path });
+  S.basketConfirm = false;
+  if (!quiet) afterMarksChanged();
+}
+function afterMarksChanged() {
+  renderBasketCount(); treeVL.paint(); filesVL.paint(); drawOverlay(); renderInspector();
+  if (S.tab === 'basket') renderBasket();
+}
+const markedBytes = () => [...S.marked.values()].reduce((s, m) => s + m.row.size, 0);
+function renderBasketCount() {
+  const n = S.marked.size, chip = $('basketChip');
+  $('basketCount').textContent = n ? fmtN(n) : '';
+  chip.hidden = !n; if (n) chip.textContent = t('basket.chip', { count: n, size: fmtB(markedBytes()) });
+}
+const ICON_X = '<svg class="i" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>';
+function renderBasket() {
+  const el = $('basketBody'), list = [...S.marked.values()].sort((a, b) => b.row.size - a.row.size);
+  if (!list.length) { el.innerHTML = `<div class="cl-loading">${html('basket.empty')}</div>`; return; }
+  const total = markedBytes(), n = list.length;
+  const acts = S.basketConfirm
+    ? `<div class="confirm"><p>${tx('basket.confirm', { count: n, size: fmtB(total) })}</p><div><button class="btn sm" type="button" data-bk="cancel">${tx('insp.cancel')}</button><button class="btn sm danger solid" type="button" data-bk="go">${tx('insp.trashConfirm')}</button></div></div>`
+    : `<div class="bk-acts"><button class="btn sm" type="button" data-bk="clear"${S.basketBusy ? ' disabled' : ''}>${tx('basket.clear')}</button><button class="btn sm danger solid" type="button" data-bk="trash"${S.basketBusy ? ' disabled' : ''}>${tx('basket.trashAll')}</button></div>`;
+  el.innerHTML = `<div class="bk-head"><div class="bk-sum"><b>${fmtB(total)}</b><span>${tx('basket.total', { count: n })}</span></div>${acts}</div>`
+    + `<div class="bk-list">` + list.map(m => {
+      const icon = m.row.isDir ? FOLDER : `<i class="sw" style="background:${rgb(rowColor(m.row))}"></i>`;
+      return `<div class="bk-row${m.error ? ' err' : ''}${S.sel?.id === m.row.id ? ' sel' : ''}" data-id="${m.row.id}">${icon}`
+        + `<span class="bk-name"><b title="${esc(m.path)}">${esc(m.row.name)}</b><code>${esc(parentPath(m.path))}</code>${m.error ? `<small class="bk-err">${esc(m.error)}</small>` : ''}</span>`
+        + `<span class="num">${fmtB(m.row.size)}</span><button class="icon-btn sm" type="button" data-bk="rm" title="${tx('basket.remove')}" aria-label="${tx('basket.remove')}"${S.basketBusy ? ' disabled' : ''}>${ICON_X}</button></div>`;
+    }).join('') + `</div>`;
+}
+/** Mueve todo lo marcado a la Papelera, de uno en uno para informar de cada fallo, y refresca el árbol una sola vez. */
+async function trashMarked() {
+  const list = [...S.marked.values()].sort((a, b) => b.row.size - a.row.size); if (!list.length) return;
+  S.basketConfirm = false; S.basketBusy = true; renderBasket();
+  let moved = 0, failed = 0, bytes = 0;
+  for (const [i, m] of list.entries()) {
+    toast(t('basket.progress', { done: i + 1, total: list.length }));
+    try {
+      const res = await B.action('trash', m.row.id);
+      if (res.ok) { moved++; bytes += m.row.size; S.marked.delete(m.row.id); }
+      else { failed++; m.error = res.code ? msgText(res) : res.message || t('toast.actionFailed'); }
+    } catch (e) { failed++; m.error = msgText(e); }
+  }
+  S.basketBusy = false;
+  if (moved) await refreshAfterChange(null);
+  toast(failed ? t('basket.partial', { moved, failed }) : t('basket.done', { count: moved, size: fmtB(bytes) }));
+  afterMarksChanged();
+}
+$('basketBody').addEventListener('click', e => {
+  const t = e.target as HTMLElement, b = t.closest('[data-bk]') as HTMLElement;
+  const row = t.closest('.bk-row') as HTMLElement, m = row ? S.marked.get(+row.dataset.id!) : undefined;
+  switch (b?.dataset.bk) {
+    case 'rm': if (m) { S.marked.delete(m.row.id); afterMarksChanged(); } return;
+    case 'clear': S.marked.clear(); S.basketConfirm = false; afterMarksChanged(); return;
+    case 'trash': S.basketConfirm = true; renderBasket(); ($('basketBody').querySelector('[data-bk="go"]') as HTMLElement)?.focus(); return;
+    case 'cancel': S.basketConfirm = false; renderBasket(); return;
+    case 'go': trashMarked(); return;
+  }
+  if (m) select(m.row);
+});
+$('basketBody').addEventListener('dblclick', e => {
+  const row = (e.target as HTMLElement).closest('.bk-row') as HTMLElement, m = row ? S.marked.get(+row.dataset.id!) : undefined;
+  if (m && !(e.target as HTMLElement).closest('[data-bk]')) { setTab('tree'); locate(m.row); }
+});
+$('basketChip').addEventListener('click', () => setTab('basket'));
 document.querySelector('.tabs')!.addEventListener('click', e => { const b = (e.target as HTMLElement).closest('.tab') as HTMLElement; if (b) setTab(b.dataset.tab!); });
 
 // ---------- Menús, unidades, tema y guía ----------
@@ -694,6 +831,7 @@ function nodeMenu(r: NodeRow, x: number, y: number) {
     + `<button type="button" role="menuitem" data-m="copy">${tx('menu.copyPath')}</button>`
     + `<button type="button" role="menuitem" data-m="zoom">${tx('menu.zoom')}</button>`
     + `<button type="button" role="menuitem" data-m="tree">${tx('menu.locate')}</button><hr>`
+    + (r.parentId >= 0 ? `<button type="button" role="menuitem" data-m="mark">${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}<span>${tx('key.space')}</span></button>` : '')
     + `<button type="button" role="menuitem" data-m="properties">${tx('menu.properties')}</button>`
     + `<button type="button" role="menuitem" data-m="trash" class="danger">${tx('menu.trash')}<span>${tx('key.delete')}</span></button>`, x, y, 'node', r.id);
 }
@@ -721,6 +859,7 @@ menu.addEventListener('click', e => {
       case 'zoom': zoomToRow(r); break;
       case 'tree': setTab('tree'); locate(r); break;
       case 'trash': select(r); S.confirmTrash = true; renderInspector(); break;
+      case 'mark': toggleMark(r); break;
     }
   });
 });
@@ -842,7 +981,7 @@ export async function startScan() {
   scanCard = null; showProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0 });
   try {
     const res = await B.scan({ path: S.target, engine: 'auto' }, showProgress);
-    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
+    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
     S.root = remember(await B.nodeInfo(res.rootId)); S.pathCache.set(res.rootId, res.rootPath);
     S.chain = [S.root]; S.expanded = new Set([S.root.id]); S.slice = null;
     if (res.volume) { S.vol = S.vols.find(v => v.path === res.volume!.path) || res.volume; }
@@ -1001,6 +1140,7 @@ function relocalize() {
   treeVL.paint(); filesVL.paint(); renderMap();
   if (S.tab === 'files') loadFiles();
   if (S.tab === 'clean') renderClean();
+  renderBasketCount(); if (S.tab === 'basket') renderBasket();
 }
 export async function startApp(backend: Backend) {
   B = backend;

@@ -362,6 +362,27 @@ body.resizing iframe,body.resizing canvas{pointer-events:none}
 .scan-nums dd{margin:0;font:500 15px var(--f-data);font-variant-numeric:tabular-nums;white-space:nowrap}
 .scan-cancel{margin-top:-4px}
 #scanBtn.cancel{background:var(--raised);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line-2)}
+/* Cesta «Para borrar» */
+.row.marked{background:color-mix(in srgb,var(--bad) 13%,transparent)}
+.row.marked .nm{text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--bad) 80%,transparent);text-decoration-thickness:1.5px}
+.row.marked-in{background:color-mix(in srgb,var(--bad) 6%,transparent)}
+.row.marked-in .nm{color:var(--muted)}
+.tab .count.danger:not(:empty){background:color-mix(in srgb,var(--bad) 22%,transparent);color:var(--bad)}
+.btn.on{border-color:var(--bad);color:var(--bad)}
+.marked-note{color:var(--bad)}
+.basket{display:grid;align-content:start;gap:10px;padding:12px;height:100%;overflow:auto}
+.bk-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.bk-sum{display:grid}.bk-sum b{font:700 22px/1.1 var(--f-display)}.bk-sum span{color:var(--muted);font-size:12px}
+.bk-acts{display:flex;gap:8px;flex-wrap:wrap}
+.bk-list{display:grid;gap:2px}
+.bk-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:6px 8px;border-radius:7px;cursor:default}
+.bk-row:hover{background:var(--raised)}.bk-row.sel{background:var(--accent-soft)}
+.bk-name{display:grid;min-width:0}
+.bk-name b,.bk-name code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bk-name code{font:11px var(--f-data);color:var(--faint)}
+.bk-err{color:var(--bad);font-size:11.5px}
+.bk-row.err b{color:var(--bad)}
+.basket-chip{padding:1px 9px;border:1px solid color-mix(in srgb,var(--bad) 45%,transparent);border-radius:10px;background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad);font:inherit;font-size:11.5px;cursor:pointer}
 /* Pantalla de unidades */
 .map-state.drives .box{max-width:min(760px,100%);gap:14px}
 .drive-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;width:100%;margin-top:6px}

@@ -62,6 +62,7 @@
           <button class="tab" role="tab" type="button" data-tab="tree" aria-selected="true"><span data-i18n="tab.tree">Folders</span></button>
           <button class="tab" role="tab" type="button" data-tab="files" aria-selected="false"><span data-i18n="tab.files">Files</span> <span class="count" id="filesCount"></span></button>
           <button class="tab" role="tab" type="button" data-tab="clean" aria-selected="false"><span data-i18n="tab.clean">Free up space</span> <span class="count" id="cleanCount"></span></button>
+          <button class="tab" role="tab" type="button" data-tab="basket" aria-selected="false"><span data-i18n="tab.basket">To delete</span> <span class="count danger" id="basketCount"></span></button>
         </div>
       </div>
       <div class="view" id="view-tree">
@@ -85,6 +86,7 @@
         </div>
       </div>
       <div class="view" id="view-clean" hidden><div class="clean" id="cleanBody"></div></div>
+      <div class="view" id="view-basket" hidden><div class="basket" id="basketBody"></div></div>
     </section>
     <div class="split" id="split1" role="separator" aria-orientation="vertical" data-i18n-aria="split.tree" tabindex="0" data-i18n-title="split.title"></div>
 
@@ -125,6 +127,7 @@
 
   <footer class="status">
     <span id="st1"></span><span id="st2"></span>
+    <button class="basket-chip" id="basketChip" type="button" hidden></button>
     <span class="st3" id="st3"></span>
   </footer>
 </div>
@@ -171,6 +174,8 @@
     <kbd data-i18n="key.enter"></kbd><span data-i18n="guide.key.enter"></span>
     <kbd data-i18n="key.backspace"></kbd><span data-i18n="guide.key.up"></span>
     <kbd>1 2 3</kbd><span data-i18n="guide.key.colors"></span>
+    <kbd data-i18n="key.space"></kbd><span data-i18n="guide.key.mark"></span>
+    <kbd data-i18n="key.ctrlClick"></kbd><span data-i18n="guide.key.markMap"></span>
     <kbd data-i18n="key.delete"></kbd><span data-i18n="guide.key.trash"></span>
     <kbd>Esc</kbd><span data-i18n="guide.key.esc"></span>
   </div>

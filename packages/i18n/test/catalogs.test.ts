@@ -89,8 +89,11 @@ describe('catálogos', () => {
 describe('formato', () => {
   test.each([...Object.keys(CATALOGS), PSEUDO])('%s formatea todos los mensajes con argumentos de ejemplo', locale => {
     const i18n = new I18n(locale);
-    const sample = { count: 2, remaining: 5, value: 'x', time: '1 s', bytes: '1 GB', name: 'n', free: '1', total: '2', size: '3', path: 'C:\\', error: 'e', id: 1, key: 'k', kind: 'k', fs: 'FAT32', folder: 'f', query: 'q', text: 't', label: 'l', target: 'C:', mode: 'dark', version: '1.0.0' };
-    for (const k of KEYS) expect(typeof i18n.t(k, sample)).toBe('string');
+    // Un valor numérico para cada argumento del mensaje: sirve para plurales, números y textos, y en un select cae en «other»
+    for (const k of KEYS) {
+      const sample = Object.fromEntries([...args(ast(en[k], 'en'))].map(a => [a.split(':')[0], 2]));
+      expect(typeof i18n.t(k, sample)).toBe('string');
+    }
   });
 
   test('plurales por idioma', () => {

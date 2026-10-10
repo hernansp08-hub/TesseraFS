@@ -256,10 +256,24 @@ Arriba a la derecha está todo sobre lo seleccionado: tipo, tamaño, porcentaje 
 |---|---|
 | Mostrar en el Explorador | Abre el Explorador con el elemento seleccionado |
 | Entrar en el mapa | Hace de esa carpeta la raíz del mapa |
+| Marcar para borrar | Lo añade a la pestaña **Para borrar** (ver abajo) |
 | Papelera… | Pide confirmación en el propio panel y lo mueve a la **Papelera de reciclaje** |
 
 > [!CAUTION]
 > TesseraFS nunca borra de forma definitiva. Mover a la papelera siempre pide confirmación y se puede deshacer desde la Papelera de Windows. Aun así, revisa la pestaña [Liberar espacio](liberar-espacio.md) antes de borrar archivos del sistema.
+
+### Borrar varias cosas a la vez: «Para borrar»
+
+Ve marcando lo que quieras quitar y bórralo todo de una vez cuando lo hayas revisado:
+
+- **Ctrl+clic** sobre una tesela del mapa o una fila de Carpetas o Archivos.
+- **Espacio** sobre la fila seleccionada.
+- **Marcar para borrar** en el panel de detalle o en el menú del clic derecho.
+- **Marcar** en las tarjetas de [Liberar espacio](liberar-espacio.md). En las tarjetas que agrupan archivos (modelos de IA, descargas) se marcan esos archivos, no su carpeta.
+
+Lo marcado se tacha en las listas y se tiñe de rojo en el mapa. La pestaña **Para borrar** muestra el total y la lista, y la barra de estado lleva un contador que la abre. El total no cuenta nada dos veces: al marcar una carpeta se quita lo que ya estaba marcado dentro, y no se puede añadir algo que ya está dentro de una carpeta marcada.
+
+**Mover todo a la papelera…** pide una sola confirmación y mueve los elementos de uno en uno. Si alguno no se puede mover (está en uso, no cabe en la Papelera…), se queda en la lista con el motivo. La lista se vacía al hacer un escaneo nuevo.
 
 **Composición** (debajo) resume el espacio de la carpeta del mapa por categoría, extensión o antigüedad. Pulsa una fila para resaltar sus teselas, y en modo Categoría verás también sus extensiones principales.
 
@@ -309,8 +323,10 @@ Detalles y procedimientos seguros en **[Liberar espacio](liberar-espacio.md)**.
 | **Intro** | Entrar en la carpeta seleccionada en el mapa |
 | **Retroceso** | Subir un nivel en el mapa |
 | **1 · 2 · 3** | Color por categoría, extensión o antigüedad |
+| **Espacio** | Marcar o desmarcar la fila para borrar |
+| **Ctrl+clic** | Marcar o desmarcar en el mapa y en las listas |
 | **Supr** | Mover a la papelera (pide confirmación) |
-| **Esc** | Quitar el resaltado, cancelar la confirmación o cerrar menús |
+| **Esc** | Cancelar el escaneo, quitar el resaltado, cancelar la confirmación o cerrar menús |
 | Divisor + **← →** / **↑ ↓** | Redimensionar paneles (con **Mayús**, pasos largos) |
 | Divisor + **Inicio** | Restablecer el tamaño del panel |
 
