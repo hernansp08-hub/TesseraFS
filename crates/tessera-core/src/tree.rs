@@ -254,7 +254,7 @@ impl Tree {
     /// y lo saca de la lista de hijos de su padre. Los ids no cambian.
     pub fn remove(&mut self, id: u32) -> Result<(), String> {
         if id == 0 || !self.live(id) {
-            return Err("Nodo no válido".into());
+            return Err("Invalid node".into());
         }
         let i = id as usize;
         let dir = self.is_dir(id);

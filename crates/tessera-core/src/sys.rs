@@ -1,22 +1,55 @@
 //! Integración con Windows: unidades, elevación y acciones de archivo.
 
-use crate::types::{ElevationInfo, VolumeInfo};
+use crate::msg;
+use crate::types::{ElevationInfo, EngineMessage, VolumeInfo};
 
 /// Texto del último error de Windows (sin el sufijo «(os error N)»).
 pub fn last_error_text() -> String {
-    clean_io(std::io::Error::last_os_error())
+    io_error_text(&std::io::Error::last_os_error())
 }
 
 /// Texto de un código de error de Windows (Win32 o HRESULT).
 pub fn error_text(code: i32) -> String {
-    clean_io(std::io::Error::from_raw_os_error(code))
+    io_error_text(&std::io::Error::from_raw_os_error(code))
 }
 
-fn clean_io(e: std::io::Error) -> String {
+/// Texto de un error de E/S tal como lo da el sistema (FormatMessage, en el idioma de Windows).
+pub fn io_error_text(e: &std::io::Error) -> String {
     let s = e.to_string();
     match s.rfind(" (os error") {
         Some(p) => s[..p].trim().to_string(),
         None => s,
+    }
+}
+
+/// ERROR_CANCELLED, su HRESULT y COPYENGINE_E_USER_CANCELLED: el usuario canceló.
+fn is_cancel(code: i32) -> bool {
+    matches!(code as u32, 1223 | 0x8007_04C7 | 0x8027_0000)
+}
+
+/// Error de una acción del Shell: `action.cancelled` o `action.failed` con el texto del sistema.
+pub fn action_error(code: i32) -> EngineMessage {
+    if is_cancel(code) {
+        msg::action_cancelled()
+    } else {
+        msg::action_failed(&error_text(code))
+    }
+}
+
+/// Como [`action_error`] para un error de E/S.
+pub fn action_io_error(e: &std::io::Error) -> EngineMessage {
+    match e.raw_os_error() {
+        Some(code) => action_error(code),
+        None => msg::action_failed(&io_error_text(e)),
+    }
+}
+
+/// Comprueba que `path` es una carpeta que se puede abrir (`error.notFolder`, `error.cannotOpen`).
+pub fn check_folder(path: &str) -> Result<(), EngineMessage> {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => Ok(()),
+        Ok(_) => Err(msg::not_folder(path)),
+        Err(e) => Err(msg::cannot_open(path, &io_error_text(&e))),
     }
 }
 
@@ -40,6 +73,7 @@ mod imp {
 
     const DRIVE_UNKNOWN: u32 = 0;
     const DRIVE_NO_ROOT_DIR: u32 = 1;
+    const DRIVE_REMOTE: u32 = 4;
 
     fn from_wide(buf: &[u16]) -> String {
         let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
@@ -93,6 +127,11 @@ mod imp {
         Some(from_wide(&out))
     }
 
+    /// Ruta de red: UNC o unidad asignada a un recurso compartido.
+    pub fn is_network(root: &str) -> bool {
+        root.starts_with(r"\\") || unsafe { GetDriveTypeW(wide(root).as_ptr()) } == DRIVE_REMOTE
+    }
+
     /// Memoria del proceso: (conjunto de trabajo actual, pico, commit pico) en bytes.
     pub fn process_memory() -> Option<(u64, u64, u64)> {
         use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
@@ -117,9 +156,10 @@ mod imp {
         ElevationInfo { elevated, can_elevate: !elevated }
     }
 
-    /// Relanza este ejecutable con el verbo `runas` (muestra UAC). Ok si se lanzó.
-    pub fn relaunch_elevated(args: &str) -> Result<(), String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    /// Relanza este ejecutable con el verbo `runas` (muestra UAC). Ok si se lanzó;
+    /// si no (p. ej. UAC cancelado), `elevation.failed` con el texto del sistema.
+    pub fn relaunch_elevated(args: &str) -> Result<(), EngineMessage> {
+        let exe = std::env::current_exe().map_err(|e| msg::elevation_failed(&super::io_error_text(&e)))?;
         let exe_w: Vec<u16> = exe.as_os_str().encode_wide_z();
         let verb = wide("runas");
         let params = wide(args);
@@ -131,9 +171,13 @@ mod imp {
         sei.lpParameters = params.as_ptr();
         sei.nShow = SW_SHOWNORMAL;
         if unsafe { ShellExecuteExW(&mut sei) } == 0 {
-            return Err(super::last_error_text());
+            return Err(msg::elevation_failed(&super::last_error_text()));
         }
         Ok(())
+    }
+
+    fn last_action_error() -> EngineMessage {
+        super::action_io_error(&std::io::Error::last_os_error())
     }
 
     trait WideZ {
@@ -157,45 +201,45 @@ mod imp {
             r
         })
         .join()
-        .expect("hilo COM")
+        .expect("COM thread panicked")
     }
 
     fn zt(path: &[u16]) -> Vec<u16> {
         path.iter().copied().chain(std::iter::once(0)).collect()
     }
 
-    pub fn open(path: &[u16]) -> Result<(), String> {
+    pub fn open(path: &[u16]) -> Result<(), EngineMessage> {
         let p = zt(path);
         with_com(move || {
             let verb = wide("open");
             let h = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), p.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
             if (h as isize) <= 32 {
-                Err(super::last_error_text())
+                Err(last_action_error())
             } else {
                 Ok(())
             }
         })
     }
 
-    pub fn reveal(path: &[u16]) -> Result<(), String> {
+    pub fn reveal(path: &[u16]) -> Result<(), EngineMessage> {
         let p = zt(path);
         with_com(move || {
             let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
             let hr = unsafe { SHParseDisplayName(p.as_ptr(), std::ptr::null_mut(), &mut pidl, 0, std::ptr::null_mut()) };
             if hr < 0 {
-                return Err(super::error_text(hr));
+                return Err(super::action_error(hr));
             }
             let hr = unsafe { SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0) };
             unsafe { CoTaskMemFree(pidl as *const _) };
             if hr < 0 {
-                Err(super::error_text(hr))
+                Err(super::action_error(hr))
             } else {
                 Ok(())
             }
         })
     }
 
-    pub fn properties(path: &[u16]) -> Result<(), String> {
+    pub fn properties(path: &[u16]) -> Result<(), EngineMessage> {
         let p = zt(path);
         with_com(move || {
             let verb = wide("properties");
@@ -206,7 +250,7 @@ mod imp {
             sei.lpFile = p.as_ptr();
             sei.nShow = SW_SHOWNORMAL;
             if unsafe { ShellExecuteExW(&mut sei) } == 0 {
-                Err(super::last_error_text())
+                Err(last_action_error())
             } else {
                 Ok(())
             }
@@ -214,19 +258,23 @@ mod imp {
     }
 
     /// Envía a la Papelera de reciclaje (nunca borra de forma permanente).
-    pub fn trash(path: &[u16]) -> Result<(), String> {
+    pub fn trash(path: &[u16]) -> Result<(), EngineMessage> {
         use std::os::windows::ffi::OsStringExt;
         let p = std::path::PathBuf::from(std::ffi::OsString::from_wide(path));
+        // Si ya no existe (o no se puede consultar), el error del sistema es más claro que el del crate
+        if let Err(e) = std::fs::symlink_metadata(&p) {
+            return Err(super::action_io_error(&e));
+        }
         trash::delete(&p).map_err(|e| match e {
+            trash::Error::Os { code, .. } if super::is_cancel(code) => msg::action_cancelled(),
             trash::Error::Os { code, description } => {
                 let t = super::error_text(code);
-                if t.is_empty() {
-                    description
-                } else {
-                    t
-                }
+                msg::action_failed(if t.is_empty() { &description } else { &t })
             }
-            other => other.to_string(),
+            // IFileOperation terminó sin moverlo (p. ej. no cabe en la papelera: con FOF_NO_UI y
+            // FOF_WANTNUKEWARNING se aborta en vez de borrarlo de forma permanente)
+            trash::Error::Unknown { description } if description.contains("aborted") => msg::trash_not_moved(),
+            other => msg::action_failed(&other.to_string()),
         })
     }
 }
@@ -246,35 +294,30 @@ mod imp {
     pub fn volume_root_of(_path: &str) -> Option<String> {
         None
     }
-    /// Memoria del proceso: (conjunto de trabajo actual, pico, commit pico) en bytes.
-    pub fn process_memory() -> Option<(u64, u64, u64)> {
-        use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
-        let mut c: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
-        c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-        (unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0)
-            .then_some((c.WorkingSetSize as u64, c.PeakWorkingSetSize as u64, c.PeakPagefileUsage as u64))
+    pub fn is_network(root: &str) -> bool {
+        root.starts_with(r"\\")
     }
-
     pub fn elevation() -> ElevationInfo {
         ElevationInfo { elevated: false, can_elevate: false }
     }
+    /// Memoria del proceso: (conjunto de trabajo actual, pico, commit pico) en bytes.
     pub fn process_memory() -> Option<(u64, u64, u64)> {
         None
     }
-    pub fn relaunch_elevated(_args: &str) -> Result<(), String> {
-        Err("Sólo disponible en Windows".into())
+    pub fn relaunch_elevated(_args: &str) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
     }
-    pub fn open(_p: &[u16]) -> Result<(), String> {
-        Err("Sólo disponible en Windows".into())
+    pub fn open(_p: &[u16]) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
     }
-    pub fn reveal(_p: &[u16]) -> Result<(), String> {
-        Err("Sólo disponible en Windows".into())
+    pub fn reveal(_p: &[u16]) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
     }
-    pub fn properties(_p: &[u16]) -> Result<(), String> {
-        Err("Sólo disponible en Windows".into())
+    pub fn properties(_p: &[u16]) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
     }
-    pub fn trash(_p: &[u16]) -> Result<(), String> {
-        Err("Sólo disponible en Windows".into())
+    pub fn trash(_p: &[u16]) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
     }
 }
 

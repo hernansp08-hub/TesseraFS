@@ -2,8 +2,9 @@
 // etiqueta de reparse e id de archivo en una sola llamada). No abre el contenido de ningún archivo,
 // no sigue enlaces (junctions/symlinks) y no aborta por accesos denegados.
 import { ptr } from 'bun:ffi';
+import { engineError } from './messages.ts';
 import { Store, flagsFromAttrs } from './store.ts';
-import { ATTR, Mem, STATUS, filetimeToUnix, isNameSurrogate, kernel32, ntStatusText, ntdll, wstr } from './win32.ts';
+import { ATTR, Mem, STATUS, filetimeToUnix, isNameSurrogate, kernel32, lastError, ntdll, winErrorText, wstr } from './win32.ts';
 
 /** Lote de entradas producido por un recorrido parcial (en un worker o en el hilo principal). */
 export interface WalkBatch {
@@ -17,13 +18,17 @@ export interface WalkBatch {
   names: Uint16Array; namesLen: number;
   /** Carpetas pendientes (no listadas): referencia (como `parent`) y ruta */
   pendRefs: number[]; pendPaths: string[];
-  errors: string[];
-  denied: number;
+  /** Carpetas no leídas por acceso denegado / por otros errores, con unas pocas rutas de muestra */
+  denied: number; deniedPaths: string[];
+  failed: number; failedPaths: string[];
   dirsListed: number;
   bytes: number;
 }
 
 export interface WalkTask { refs: number[]; paths: string[] }
+
+/** Rutas de muestra que se guardan por lote y por escaneo (para los avisos). */
+export const SAMPLE_PATHS = 3;
 
 // Clases de información de NtQueryDirectoryFile, de la más completa a la más básica
 const FileIdExtdDirectoryInformation = 60; // + etiqueta de reparse + id de 128 bits
@@ -44,7 +49,7 @@ function newBatch(cap: number, namesCap: number): WalkBatch {
     count: 0, parent: new Int32Array(cap), size: new Float64Array(cap), alloc: new Float64Array(cap),
     attrs: new Uint32Array(cap), tag: new Uint32Array(cap), mtime: new Uint32Array(cap), fileKey: new Float64Array(cap),
     nameOff: new Uint32Array(cap), nameLen: new Uint16Array(cap), names: new Uint16Array(namesCap), namesLen: 0,
-    pendRefs: [], pendPaths: [], errors: [], denied: 0, dirsListed: 0, bytes: 0,
+    pendRefs: [], pendPaths: [], denied: 0, deniedPaths: [], failed: 0, failedPaths: [], dirsListed: 0, bytes: 0,
   };
 }
 function growBatch(b: WalkBatch, cap: number) {
@@ -58,6 +63,12 @@ function growBatch(b: WalkBatch, cap: number) {
 /** Buffers transferibles de un lote (para postMessage). */
 export function batchTransfer(b: WalkBatch): ArrayBuffer[] {
   return [b.parent, b.size, b.alloc, b.attrs, b.tag, b.mtime, b.fileKey, b.nameOff, b.nameLen, b.names].map(a => a.buffer as ArrayBuffer);
+}
+
+/** Cuenta una carpeta que no se pudo listar (sólo números y rutas: el texto lo pone la interfaz). */
+function unreadable(b: WalkBatch, path: string, status: number) {
+  if (status === STATUS.ACCESS_DENIED) { b.denied++; if (b.deniedPaths.length < SAMPLE_PATHS) b.deniedPaths.push(path); }
+  else { b.failed++; if (b.failedPaths.length < SAMPLE_PATHS) b.failedPaths.push(path); }
 }
 
 export class DirReader {
@@ -95,11 +106,7 @@ export class DirReader {
    */
   list(path: string, ref: number, b: WalkBatch, outDirs: (number | string)[]): void {
     const st = this.open(path);
-    if (st !== 0) {
-      if (st === STATUS.ACCESS_DENIED) { b.denied++; b.errors.push(`Acceso denegado: ${path}`); }
-      else b.errors.push(`${path}: ${ntStatusText(st)}`);
-      return;
-    }
+    if (st !== 0) { unreadable(b, path, st); return; }
     const nt = ntdll(), h = this.h[0];
     try {
       b.dirsListed++;
@@ -113,8 +120,7 @@ export class DirReader {
             this.infoClass = cls === FileIdExtdDirectoryInformation ? FileIdFullDirectoryInformation : FileFullDirectoryInformation;
             continue; // reintenta con una clase más básica
           }
-          if (s === STATUS.ACCESS_DENIED) { b.denied++; b.errors.push(`Acceso denegado: ${path}`); }
-          else b.errors.push(`${path}: ${ntStatusText(s)}`);
+          unreadable(b, path, s);
           break;
         }
         restart = 0;
@@ -164,7 +170,8 @@ export class DirReader {
   run(task: WalkTask, budgetMs: number, compact = true): WalkBatch {
     // el lote de trabajo se reutiliza; al final se copia a la medida exacta para transferirlo
     const b = this.work ??= newBatch(8192, 8192 * 24);
-    b.count = 0; b.namesLen = 0; b.pendRefs = []; b.pendPaths = []; b.errors = []; b.denied = 0; b.dirsListed = 0; b.bytes = 0;
+    b.count = 0; b.namesLen = 0; b.pendRefs = []; b.pendPaths = [];
+    b.denied = 0; b.deniedPaths = []; b.failed = 0; b.failedPaths = []; b.dirsListed = 0; b.bytes = 0;
     const stack: (number | string)[] = [];
     for (let i = task.refs.length - 1; i >= 0; i--) stack.push(task.refs[i], task.paths[i]);
     const t0 = performance.now(), found: (number | string)[] = [];
@@ -199,7 +206,15 @@ export interface WalkOptions {
   onProgress?: (p: WalkProgress) => void;
   isCancelled?: () => boolean;
 }
-export interface WalkOutcome { store: Store; errors: string[]; denied: number; dirsListed: number; threads: number }
+export interface WalkOutcome {
+  store: Store;
+  /** Carpetas no leídas: acceso denegado / otros errores, con hasta SAMPLE_PATHS rutas de muestra */
+  denied: number; deniedSample: string[];
+  failed: number; failedSample: string[];
+  /** Diagnóstico para desarrolladores (en inglés; no llega a la interfaz), p. ej. workers caídos */
+  notes: string[];
+  dirsListed: number; threads: number;
+}
 
 /** Copia un lote al almacén. Devuelve el mapa índice local → id global. */
 export function mergeBatch(store: Store, b: WalkBatch): Uint32Array {
@@ -239,12 +254,12 @@ function getPool(n: number, url: string | URL) {
     const w = new Worker(url, { argv: [WALK_WORKER_FLAG], smol: true } as WorkerOptions);
     (w as unknown as { unref(): void }).unref(); // no retiene el proceso (los tipos DOM no lo declaran)
     fresh.push(new Promise<void>((res, rej) => {
-      const t = setTimeout(() => rej(new Error('el worker no arrancó')), 15000);
+      const t = setTimeout(() => rej(new Error('walk worker did not start')), 15000);
       const once = (e: MessageEvent) => {
         if ((e.data as { type?: string })?.type === 'ready') { clearTimeout(t); w.removeEventListener('message', once); res(); }
       };
       w.addEventListener('message', once);
-      w.addEventListener('error', () => { clearTimeout(t); rej(new Error('el worker falló al arrancar')); });
+      w.addEventListener('error', () => { clearTimeout(t); rej(new Error('walk worker failed to start')); });
     }));
     pool.workers.push(w);
   }
@@ -259,15 +274,22 @@ function rootInfo(path: string): { attrs: number; mtime: number } | null {
   return { attrs: dv.getUint32(0, true), mtime: filetimeToUnix(dv.getUint32(20, true), dv.getUint32(24, true)) };
 }
 
-export async function walkScan(rootPath: string, opts: WalkOptions): Promise<WalkOutcome> {
+/** Comprueba que la raíz existe y es una carpeta: si no, lanza error.cannotOpen o error.notFolder. */
+export function checkRoot(rootPath: string): { attrs: number; mtime: number } {
   const ri = rootInfo(rootPath);
-  if (!ri) throw new Error(`No se puede abrir: ${rootPath}`);
-  if (!(ri.attrs & ATTR.DIRECTORY)) throw new Error(`No es una carpeta: ${rootPath}`);
+  if (!ri) throw engineError('error.cannotOpen', { path: rootPath, error: winErrorText(lastError()) });
+  if (!(ri.attrs & ATTR.DIRECTORY)) throw engineError('error.notFolder', { path: rootPath });
+  return ri;
+}
+
+export async function walkScan(rootPath: string, opts: WalkOptions): Promise<WalkOutcome> {
+  const ri = checkRoot(rootPath);
   const store = new Store(1 << 16, !!opts.trackKeys);
   const rootId = store.addRoot(rootPath, ri.mtime, flagsFromAttrs(ri.attrs, 0, true));
   const qRefs: number[] = [-rootId - 1], qPaths: string[] = [rootPath];
-  const errors: string[] = [];
-  let denied = 0, dirsListed = 0, bytes = 0, infoClass = 0, lastPath = rootPath, lastTick = 0;
+  const notes: string[] = [], deniedSample: string[] = [], failedSample: string[] = [];
+  const sample = (out: string[], paths: string[]) => { for (const p of paths) if (out.length < SAMPLE_PATHS) out.push(p); };
+  let denied = 0, failed = 0, dirsListed = 0, bytes = 0, infoClass = 0, lastPath = rootPath, lastTick = 0;
   const tick = (force = false) => {
     const now = performance.now();
     if (!opts.onProgress || (!force && now - lastTick < 100)) return;
@@ -280,8 +302,8 @@ export async function walkScan(rootPath: string, opts: WalkOptions): Promise<Wal
       const r = b.pendRefs[k];
       qRefs.push(r >= 0 ? -l2g[r] - 1 : r); qPaths.push(b.pendPaths[k]);
     }
-    for (const e of b.errors) if (errors.length < 5000) errors.push(e);
-    denied += b.denied; dirsListed += b.dirsListed; bytes += b.bytes;
+    denied += b.denied; failed += b.failed; dirsListed += b.dirsListed; bytes += b.bytes;
+    sample(deniedSample, b.deniedPaths); sample(failedSample, b.failedPaths);
     if (b.pendPaths.length) lastPath = b.pendPaths[b.pendPaths.length - 1];
     tick();
   };
@@ -297,7 +319,7 @@ export async function walkScan(rootPath: string, opts: WalkOptions): Promise<Wal
       pool = getPool(threads, opts.workerUrl ?? defaultWorkerUrl ?? new URL('./' + 'walkworker.ts', import.meta.url));
       await pool.ready;
     } catch (e) {
-      errors.push(`Workers no disponibles (${(e as Error).message}); se recorre en un solo hilo`);
+      notes.push(`walk workers unavailable (${(e as Error).message}); walking on a single thread`);
       threads = 0; pool = null;
     }
   }
@@ -327,8 +349,12 @@ export async function walkScan(rootPath: string, opts: WalkOptions): Promise<Wal
         w.onmessage = (e: MessageEvent) => {
           const m = e.data as { type: string; batch?: WalkBatch; error?: string; infoClass?: number };
           if (m.type === 'result' && m.batch) { infoClass = m.infoClass ?? infoClass; absorb(m.batch); }
-          else if (m.type === 'fail') errors.push(`Fallo en el recorrido: ${m.error}`);
-          else return;
+          else if (m.type === 'fail') {
+            // la tarea se pierde: sus carpetas cuentan como no leídas
+            const t = busy.get(w);
+            if (t) { failed += t.refs.length; sample(failedSample, t.paths); }
+            notes.push(`walk task failed in a worker: ${m.error}`);
+          } else return;
           busy.delete(w); idle.push(w);
           dispatch();
         };
@@ -339,13 +365,13 @@ export async function walkScan(rootPath: string, opts: WalkOptions): Promise<Wal
           workers.splice(workers.indexOf(w), 1);
           const pi = all.indexOf(w); if (pi >= 0) all.splice(pi, 1);
           if (t) for (let k = 0; k < t.refs.length; k++) { qRefs.push(t.refs[k]); qPaths.push(t.paths[k]); }
-          errors.push(`Un worker de recorrido falló: ${ev.message}`);
-          if (!workers.length) finish(new Error('todos los workers fallaron; se sigue en un solo hilo'));
+          notes.push(`walk worker crashed: ${ev.message}`);
+          if (!workers.length) finish(new Error('all walk workers failed; continuing on a single thread'));
           else dispatch();
         };
       }
       dispatch();
-    }).catch((e: Error) => { errors.push(e.message); threads = 0; });
+    }).catch((e: Error) => { notes.push(e.message); threads = 0; });
   }
 
   if (qRefs.length && !opts.isCancelled?.()) {
@@ -356,7 +382,7 @@ export async function walkScan(rootPath: string, opts: WalkOptions): Promise<Wal
       await new Promise(r => setImmediate(r));
     }
   }
-  if (opts.isCancelled?.()) throw new Error('Escaneo cancelado');
+  if (opts.isCancelled?.()) throw engineError('error.cancelled');
   tick(true);
-  return { store, errors, denied, dirsListed, threads };
+  return { store, denied, deniedSample, failed, failedSample, notes, dirsListed, threads };
 }

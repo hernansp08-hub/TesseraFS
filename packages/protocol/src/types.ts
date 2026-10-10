@@ -4,6 +4,16 @@ export const FLAG = {
   DIR: 1, HIDDEN: 2, SYSTEM: 4, HARDLINK: 8, COMPRESSED: 16, REPARSE: 32, CLOUD: 64, SPARSE: 128,
 } as const;
 
+/**
+ * Mensaje para el usuario emitido por un motor. La interfaz lo traduce con la clave `engine.<code>`
+ * del catálogo; `message` es el texto en inglés, de reserva y para registros. Ver docs/tecnica/i18n.md.
+ */
+export interface EngineMessage {
+  code: string;
+  params?: Record<string, string | number>;
+  message: string;
+}
+
 export type Engine = 'mft' | 'walk';
 export type EngineChoice = 'auto' | Engine;
 
@@ -25,7 +35,7 @@ export interface ScanProgress {
   entries: number;   // registros / entradas procesadas
   bytes: number;     // bytes acumulados (lógicos)
   elapsedMs: number;
-  detail?: string;   // ruta actual o mensaje
+  detail?: string;   // ruta actual (nunca texto para el usuario: la fase la traduce la interfaz)
   fraction?: number; // 0..1 cuando el motor conoce el total de trabajo (p. ej. lectura de la MFT)
 }
 
@@ -39,7 +49,7 @@ export interface ScanResult {
   bytes: number;
   elapsedMs: number;
   volume: VolumeInfo | null;
-  warnings: string[]; // p. ej. "MFT no disponible sin administrador: se usó el recorrido"
+  warnings: EngineMessage[]; // p. ej. { code: 'scan.mftNeedsAdmin', message: 'MFT unavailable…' }
 }
 
 export interface NodeRow {
@@ -64,12 +74,13 @@ export interface ChildrenResponse { total: number; rows: NodeRow[] }
 
 export interface SearchRequest { query: string; root: number; limit: number }
 export interface SearchRow extends NodeRow { path: string }
-export interface SearchResponse { total: number; totalBytes: number; rows: SearchRow[]; error?: string }
+export interface SearchResponse { total: number; totalBytes: number; rows: SearchRow[]; error?: EngineMessage }
 
 export interface ExtStat { ext: string; size: number; alloc: number; count: number }
 
 export type ActionKind = 'open' | 'reveal' | 'properties' | 'trash';
-export interface ActionResult { ok: boolean; message?: string }
+/** `code` + `params` se traducen en la interfaz; `message` es el texto del sistema o de reserva en inglés. */
+export interface ActionResult { ok: boolean; code?: string; params?: Record<string, string | number>; message?: string }
 
 export interface ElevationInfo { elevated: boolean; canElevate: boolean }
 

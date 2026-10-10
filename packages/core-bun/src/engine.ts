@@ -4,11 +4,13 @@ import { win32 as winPath } from 'node:path';
 import { availableParallelism } from 'node:os';
 import {
   encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type ElevationInfo, type Engine,
-  type ExtStat, type NodeRow, type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest, type SearchResponse, type VolumeInfo,
+  type EngineMessage, type ExtStat, type NodeRow, type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest,
+  type SearchResponse, type VolumeInfo,
 } from '../../protocol/src/index.ts';
+import { EngineError, engineError, errorText, msg, type MessageCode, type MessageParams } from './messages.ts';
 import { mftScan } from './mft.ts';
 import { Store } from './store.ts';
-import { walkScan } from './walk.ts';
+import { checkRoot, walkScan, type WalkOutcome } from './walk.ts';
 import './walkworker.ts'; // registra el worker cuando este módulo se carga como tal
 import { Mem, isElevated, kernel32, lastError, ole32, quietErrors, readW, shell32, winErrorText, wstr, wstr2 } from './win32.ts';
 
@@ -16,9 +18,9 @@ export interface EngineOptions {
   /** Workers para el recorrido; 0 = hilo principal. Por defecto: la mitad de los hilos (2..8). */
   threads?: number;
   workerUrl?: string | URL;
+  /** Registro de diagnóstico para desarrolladores (en inglés; nunca llega a la interfaz). */
+  log?: (line: string) => void;
 }
-
-export class ScanBusyError extends Error { }
 
 export const defaultThreads = () => Math.min(8, Math.max(2, Math.floor(availableParallelism() / 2)));
 
@@ -26,7 +28,7 @@ export const defaultThreads = () => Math.min(8, Math.max(2, Math.floor(available
 export function normalizePath(p: string): string {
   let s = (p || '').trim().replace(/\//g, '\\');
   if (/^[a-zA-Z]:$/.test(s)) s += '\\';
-  if (!/^[a-zA-Z]:\\/.test(s) && !s.startsWith('\\\\')) throw new Error(`Ruta no válida (debe ser absoluta): ${p}`);
+  if (!/^[a-zA-Z]:\\/.test(s) && !s.startsWith('\\\\')) throw engineError('error.invalidPath', { path: String(p ?? '') });
   s = winPath.normalize(s);
   if (/^[a-zA-Z]:\\$/.test(s)) return s[0].toUpperCase() + ':\\';
   s = s.replace(/\\+$/, '');
@@ -94,12 +96,18 @@ export function runElevated(file: string, params: string, cwd: string, show = 0)
   return shellExecuteEx('runas', file, params, cwd, show, 0x00000400 /* SEE_MASK_FLAG_NO_UI */);
 }
 
-// Códigos heredados de SHFileOperation (no son errores Win32)
+// Códigos heredados de SHFileOperation (no son errores Win32 y FormatMessage no los conoce): viajan
+// en inglés en el parámetro `error` de action.failed. 0x75 (DE_OPCANCELLED) es action.cancelled.
 const DE_CODES: Record<number, string> = {
-  0x71: 'Origen y destino son el mismo archivo', 0x75: 'Operación cancelada', 0x78: 'Acceso denegado',
-  0x79: 'La ruta es demasiado larga', 0x7C: 'La ruta no es válida', 0x80: 'Ya existe un archivo con ese nombre',
-  0x402: 'Error desconocido', 0x10000: 'Error en el destino',
+  0x71: 'Source and destination are the same file', 0x78: 'Access denied',
+  0x79: 'The path is too long', 0x7C: 'The path is not valid', 0x80: 'A file with that name already exists',
+  0x402: 'Unknown error', 0x10000: 'Error at the destination',
 };
+const DE_OPCANCELLED = 0x75, ERROR_CANCELLED = 1223;
+
+/** Resultado de una acción con su código traducible. */
+const result = (ok: boolean, code: MessageCode, params?: MessageParams): ActionResult => ({ ok, ...msg(code, params) });
+const failed = (error: string) => result(false, 'action.failed', { error });
 
 function exists(path: string): boolean {
   const d = new Uint8Array(36);
@@ -117,10 +125,20 @@ export function trashPath(path: string): ActionResult {
   m.dv.setUint16(32, 0x4 | 0x10 | 0x40 | 0x400 | 0x4000, true);
   const rc = shell32().SHFileOperationW(m.p);
   void from;
-  if (rc !== 0) return { ok: false, message: DE_CODES[rc] ?? winErrorText(rc) };
-  if (m.dv.getInt32(36, true)) return { ok: false, message: 'Operación cancelada' };
-  if (exists(path)) return { ok: false, message: 'Windows no movió el elemento a la papelera' };
-  return { ok: true, message: 'Movido a la papelera' };
+  if (rc === DE_OPCANCELLED || rc === ERROR_CANCELLED) return result(false, 'action.cancelled');
+  if (rc !== 0) return failed(DE_CODES[rc] ?? winErrorText(rc));
+  if (m.dv.getInt32(36, true)) return result(false, 'action.cancelled'); // fAnyOperationsAborted
+  if (exists(path)) return result(false, 'action.trashNotMoved');
+  return result(true, 'action.trashed');
+}
+
+/** Avisos del recorrido: sólo cuántas carpetas no se pudieron leer (y unas pocas rutas de muestra). */
+export function walkWarnings(w: Pick<WalkOutcome, 'denied' | 'deniedSample' | 'failed' | 'failedSample'>): EngineMessage[] {
+  const out: EngineMessage[] = [];
+  const params = (count: number, sample: string[]): MessageParams => sample.length ? { count, sample: sample.join(', ') } : { count };
+  if (w.denied) out.push(msg('scan.accessDenied', params(w.denied, w.deniedSample)));
+  if (w.failed) out.push(msg('scan.readErrors', params(w.failed, w.failedSample)));
+  return out;
 }
 
 export class TesseraEngine {
@@ -137,7 +155,11 @@ export class TesseraEngine {
   elevation(): ElevationInfo { return { elevated: this.elevated, canElevate: !this.elevated }; }
 
   async scan(req: ScanRequest, onProgress: (p: ScanProgress) => void = () => { }): Promise<ScanResult> {
-    if (this.scanning) throw new ScanBusyError('Ya hay un escaneo en curso');
+    if (this.scanning) throw engineError('error.scanBusy');
+    // Una ruta no válida, inexistente o que no es carpeta se rechaza antes de soltar el árbol anterior,
+    // que así sigue sirviendo a la interfaz
+    const path = normalizePath(req.path);
+    checkRoot(path);
     this.scanning = true;
     // el árbol anterior se suelta ya: sus ids dejan de valer al terminar y así no conviven dos árboles en memoria
     this.store = null; this.result = null;
@@ -145,12 +167,11 @@ export class TesseraEngine {
     const t0 = performance.now();
     const ms = () => Math.round(performance.now() - t0);
     try {
-      const path = normalizePath(req.path);
       onProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0, detail: path });
       const vol = volumeInfo(volumeRoot(path));
       const isNtfs = vol?.fs.toUpperCase() === 'NTFS';
       const isDriveRoot = /^[A-Z]:\\$/.test(path);
-      const warnings: string[] = [];
+      const warnings: EngineMessage[] = [];
       let engine: Engine = 'walk';
       let store: Store | null = null;
       let lastBytes = 0;
@@ -158,15 +179,18 @@ export class TesseraEngine {
 
       const wantMft = req.engine === 'mft' || (req.engine === 'auto' && isDriveRoot);
       if (wantMft) {
-        if (!this.elevated) warnings.push('MFT no disponible sin administrador: se usó el recorrido');
-        else if (!isNtfs) warnings.push(`MFT no disponible en ${vol?.fs || 'este sistema de archivos'}: se usó el recorrido`);
-        else if (!/^[A-Z]:\\/.test(path)) warnings.push('MFT no disponible en rutas de red: se usó el recorrido');
+        // Mismo orden que el motor Rust: primero lo que ni siquiera con administrador funcionaría
+        if (!/^[A-Z]:\\/.test(path)) warnings.push(msg('scan.mftNetworkPath'));
+        else if (!isNtfs) warnings.push(msg('scan.mftUnsupportedFs', { fs: vol?.fs || '?' }));
+        else if (!this.elevated) warnings.push(msg('scan.mftNeedsAdmin'));
         else {
           try {
             const r = await mftScan(path, p => prog({ phase: p.phase, entries: p.entries, bytes: p.bytes, elapsedMs: ms(), detail: p.detail, fraction: p.fraction }));
             store = r.store; engine = 'mft'; warnings.push(...r.warnings);
           } catch (e) {
-            warnings.push(`MFT no disponible (${(e as Error).message}): se usó el recorrido`);
+            if (e instanceof EngineError && e.code === 'error.cancelled') throw e;
+            this.opts.log?.(`MFT scan failed, falling back to the walk: ${errorText(e)}`);
+            warnings.push(msg('scan.mftFailed', { error: errorText(e) }));
           }
         }
       }
@@ -176,14 +200,11 @@ export class TesseraEngine {
           onProgress: p => prog({ phase: 'walk', entries: p.entries, bytes: p.bytes, elapsedMs: ms(), detail: p.detail }),
         });
         store = w.store;
-        if (w.denied) warnings.push(`${w.denied} carpetas sin permiso de lectura (acceso denegado); su contenido no se cuenta`);
-        const other = w.errors.filter(e => !e.startsWith('Acceso denegado'));
-        warnings.push(...w.errors.filter(e => e.startsWith('Acceso denegado')).slice(0, 20));
-        warnings.push(...other.slice(0, 20));
-        if (other.length > 20) warnings.push(`… y ${other.length - 20} errores más`);
+        for (const n of w.notes) this.opts.log?.(n);
+        warnings.push(...walkWarnings(w));
         if (isNtfs) store.dedupHardlinks();
       }
-      onProgress({ phase: 'aggregate', entries: store.n - 1, bytes: lastBytes, elapsedMs: ms(), detail: 'Calculando totales' });
+      onProgress({ phase: 'aggregate', entries: store.n - 1, bytes: lastBytes, elapsedMs: ms() });
       await new Promise(r => setImmediate(r));
       store.finalize();
       this.store = store;
@@ -197,7 +218,7 @@ export class TesseraEngine {
       Bun.gc(true); // devuelve al sistema la basura del escaneo (lotes, crecimiento de arreglos)
       return result;
     } catch (e) {
-      onProgress({ phase: 'error', entries: 0, bytes: 0, elapsedMs: ms(), detail: (e as Error).message });
+      onProgress({ phase: 'error', entries: 0, bytes: 0, elapsedMs: ms() }); // el error en sí llega como EngineMessage
       throw e;
     } finally {
       this.scanning = false;
@@ -206,8 +227,8 @@ export class TesseraEngine {
 
   private need(id: number): Store {
     const s = this.store;
-    if (!s) throw new Error('Todavía no hay ningún escaneo');
-    if (!s.has(id)) throw new Error(`Id de nodo no válido: ${id}`);
+    if (!s) throw engineError('error.noScan');
+    if (!s.has(id)) throw engineError('error.invalidNode', { id: Number.isFinite(id) ? id : String(id) });
     return s;
   }
 
@@ -237,27 +258,27 @@ export class TesseraEngine {
       case 'open': {
         ensureCom();
         const r = Number(shell32().ShellExecuteW(0n, wstr('open'), wstr(path), null, null, 1));
-        return r > 32 ? { ok: true } : { ok: false, message: winErrorText(r) };
+        return r > 32 ? { ok: true } : failed(winErrorText(r));
       }
       case 'reveal': {
         ensureCom();
         const r = id === s.rootId
           ? Number(shell32().ShellExecuteW(0n, wstr('open'), wstr(path), null, null, 1))
           : Number(shell32().ShellExecuteW(0n, wstr('open'), wstr('explorer.exe'), wstr(`/select,"${path}"`), null, 1));
-        return r > 32 ? { ok: true } : { ok: false, message: winErrorText(r) };
+        return r > 32 ? { ok: true } : failed(winErrorText(r));
       }
       case 'properties': {
         const err = shellExecuteEx('properties', path, null, null, 5, 0x0000000C /* INVOKEIDLIST */ | 0x00000400 /* FLAG_NO_UI */);
-        return err ? { ok: false, message: winErrorText(err) } : { ok: true };
+        return err === ERROR_CANCELLED ? result(false, 'action.cancelled') : err ? failed(winErrorText(err)) : { ok: true };
       }
       case 'trash': {
-        if (id === s.rootId) return { ok: false, message: 'No se puede enviar a la papelera la carpeta escaneada' };
+        if (id === s.rootId) return result(false, 'action.trashRoot');
         const r = trashPath(path);
         if (r.ok) s.remove(id);
         return r;
       }
       default:
-        return { ok: false, message: `Acción desconocida: ${String(kind)}` };
+        return result(false, 'action.unknown', { kind: String(kind) });
     }
   }
 }

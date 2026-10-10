@@ -4,7 +4,7 @@
 //  3) repite cada búsqueda con compileQuery y compara total, bytes y tamaños de las primeras filas.
 // Uso: bun crates/tessera-cli/tests/crosscheck.ts arbol.json slice.bin busquedas.json minBytes maxNodes
 import { readFileSync } from 'node:fs';
-import { compileQuery, decodeSlice, encodeSlice, type SliceSource } from '../../../packages/protocol/src';
+import { compileQuery, decodeSlice, encodeSlice, type EngineMessage, type SliceSource } from '../../../packages/protocol/src';
 
 const [jsonPath, slicePath, searchPath, minArg, maxArg] = process.argv.slice(2);
 const dump = JSON.parse(readFileSync(jsonPath, 'utf8')) as {
@@ -40,10 +40,16 @@ const pathOf = (id: number): string => {
   for (const s of parts.reverse()) p += (p.endsWith('\\') ? '' : '\\') + s;
   return p;
 };
-const searches = JSON.parse(readFileSync(searchPath, 'utf8')) as { query: string; response: { total: number; totalBytes: number; rows: { id: number; size: number; path: string }[]; error?: string } }[];
+const searches = JSON.parse(readFileSync(searchPath, 'utf8')) as { query: string; response: { total: number; totalBytes: number; rows: { id: number; size: number; path: string }[]; error?: EngineMessage } }[];
 for (const { query, response: r } of searches) {
   const q = compileQuery(query);
-  if (q.error || r.error) { check(!!q.error === !!r.error, `«${query}»: error en ambos (${q.error} | ${r.error})`); continue; }
+  if (q.error || r.error) {
+    // Mismo código y, salvo en expresiones regulares (el texto del error depende del motor), mismos parámetros
+    const same = q.error?.code === r.error?.code
+      && (q.error?.code === 'query.invalidRegex' || JSON.stringify(q.error?.params) === JSON.stringify(r.error?.params));
+    check(same, `«${query}»: error en ambos (${q.error?.code} ${JSON.stringify(q.error?.params)} | ${r.error?.code} ${JSON.stringify(r.error?.params)})`);
+    continue;
+  }
   const hits = N.filter(n => n.id !== 0 && q.match({ name: n.name, ext: n.ext, isDir: n.isDir, size: n.size, alloc: n.alloc, mtime: n.mtime, path: () => pathOf(n.id) }));
   const bytes = hits.reduce((s, n) => s + n.size, 0);
   hits.sort((a, b) => b.size - a.size);

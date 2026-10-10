@@ -3,7 +3,8 @@
 // (y la asignación de los flujos con nombre) y $REPARSE_POINT; fusiona los registros de extensión con
 // su registro base y cuenta una sola vez los enlaces duros. Implementado a partir de la documentación
 // pública del formato (MS-FSCC, NTFS_VOLUME_DATA_BUFFER y la descripción de libyal/Linux-NTFS).
-import { FLAG } from '../../protocol/src/index.ts';
+import { FLAG, type EngineMessage } from '../../protocol/src/index.ts';
+import { engineError, msg } from './messages.ts';
 import { Store, flagsFromAttrs } from './store.ts';
 import {
   FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_SHARE_ALL, GENERIC_READ, INVALID_HANDLE, OPEN_EXISTING,
@@ -297,26 +298,30 @@ function extentsViaFsctl(letter: string): Run[] | null {
   }
 }
 
-export interface MftProgress { phase: 'mft-read' | 'link'; entries: number; bytes: number; detail: string; fraction?: number }
+/** `detail` sólo lleva rutas (p. ej. `C:\$MFT`); el texto de cada fase lo pone la interfaz. */
+export interface MftProgress { phase: 'mft-read' | 'link'; entries: number; bytes: number; detail?: string; fraction?: number }
 
-/** Lee y parsea la MFT del volumen de `rootPath`. Lanza un error si no hay acceso (sin admin). */
+/**
+ * Lee y parsea la MFT del volumen de `rootPath`. Si falla (p. ej. sin administrador) lanza un Error
+ * con texto técnico en inglés, que el motor convierte en el aviso `scan.mftFailed`.
+ */
 export async function mftScan(rootPath: string, onProgress?: (p: MftProgress) => void, isCancelled?: () => boolean):
-  Promise<{ store: Store; warnings: string[]; records: number }> {
+  Promise<{ store: Store; warnings: EngineMessage[]; records: number }> {
   const letter = rootPath[0].toUpperCase();
   const k = kernel32();
-  const warnings: string[] = [];
+  const warnings: EngineMessage[] = [];
   const h = k.CreateFileW(wstr(`\\\\.\\${letter}:`), GENERIC_READ, FILE_SHARE_ALL, null, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, 0n);
-  if (h === INVALID_HANDLE) throw new Error(`No se pudo abrir el volumen ${letter}: (${winErrorText(lastError())})`);
+  if (h === INVALID_HANDLE) throw new Error(`cannot open volume ${letter}: (${winErrorText(lastError())})`);
   let st: MftState;
   let geo: NtfsGeometry;
   try {
     const vd = new Uint8Array(512), ret = new Uint32Array(1);
     if (!k.DeviceIoControl(h, FSCTL_GET_NTFS_VOLUME_DATA, null, 0, vd, vd.length, ret, null)) {
-      throw new Error(`El volumen ${letter}: no es NTFS (${winErrorText(lastError())})`);
+      throw new Error(`volume ${letter}: is not NTFS (${winErrorText(lastError())})`);
     }
     geo = parseVolumeData(vd);
     const { bytesPerCluster: cl, recordSize: rs, bytesPerSector: sec } = geo;
-    if (!rs || !cl || rs % 256) throw new Error('Geometría NTFS no válida');
+    if (!rs || !cl || rs % 256) throw new Error('invalid NTFS geometry');
     const CH = Math.max(4 << 20, cl, rs) - (Math.max(4 << 20, cl, rs) % Math.max(cl, rs));
     const buf = alignedAlloc(CH);
     try {
@@ -332,11 +337,11 @@ export async function mftScan(rootPath: string, onProgress?: (p: MftProgress) =>
       if (!runs || !runs.length) {
         read(geo.mftStartLcn * cl, Math.max(rs, cl));
         const r0 = new Uint8Array(buf.u8.subarray(0, rs));
-        if (!applyFixups(r0, new DataView(r0.buffer), 0, rs)) throw new Error('El registro 0 de la MFT está dañado');
+        if (!applyFixups(r0, new DataView(r0.buffer), 0, rs)) throw new Error('MFT record 0 is damaged');
         const d = dataRunsOfRecord(r0, 0, rs);
-        if (!d) throw new Error('No se encontró $DATA en el registro 0 de la MFT');
+        if (!d) throw new Error('no $DATA attribute in MFT record 0');
         runs = d.runs;
-        if ((d.lastVcn + 1) * cl < d.allocated) warnings.push('La MFT está muy fragmentada: puede faltar parte de ella');
+        if ((d.lastVcn + 1) * cl < d.allocated) warnings.push(msg('scan.mftFragmented'));
       }
       const total = Math.floor(geo.mftValid / rs);
       st = new MftState(total);
@@ -346,7 +351,7 @@ export async function mftScan(rootPath: string, onProgress?: (p: MftProgress) =>
         let fileOff = run.vcn * cl, diskOff = run.lcn * cl;
         let remaining = Math.min(run.clusters * cl, geo.mftValid - fileOff);
         while (remaining > 0) {
-          if (isCancelled?.()) throw new Error('Escaneo cancelado');
+          if (isCancelled?.()) throw engineError('error.cancelled');
           const n = Math.min(CH, remaining);
           const got = read(diskOff, n);
           const recs = Math.floor(Math.min(got, n) / rs);
@@ -363,14 +368,14 @@ export async function mftScan(rootPath: string, onProgress?: (p: MftProgress) =>
   } finally {
     k.CloseHandle(h);
   }
-  if (st.bad) warnings.push(`${st.bad} registros de la MFT con fixups inválidos se ignoraron`);
-  onProgress?.({ phase: 'link', entries: st.parsed, bytes: geo.mftValid, detail: 'Enlazando carpetas', fraction: 1 });
+  if (st.bad) warnings.push(msg('scan.mftBadRecords', { count: st.bad }));
+  onProgress?.({ phase: 'link', entries: st.parsed, bytes: geo.mftValid, fraction: 1 });
   await new Promise(r => setImmediate(r));
   const parts = rootPath.replace(/^[A-Za-z]:\\?/, '').split('\\').filter(Boolean);
   const rootRec = parts.length ? resolveMftPath(st, parts) : MFT_ROOT;
-  if (rootRec < 0) throw new Error(`No se encontró ${rootPath} en la MFT`);
+  if (rootRec < 0) throw new Error(`${rootPath} not found in the MFT`);
   const { store, orphans, hardlinks } = buildStore(st, rootRec, rootPath);
-  if (orphans) warnings.push(`${orphans} entradas huérfanas (sin carpeta padre válida) no se muestran`);
+  if (orphans) warnings.push(msg('scan.mftOrphans', { count: orphans }));
   void hardlinks;
   return { store, warnings, records: st.parsed };
 }

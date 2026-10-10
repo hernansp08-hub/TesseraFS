@@ -360,7 +360,7 @@ pub fn link(t: &mut FrnTable, outs: Vec<ChunkOut>) -> Result<(RawTree, LinkStats
     }
     let root = node_of.get(r5).copied().unwrap_or(NONE);
     if root == NONE {
-        return Err("La MFT no contiene la carpeta raíz (registro 5)".into());
+        return Err("The MFT has no root folder (record 5)".into());
     }
     for (id, &pref) in parents.iter().enumerate() {
         if id as u32 == root {
@@ -374,7 +374,7 @@ pub fn link(t: &mut FrnTable, outs: Vec<ChunkOut>) -> Result<(RawTree, LinkStats
     raw.root = root;
     raw.flags[root as usize] |= flag::DIR;
     if !raw.parent.contains(&root) {
-        return Err("La carpeta raíz de la MFT no tiene hijos".into());
+        return Err("The MFT root folder has no children".into());
     }
     Ok((raw, stats))
 }
@@ -388,7 +388,7 @@ pub fn decode_runs(b: &[u8], start_vcn: u64) -> Result<Vec<(u64, i64, u64)>, Str
         let (ls, os) = ((h & 0x0F) as usize, (h >> 4) as usize);
         i += 1;
         if ls == 0 || ls > 8 || os > 8 || i + ls + os > b.len() {
-            return Err("Lista de runs corrupta".into());
+            return Err("Corrupt runlist".into());
         }
         let mut len = 0u64;
         for k in 0..ls {
@@ -428,7 +428,7 @@ pub fn mft_runs_from_record0(rec: &[u8]) -> Result<Vec<(u64, i64, u64)>, String>
             break;
         }
         if ty == 0x20 {
-            return Err("El registro 0 usa $ATTRIBUTE_LIST: hacen falta los punteros de recuperación".into());
+            return Err("MFT record 0 uses $ATTRIBUTE_LIST: retrieval pointers are required".into());
         }
         if ty == 0x80 && rec[a + 8] != 0 && rec[a + 9] == 0 && len >= 0x40 {
             let lowest = r64(rec, a + 0x10);
@@ -437,7 +437,7 @@ pub fn mft_runs_from_record0(rec: &[u8]) -> Result<Vec<(u64, i64, u64)>, String>
         }
         a += len;
     }
-    Err("El registro 0 no tiene $DATA".into())
+    Err("MFT record 0 has no $DATA".into())
 }
 
 #[cfg(windows)]
@@ -479,7 +479,7 @@ mod io {
         fn new(len: usize) -> Self {
             let layout = std::alloc::Layout::from_size_align(len, 4096).unwrap();
             let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-            assert!(!ptr.is_null(), "sin memoria");
+            assert!(!ptr.is_null(), "out of memory");
             AlignedBuf { ptr, len }
         }
         fn as_mut(&mut self) -> &mut [u8] {
@@ -506,7 +506,7 @@ mod io {
             )
         };
         if h == INVALID_HANDLE_VALUE {
-            return Err(format!("No se pudo abrir el volumen {letter}: {}", crate::sys::last_error_text()));
+            return Err(format!("Could not open volume {letter}: {}", crate::sys::last_error_text()));
         }
         Ok(Handle(h))
     }
@@ -616,7 +616,7 @@ mod io {
         read_at(h, buf.as_mut(), off)?;
         let rec = &mut buf.as_mut()[..rs];
         if &rec[0..4] != b"FILE" || !apply_fixups(rec) {
-            return Err("Registro 0 de la MFT ilegible".into());
+            return Err("MFT record 0 is unreadable".into());
         }
         mft_runs_from_record0(rec)
     }
@@ -638,7 +638,7 @@ mod io {
         let cs = vd.BytesPerCluster as u64;
         let sector = (vd.BytesPerSector as u64).max(512);
         if rs < 512 || rs % 512 != 0 || cs == 0 {
-            return Err(format!("Geometría NTFS no soportada (registro {rs} B, clúster {cs} B)"));
+            return Err(format!("Unsupported NTFS geometry (record {rs} B, cluster {cs} B)"));
         }
         let valid = vd.MftValidDataLength as u64;
         let extents = match extents_fsctl(letter) {
@@ -654,7 +654,7 @@ mod io {
         let mut expect_vcn = 0u64;
         for &(vcn, lcn, clusters) in &sorted {
             if lcn < 0 || vcn != expect_vcn {
-                return Err("Extents de la MFT no contiguos".into());
+                return Err("MFT extents are not contiguous".into());
             }
             expect_vcn = vcn + clusters;
             let mft_off = vcn * cs;
@@ -662,7 +662,7 @@ mod io {
                 break;
             }
             if mft_off % rs as u64 != 0 {
-                return Err("Extent de la MFT no alineado a registro".into());
+                return Err("MFT extent not aligned to a record".into());
             }
             let ext_len = (clusters * cs).min(valid - mft_off);
             let mut done = 0u64;
@@ -718,7 +718,7 @@ mod io {
                                 prog.bytes.fetch_add(t.out.bytes, Relaxed);
                                 prog.work_done.fetch_add(t.len as u64, Relaxed);
                             }
-                            Ok(_) => t.err = Some("Lectura incompleta de la MFT".into()),
+                            Ok(_) => t.err = Some("Short read from the MFT".into()),
                             Err(e) => t.err = Some(e),
                         }
                     }
@@ -727,10 +727,10 @@ mod io {
         });
         let tasks: Vec<Task> = tasks.into_iter().map(|m| m.into_inner().unwrap()).collect();
         if cancel.load(Relaxed) {
-            return Err("Escaneo cancelado".into());
+            return Err("Scan cancelled".into());
         }
         if let Some(e) = tasks.iter().find_map(|t| t.err.clone()) {
-            return Err(format!("Error leyendo la MFT: {e}"));
+            return Err(format!("Error reading the MFT: {e}"));
         }
         let records: u64 = tasks.iter().map(|t| t.out.records).sum();
         let outs: Vec<ChunkOut> = tasks.into_iter().map(|t| t.out).collect();

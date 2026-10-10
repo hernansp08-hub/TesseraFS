@@ -5,9 +5,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::build::{build, RawTree};
+use crate::msg;
 use crate::sys;
 use crate::tree::Tree;
-use crate::types::{Engine, EngineChoice, ScanPhase, ScanProgress, ScanResult, VolumeInfo};
+use crate::types::{Engine, EngineChoice, EngineMessage, ScanPhase, ScanProgress, ScanResult, VolumeInfo};
 
 /// Contadores compartidos con los motores; un hilo los publica a ~15 Hz.
 pub struct Progress {
@@ -97,13 +98,13 @@ pub struct Scan {
 }
 
 /// Normaliza a ruta absoluta: "C:" → "C:\\", sin barra final salvo en la raíz.
-pub fn normalize_path(path: &str) -> Result<String, String> {
+pub fn normalize_path(path: &str) -> Result<String, EngineMessage> {
     let p = path.trim().trim_matches('"');
     if p.is_empty() {
-        return Err("Ruta vacía".into());
+        return Err(msg::invalid_path(path));
     }
     let p = if p.len() == 2 && p.as_bytes()[1] == b':' { format!("{p}\\") } else { p.to_string() };
-    let abs = std::path::absolute(&p).map_err(|e| format!("Ruta no válida «{path}»: {e}"))?;
+    let abs = std::path::absolute(&p).map_err(|_| msg::invalid_path(path))?;
     let mut s = abs.to_string_lossy().into_owned();
     if let Some(rest) = s.strip_prefix(r"\\?\") {
         s = if let Some(unc) = rest.strip_prefix(r"UNC\") { format!(r"\\{unc}") } else { rest.to_string() };
@@ -133,15 +134,16 @@ pub fn scan(
     opts: &ScanOptions,
     on_progress: &(dyn Fn(ScanProgress) + Sync),
     cancel: &AtomicBool,
-) -> Result<Scan, String> {
+) -> Result<Scan, EngineMessage> {
     let prog = Progress::new();
     let root = normalize_path(path)?;
+    sys::check_folder(&root)?;
     on_progress(prog.snapshot());
     let vol_root = sys::volume_root_of(&root).unwrap_or_else(|| root.clone());
     let volume: Option<VolumeInfo> = sys::volume_info(&vol_root);
     let fs = volume.as_ref().map(|v| v.fs.to_ascii_uppercase()).unwrap_or_default();
     let whole_volume = root.eq_ignore_ascii_case(vol_root.trim_end_matches('\\')) || root.eq_ignore_ascii_case(&vol_root);
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<EngineMessage> = Vec::new();
     let want_mft = match choice {
         EngineChoice::Walk => false,
         EngineChoice::Mft => true,
@@ -168,9 +170,10 @@ pub fn scan(
     let (tree, engine) = match outcome {
         Ok(x) => x,
         Err(e) => {
+            // El error viaja en el Err; `detail` sólo lleva rutas
             prog.set_phase(ScanPhase::Error);
             let mut p = prog.snapshot();
-            p.detail = Some(e.clone());
+            p.detail = None;
             on_progress(p);
             return Err(e);
         }
@@ -210,25 +213,27 @@ fn run_engines(
     opts: &ScanOptions,
     prog: &Progress,
     cancel: &AtomicBool,
-    warnings: &mut Vec<String>,
-) -> Result<(Tree, Engine), String> {
+    warnings: &mut Vec<EngineMessage>,
+) -> Result<(Tree, Engine), EngineMessage> {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().map_err(|e| e.to_string())?;
     if want_mft {
         let letter = drive_letter(vol_root);
-        let elevated = sys::elevation().elevated;
-        if !elevated {
-            warnings.push("MFT no disponible sin administrador: se usó el recorrido".into());
+        // Primero lo que no funcionaría ni con administrador
+        if sys::is_network(vol_root) {
+            warnings.push(msg::mft_network_path());
         } else if fs != "NTFS" || letter.is_none() {
-            warnings.push(format!("MFT sólo disponible en volúmenes NTFS locales ({}): se usó el recorrido", if fs.is_empty() { "?" } else { fs }));
+            warnings.push(msg::mft_unsupported_fs(if fs.is_empty() { "?" } else { fs }));
+        } else if !sys::elevation().elevated {
+            warnings.push(msg::mft_needs_admin());
         } else {
             #[cfg(windows)]
             {
                 prog.set_phase(ScanPhase::MftRead);
-                *prog.detail.lock().unwrap() = Some(format!("Leyendo la MFT de {vol_root}"));
+                *prog.detail.lock().unwrap() = Some(vol_root.to_string());
                 match pool.install(|| crate::mft::read_mft(letter.unwrap(), prog, cancel)) {
                     Ok(out) => {
                         if out.orphans > 0 {
-                            warnings.push(format!("{} entradas sin carpeta padre válida (cambios durante el escaneo)", out.orphans));
+                            warnings.push(msg::mft_orphans(out.orphans));
                         }
                         prog.set_phase(ScanPhase::Aggregate);
                         let sub: Vec<String> = if whole_volume {
@@ -239,11 +244,11 @@ fn run_engines(
                         let display = if whole_volume { vol_root.to_string() } else { root.to_string() };
                         match pool.install(|| build(out.raw, display, &sub)) {
                             Ok(tree) => return Ok((tree, Engine::Mft)),
-                            Err(e) => warnings.push(format!("No se pudo usar la MFT ({e}): se usó el recorrido")),
+                            Err(e) => warnings.push(msg::mft_failed(&e)),
                         }
                     }
-                    Err(e) if cancel.load(Relaxed) => return Err(e),
-                    Err(e) => warnings.push(format!("No se pudo leer la MFT ({e}): se usó el recorrido")),
+                    Err(_) if cancel.load(Relaxed) => return Err(msg::cancelled()),
+                    Err(e) => warnings.push(msg::mft_failed(&e)),
                 }
             }
         }
@@ -265,8 +270,8 @@ fn walk_engine(
     opts: &ScanOptions,
     prog: &Progress,
     cancel: &AtomicBool,
-    warnings: &mut Vec<String>,
-) -> Result<RawTree, String> {
+    warnings: &mut Vec<EngineMessage>,
+) -> Result<RawTree, EngineMessage> {
     let remote = root.starts_with(r"\\");
     let wo = crate::walk::WalkOptions {
         threads,
@@ -274,13 +279,11 @@ fn walk_engine(
         dedupe_links: matches!(fs, "NTFS" | "REFS"),
     };
     let out = crate::walk::walk(root, &wo, prog, cancel)?;
+    if out.denied > 0 {
+        warnings.push(msg::access_denied(out.denied, &out.denied_samples));
+    }
     if out.errors > 0 {
-        let mut w = format!("{} carpetas no se pudieron leer (acceso denegado u otros errores)", out.errors);
-        for s in out.error_samples.iter().take(5) {
-            w.push_str("\n  ");
-            w.push_str(s);
-        }
-        warnings.push(w);
+        warnings.push(msg::read_errors(out.errors, &out.error_samples));
     }
     Ok(out.raw)
 }
@@ -293,9 +296,9 @@ fn walk_engine(
     _opts: &ScanOptions,
     _prog: &Progress,
     _cancel: &AtomicBool,
-    _warnings: &mut Vec<String>,
-) -> Result<RawTree, String> {
-    Err("El motor de recorrido sólo está implementado para Windows".into())
+    _warnings: &mut Vec<EngineMessage>,
+) -> Result<RawTree, EngineMessage> {
+    Err(msg::unsupported_platform())
 }
 
 #[cfg(test)]
@@ -310,5 +313,6 @@ mod tests {
         assert_eq!(normalize_path("\"C:\\Program Files\"").unwrap(), "C:\\Program Files");
         assert_eq!(drive_letter("D:\\"), Some('D'));
         assert_eq!(drive_letter("\\\\srv\\x\\"), None);
+        assert_eq!(normalize_path("  ").unwrap_err().code, "error.invalidPath");
     }
 }

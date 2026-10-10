@@ -168,7 +168,7 @@ fn main() {
         let s = match tessera_core::scan(&path, engine, &opts, &cb, &cancel) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Error: {e}");
+                eprintln!("Error: [{}] {}", e.code, e.message);
                 std::process::exit(1);
             }
         };
@@ -195,7 +195,7 @@ fn main() {
         println!("Proceso:   {} en uso · pico {} · commit pico {}", human(ws), human(peak), human(commit));
     }
     for w in &res.warnings {
-        println!("Aviso:     {w}");
+        println!("Aviso:     [{}] {}", w.code, w.message);
     }
     if show_flags {
         use tessera_core::types::flag;
@@ -249,7 +249,7 @@ Hijos de la raíz ({}):", r.total);
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         if let Some(e) = &r.error {
             println!("
-Búsqueda «{q}»: error: {e}");
+Búsqueda «{q}»: error: [{}] {}", e.code, e.message);
         } else {
             println!("
 Búsqueda «{q}»: {} resultados, {} ({ms:.1} ms)", sep(r.total), human(r.total_bytes));
@@ -297,11 +297,11 @@ fn compare_engines(path: &str, opts: &ScanOptions, cancel: &AtomicBool) {
                     s.result.elapsed_ms as f64 / 1000.0
                 );
                 for w in &s.result.warnings {
-                    println!("    aviso: {}", w.lines().next().unwrap_or(""));
+                    println!("    aviso: [{}] {}", w.code, w.message.lines().next().unwrap_or(""));
                 }
                 cols.push((format!("{:?}", s.result.engine), s.tree, s.result.elapsed_ms));
             }
-            Err(err) => println!("{e:?}: error: {err}"),
+            Err(err) => println!("{e:?}: error: [{}] {}", err.code, err.message),
         }
     }
     if cols.len() < 2 {

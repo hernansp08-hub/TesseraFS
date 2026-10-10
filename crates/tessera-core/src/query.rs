@@ -7,6 +7,9 @@ use std::sync::OnceLock;
 
 use regex::{Regex, RegexBuilder};
 
+use crate::msg;
+use crate::types::EngineMessage;
+
 /// Lo que la búsqueda necesita de cada nodo. `name_lower` y `path_lower` sólo se rellenan
 /// si la consulta lo pide (`needs_name_lower`, `needs_path`).
 pub struct Target<'a> {
@@ -67,7 +70,8 @@ pub struct Query {
     pub wants_files: bool,
     pub needs_path: bool,
     pub needs_name_lower: bool,
-    pub error: Option<String>,
+    /// Error de sintaxis con código `query.*` (ver docs/tecnica/i18n.md).
+    pub error: Option<EngineMessage>,
 }
 
 const UNIT: &[(&str, f64)] = &[
@@ -95,10 +99,22 @@ fn key_of(k: &str) -> Option<&'static str> {
 }
 
 fn re_static(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
-    cell.get_or_init(|| Regex::new(pat).expect("regex interna"))
+    cell.get_or_init(|| Regex::new(pat).expect("internal regex"))
 }
 
-fn wildcard(p: &str) -> Result<Regex, String> {
+/// `query.invalidRegex` con el motivo breve: el texto de `regex::Error` ocupa varias líneas
+/// («regex parse error: … error: unclosed group»).
+fn regex_error(pattern: &str, e: regex::Error) -> EngineMessage {
+    let full = e.to_string();
+    let why = full
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("error: "))
+        .unwrap_or_else(|| full.lines().last().unwrap_or_default().trim())
+        .to_string();
+    msg::query_invalid_regex(&format!("/{pattern}/: {why}"))
+}
+
+fn wildcard(p: &str) -> Result<Regex, EngineMessage> {
     let mut pat = String::from("^");
     for c in p.chars() {
         match c {
@@ -108,21 +124,21 @@ fn wildcard(p: &str) -> Result<Regex, String> {
         }
     }
     pat.push('$');
-    RegexBuilder::new(&pat).case_insensitive(true).build().map_err(|e| e.to_string())
+    RegexBuilder::new(&pat).case_insensitive(true).build().map_err(|e| regex_error(p, e))
 }
 
-fn num(s: &str, units: &[(&str, f64)]) -> Result<f64, String> {
+fn num(s: &str, units: &[(&str, f64)]) -> Result<f64, EngineMessage> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = re_static(&RE, r"^([0-9]+(?:[.,][0-9]+)?)\s*([a-z]*)$");
     let t = s.trim().to_lowercase();
-    let bad = || format!("Valor no válido: «{s}»");
+    let bad = || msg::query_invalid_value(s);
     let m = re.captures(&t).ok_or_else(bad)?;
     let unit = units.iter().find(|(u, _)| *u == &m[2]).ok_or_else(bad)?.1;
     let v: f64 = m[1].replacen(',', ".", 1).parse().map_err(|_| bad())?;
     Ok(v * unit)
 }
 
-fn compare(spec: &str, units: &[(&str, f64)]) -> Result<Cmp, String> {
+fn compare(spec: &str, units: &[(&str, f64)]) -> Result<Cmp, EngineMessage> {
     let range: Vec<&str> = spec.split("..").collect();
     if range.len() == 2 {
         return Ok(Cmp::Range(num(range[0], units)?, num(range[1], units)?));
@@ -163,7 +179,7 @@ impl Query {
         }
     }
 
-    fn try_compile(q: &str) -> Result<Query, String> {
+    fn try_compile(q: &str) -> Result<Query, EngineMessage> {
         static KV: OnceLock<Regex> = OnceLock::new();
         static DIR: OnceLock<Regex> = OnceLock::new();
         static FILE: OnceLock<Regex> = OnceLock::new();
@@ -210,17 +226,12 @@ impl Query {
                                 P::NameSub(v.to_lowercase())
                             }
                         }
-                        "re" => P::Re(
-                            RegexBuilder::new(&v)
-                                .case_insensitive(true)
-                                .build()
-                                .map_err(|_| format!("Expresión regular no válida: «{v}»"))?,
-                        ),
-                        _ => {
+                        "re" => P::Re(RegexBuilder::new(&v).case_insensitive(true).build().map_err(|e| regex_error(&v, e))?),
+                        "type" => {
                             let dir = dir_re.is_match(&v);
                             let file = file_re.is_match(&v);
                             if !dir && !file {
-                                return Err(format!("Tipo no válido: «{v}» (usa dir o file)"));
+                                return Err(msg::query_invalid_type(&v));
                             }
                             type_seen = true;
                             if dir && !neg {
@@ -231,6 +242,8 @@ impl Query {
                             }
                             P::Type { dir }
                         }
+                        // Inalcanzable (key_of sólo da claves conocidas); igual que query.ts
+                        _ => return Err(msg::query_unknown_key(&c[1])),
                     }
                 }
                 _ if tok.contains(['*', '?']) => P::NameWild(wildcard(&tok)?),
@@ -370,10 +383,18 @@ mod tests {
         // `|` como O y clave desconocida tratada como texto
         assert!(m("foo | bar", &t("xbarx", 1.0, false, None, None)));
         assert!(m("foo:bar", &t("x foo:bar", 1.0, false, None, None)));
-        // Errores
-        assert!(Query::compile("age:>30").error.is_some());
-        assert!(Query::compile("tipo:raro").error.is_some());
-        assert!(Query::compile("re:(").error.is_some());
-        assert!(Query::compile("size:1..2..3").error.is_some());
+        // Errores con código (los mismos que query.ts)
+        let err = |q: &str| Query::compile(q).error.unwrap();
+        let e = err("age:>30");
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("query.invalidValue", "Invalid value: \"30\""));
+        assert_eq!(e.get("value"), Some(&crate::types::Param::Str("30".into())));
+        let e = err("tipo:raro");
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("query.invalidType", "Invalid type: \"raro\" (use dir or file)"));
+        let e = err("re:(");
+        assert_eq!(e.code, "query.invalidRegex");
+        assert_eq!(e.message, "Invalid regular expression: /(/: unclosed group");
+        assert!(!e.message.contains('\n'));
+        let e = err("size:1..2..3");
+        assert_eq!((e.code.as_str(), e.get("value")), ("query.invalidValue", Some(&crate::types::Param::Str("1..2..3".into()))));
     }
 }

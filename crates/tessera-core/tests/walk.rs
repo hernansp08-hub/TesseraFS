@@ -88,10 +88,49 @@ fn walk_counts_links_and_junctions() {
 #[test]
 fn access_denied_does_not_abort() {
     // System32 tiene subcarpetas protegidas: el escaneo termina y avisa
-    let s = run(Path::new(r"C:\Windows\System32"));
+    let details = std::sync::Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    let cb = |p: tessera_core::ScanProgress| details.lock().unwrap().extend(p.detail);
+    let s = scan(r"C:\Windows\System32", EngineChoice::Walk, &ScanOptions::default(), &cb, &cancel).unwrap();
     assert_eq!(s.result.root_path, r"C:\Windows\System32");
     assert!(s.result.files > 1000);
-    assert!(s.result.warnings.iter().any(|w| w.contains("no se pudieron leer")));
+    let w = s.result.warnings.iter().find(|w| w.code == "scan.accessDenied" || w.code == "scan.readErrors").expect("aviso de carpetas ilegibles");
+    assert!(matches!(w.get("count"), Some(tessera_core::Param::Int(n)) if *n > 0));
+    // `detail` del progreso: sólo rutas, nunca frases
+    assert!(details.into_inner().unwrap().iter().all(|d| d.starts_with(r"C:\Windows\System32")));
+}
+
+#[test]
+fn coded_errors() {
+    let d = TempDir::new("errores");
+    let f = d.file("archivo.txt", 10);
+    let run_err = |p: &str| {
+        let cancel = AtomicBool::new(false);
+        scan(p, EngineChoice::Auto, &ScanOptions::default(), &|_| {}, &cancel).err().expect("debía fallar")
+    };
+    assert_eq!(run_err("").code, "error.invalidPath");
+    let e = run_err(&f.to_string_lossy());
+    assert_eq!(e.code, "error.notFolder");
+    assert_eq!(e.get("path"), Some(&tessera_core::Param::Str(f.to_string_lossy().into_owned())));
+    let e = run_err(&d.0.join("no-existe").to_string_lossy());
+    assert_eq!(e.code, "error.cannotOpen");
+    assert!(e.get("error").is_some());
+    // Cancelado antes de empezar
+    let cancel = AtomicBool::new(true);
+    let e = scan(&d.0.to_string_lossy(), EngineChoice::Walk, &ScanOptions::default(), &|_| {}, &cancel).err().unwrap();
+    assert_eq!(e.code, "error.cancelled");
+    // Acciones sin efectos: raíz a la papelera, id desconocido y archivo que ya no existe
+    let mut s = run(&d.0);
+    let r = tessera_core::action(&mut s.tree, ActionKind::Trash, 0);
+    assert_eq!((r.ok, r.code.as_deref()), (false, Some("action.trashRoot")));
+    let r = tessera_core::action(&mut s.tree, ActionKind::Open, 999_999);
+    assert_eq!((r.ok, r.code.as_deref()), (false, Some("error.invalidNode")));
+    let id = find(&s.tree, &f);
+    std::fs::remove_file(&f).unwrap();
+    let r = tessera_core::action(&mut s.tree, ActionKind::Trash, id);
+    assert_eq!((r.ok, r.code.as_deref()), (false, Some("action.failed")));
+    assert!(r.params.unwrap().contains_key("error"));
+    assert!(s.tree.live(id), "un fallo no quita el nodo");
 }
 
 /// Envía un archivo temporal a la Papelera: `cargo test -- --ignored papelera`.
@@ -106,7 +145,7 @@ fn papelera_quita_el_nodo() {
     let before = s.tree.size(0);
     let r = tessera_core::action(&mut s.tree, ActionKind::Trash, id);
     assert!(r.ok, "{:?}", r.message);
-    assert_eq!(r.message.as_deref(), Some("Movido a la papelera"));
+    assert_eq!(r.code.as_deref(), Some("action.trashed"));
     assert!(!f.exists());
     assert_eq!(s.tree.size(0), before - 50_000);
     assert_eq!(s.tree.files(0), 1);

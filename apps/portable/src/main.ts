@@ -8,15 +8,16 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ActionKind, EngineChoice, ScanProgress, SortKey } from '../../../packages/protocol/src/index.ts';
-import { ScanBusyError, TesseraEngine, defaultThreads, runElevated, setWalkWorkerUrl, win32 } from '../../../packages/core-bun/src/index.ts';
+import { TesseraEngine, defaultThreads, errorResponse, msg, runElevated, setWalkWorkerUrl, win32 } from '../../../packages/core-bun/src/index.ts';
 import { embeddedUi } from './ui-macro.ts' with { type: 'macro' };
 
 // en un objeto para que el minificador no copie la cadena en cada uso
 const ASSETS: { ui: string } = { ui: embeddedUi() };
 
-const PLACEHOLDER = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>TesseraFS</title>
+// sólo para desarrolladores (la interfaz no se construyó): en inglés, sin catálogo
+const PLACEHOLDER = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>TesseraFS</title>
 <style>body{font:14px system-ui;margin:24px;background:#111;color:#ddd}pre{background:#1b1b1b;padding:12px;border-radius:6px}</style></head>
-<body><h1>TesseraFS</h1><p>La interfaz no estaba construida al empaquetar (<code>bun run ui:build</code>). Unidades:</p><pre id="o">…</pre>
+<body><h1>TesseraFS</h1><p>The UI was not built before packaging (<code>bun run ui:build</code>). Drives:</p><pre id="o">…</pre>
 <script>fetch('/api/volumes',{headers:{'X-Tessera-Token':window.__TESSERA__.token}}).then(r=>r.json()).then(j=>{o.textContent=JSON.stringify(j,null,2)},e=>{o.textContent=String(e)})</script>
 </body></html>`;
 
@@ -26,7 +27,8 @@ const KEEPALIVE = `(function(t){function go(){fetch("/api/events?keepalive=1",{h
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
 });
-const fail = (status: number, message: string) => json({ error: message }, status);
+// errores de la API: estado 4xx/5xx con un EngineMessage como cuerpo JSON (ver docs/ARQUITECTURA.md)
+const fail = errorResponse;
 const num = (v: string | null, def: number) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? n : def; };
 const SORTS: SortKey[] = ['size', 'alloc', 'name', 'files', 'mtime'];
 const ACTIONS: ActionKind[] = ['open', 'reveal', 'properties', 'trash'];
@@ -55,7 +57,7 @@ async function main() {
     }
   }
 
-  const engine = new TesseraEngine({ threads });
+  const engine = new TesseraEngine({ threads, log });
   const token = randomBytes(24).toString('base64url');
   const tokenBuf = Buffer.from(token);
   const okToken = (t: string | null) => { if (!t) return false; const b = Buffer.from(t); return b.length === tokenBuf.length && timingSafeEqual(b, tokenBuf); };
@@ -79,7 +81,7 @@ async function main() {
       start(ctrl) {
         client = { send(b) { try { ctrl.enqueue(b); } catch { drop(); } } };
         clients.add(client); hadClient = true;
-        ctrl.enqueue(enc.encode('retry: 2000\n: conectado\n\n'));
+        ctrl.enqueue(enc.encode('retry: 2000\n: connected\n\n'));
       },
       cancel() { drop(); },
     });
@@ -124,20 +126,20 @@ async function main() {
       case 'POST /api/scan': {
         server.timeout(req, 0);
         const body = await req.json().catch(() => null) as { path?: unknown; engine?: unknown } | null;
-        if (!body || typeof body.path !== 'string') return fail(400, 'Falta "path"');
+        if (!body || typeof body.path !== 'string') return fail(msg('error.invalidPath', { path: String(body?.path ?? '') }));
         const eng = (ENGINES as unknown[]).includes(body.engine) ? body.engine as EngineChoice : 'auto';
+        let peak = process.memoryUsage().rss;
+        const sampler = (debug || noWindow) ? setInterval(() => { peak = Math.max(peak, process.memoryUsage().rss); }, 50) : null;
         try {
-          let peak = process.memoryUsage().rss;
-          const sampler = (debug || noWindow) ? setInterval(() => { peak = Math.max(peak, process.memoryUsage().rss); }, 50) : null;
-          try {
-            const r = await engine.scan({ path: body.path, engine: eng }, broadcast);
-            const mb = (b: number) => Math.round(b / 2 ** 20);
-            log(`escaneo ${r.rootPath}: ${r.entries} entradas en ${r.elapsedMs} ms (${r.engine}); RSS ${mb(process.memoryUsage().rss)} MB, pico ${mb(Math.max(peak, process.memoryUsage().rss))} MB`);
-            return json(r);
-          } finally { if (sampler) clearInterval(sampler); }
+          const r = await engine.scan({ path: body.path, engine: eng }, broadcast);
+          const mb = (b: number) => Math.round(b / 2 ** 20);
+          log(`scan ${r.rootPath}: ${r.entries} entries in ${r.elapsedMs} ms (${r.engine}); RSS ${mb(process.memoryUsage().rss)} MB, peak ${mb(Math.max(peak, process.memoryUsage().rss))} MB`
+            + (r.warnings.length ? `; warnings: ${r.warnings.map(w => w.code).join(', ')}` : ''));
+          return json(r);
         } catch (e) {
-          return fail(e instanceof ScanBusyError ? 409 : 400, (e as Error).message);
-        }
+          log(`scan ${body.path} failed:`, e instanceof Error ? e.message : e);
+          return fail(e); // EngineError → 400/409; cualquier otro → 500 error.internal
+        } finally { if (sampler) clearInterval(sampler); }
       }
       case 'GET /api/slice': {
         const bytes = engine.slice(num(q.get('root'), -1), num(q.get('min'), 0), num(q.get('max'), 20000));
@@ -155,21 +157,22 @@ async function main() {
       case 'GET /api/node': return json(engine.nodeInfo(num(q.get('id'), -1)));
       case 'POST /api/action': {
         const b = await req.json().catch(() => null) as { kind?: unknown; id?: unknown } | null;
-        if (!b || !(ACTIONS as unknown[]).includes(b.kind) || typeof b.id !== 'number') return fail(400, 'Acción no válida');
+        if (!b || !(ACTIONS as unknown[]).includes(b.kind)) return fail(msg('action.unknown', { kind: String(b?.kind ?? '') }));
+        if (typeof b.id !== 'number') return fail(msg('error.invalidNode', { id: String(b.id ?? '') }), 400);
         return json(engine.action(b.kind as ActionKind, b.id));
       }
       case 'GET /api/elevation': return json(engine.elevation());
       case 'POST /api/relaunch-elevated': {
-        if (engine.elevated) return fail(409, 'Ya se está ejecutando como administrador');
+        if (engine.elevated) return fail(msg('elevation.failed', { error: 'already running as administrator' }), 409);
         const params = [Bun.main, ...args.filter(a => a !== '--hidden-child')].map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ');
         const err = runElevated(process.execPath, params, process.cwd(), debug ? 1 : 0);
-        if (err === 1223) return fail(409, 'Cancelado por el usuario');
-        if (err) return fail(500, `No se pudo relanzar como administrador: ${win32.winErrorText(err)}`);
+        // 1223 = el usuario canceló el UAC; el texto de FormatMessage ya llega en el idioma de Windows
+        if (err) return fail(msg('elevation.failed', { error: win32.winErrorText(err) }), err === 1223 ? 409 : 500);
         // la instancia elevada abre su propia ventana (con otro perfil de Edge); esta se retira
         setTimeout(() => shutdown('relanzado como administrador'), 400);
         return json({ ok: true });
       }
-      default: return fail(404, 'Ruta desconocida');
+      default: return fail(msg('error.internal', { error: `unknown API route: ${m} ${url.pathname}` }), 404);
     }
   }
 
@@ -183,19 +186,17 @@ async function main() {
       const url = new URL(req.url);
       // anti DNS-rebinding: sólo se atiende al propio origen
       const host = req.headers.get('host');
-      if (host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return new Response('Host no permitido', { status: 403 });
+      if (host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return new Response('Host not allowed', { status: 403 });
       if (url.pathname.startsWith('/api/')) {
-        if (!okToken(req.headers.get('x-tessera-token'))) return fail(401, 'Token ausente o incorrecto');
-        try { return await api(req, url); } catch (e) {
-          const msg = (e as Error).message ?? String(e);
-          return fail(/Todavía no hay/.test(msg) ? 409 : /no válido|inválid/i.test(msg) ? 400 : 500, msg);
-        }
+        if (!okToken(req.headers.get('x-tessera-token'))) return new Response('Missing or invalid token', { status: 401 });
+        // EngineError → su estado (400/404/409); cualquier otro fallo → 500 error.internal
+        try { return await api(req, url); } catch (e) { return fail(e); }
       }
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) return page();
       if (url.pathname === '/favicon.ico') return new Response(null, { status: 204 });
-      return new Response('No encontrado', { status: 404 });
+      return new Response('Not found', { status: 404 });
     },
-    error(e) { return fail(500, e.message); },
+    error(e) { return fail(e); },
   });
 
   const appUrl = `http://127.0.0.1:${server.port}/`;

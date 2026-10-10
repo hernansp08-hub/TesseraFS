@@ -1,3 +1,5 @@
+import type { EngineMessage } from "./types";
+
 // Lenguaje de búsqueda de TesseraFS. Ver docs/ARQUITECTURA.md (el motor Rust replica estas reglas).
 
 export interface QueryTarget {
@@ -15,8 +17,15 @@ export interface CompiledQuery {
   /** true si alguna condición pide carpetas (type:dir); si no, sólo se buscan archivos */
   wantsDirs: boolean;
   wantsFiles: boolean;
-  error?: string;
+  /** Error de sintaxis con código traducible (query.*), ver docs/tecnica/i18n.md */
+  error?: EngineMessage;
 }
+
+/** Error de sintaxis del filtro: viaja como EngineMessage hasta la interfaz. */
+class QueryError extends Error {
+  constructor(public msg: EngineMessage) { super(msg.message); }
+}
+function fail(code: string, message: string, params: Record<string, string>): never { throw new QueryError({ code, params, message }); }
 
 const UNIT: Record<string, number> = { '': 1, b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3, t: 1024 ** 4 };
 const AGE: Record<string, number> = { d: 86400, w: 7 * 86400, mo: 30 * 86400, y: 365 * 86400 };
@@ -32,7 +41,7 @@ function wildcard(p: string): RegExp {
 }
 function num(s: string, units: Record<string, number>): number {
   const m = s.trim().toLowerCase().match(/^(\d+(?:[.,]\d+)?)\s*([a-z]*)$/);
-  if (!m || !(m[2] in units)) throw new Error(`Valor no válido: «${s}»`);
+  if (!m || !(m[2] in units)) fail("query.invalidValue", `Invalid value: "${s}"`, { value: s });
   return parseFloat(m[1].replace(',', '.')) * units[m[2]];
 }
 function compare(spec: string, units: Record<string, number>): (v: number) => boolean {
@@ -76,11 +85,11 @@ export function compileQuery(q: string): CompiledQuery {
           case 're': { const r = new RegExp(v, 'i'); p = t => r.test(t.name); break; }
           case 'type': {
             const dir = /^(dir|carpeta|folder)$/i.test(v), file = /^(file|archivo)$/i.test(v);
-            if (!dir && !file) throw new Error(`Tipo no válido: «${v}» (usa dir o file)`);
+            if (!dir && !file) fail("query.invalidType", `Invalid type: "${v}" (use dir or file)`, { value: v });
             typeSeen = true; if (dir && !neg) wantsDirs = true; if (file && !neg) wantsFiles = true;
             p = t => dir ? t.isDir : !t.isDir; break;
           }
-          default: throw new Error(`Clave desconocida: «${kv[1]}»`);
+          default: fail("query.unknownKey", `Unknown key: "${kv[1]}"`, { key: kv[1] });
         }
       } else if (/[*?]/.test(tok)) { const r = wildcard(tok); p = t => r.test(t.name); }
       else { const s = tok.toLowerCase(); p = t => t.name.toLowerCase().includes(s); }
@@ -98,6 +107,10 @@ export function compileQuery(q: string): CompiledQuery {
       },
     };
   } catch (e) {
-    return { wantsDirs: false, wantsFiles: false, match: () => false, error: (e as Error).message };
+    // El motor JS ya empieza su texto por «Invalid regular expression:»; el parámetro lleva sólo el motivo
+    const why = String((e as Error).message).replace(/^Invalid regular expression:\s*/i, '');
+    const error: EngineMessage = e instanceof QueryError ? e.msg
+      : { code: "query.invalidRegex", params: { error: why }, message: `Invalid regular expression: ${why}` };
+    return { wantsDirs: false, wantsFiles: false, match: () => false, error };
   }
 }

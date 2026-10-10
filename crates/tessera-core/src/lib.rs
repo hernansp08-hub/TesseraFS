@@ -8,6 +8,7 @@
 pub mod attrs;
 pub mod build;
 pub mod mft;
+pub mod msg;
 pub mod names;
 pub mod ops;
 pub mod query;
@@ -24,7 +25,8 @@ pub use tree::Tree;
 pub use types::*;
 
 /// Ejecuta una acción del Shell sobre una ruta exacta (UTF-16 sin terminador).
-pub fn run_action(kind: ActionKind, path: &[u16]) -> Result<(), String> {
+/// El error ya lleva su código (`action.failed`, `action.cancelled`, `action.trashNotMoved`…).
+pub fn run_action(kind: ActionKind, path: &[u16]) -> Result<(), EngineMessage> {
     match kind {
         ActionKind::Open => sys::open(path),
         ActionKind::Reveal => sys::reveal(path),
@@ -33,21 +35,31 @@ pub fn run_action(kind: ActionKind, path: &[u16]) -> Result<(), String> {
     }
 }
 
+/// Resultado de una acción que terminó bien: `action.trashed` en la papelera; nada en el resto.
+pub fn action_done(kind: ActionKind) -> ActionResult {
+    if kind == ActionKind::Trash {
+        ActionResult::ok_with(msg::trashed())
+    } else {
+        ActionResult::done()
+    }
+}
+
 /// Ejecuta una acción sobre un nodo. Tras `trash` con éxito el nodo sale del árbol.
 pub fn action(tree: &mut Tree, kind: ActionKind, id: u32) -> ActionResult {
     if id == 0 && kind == ActionKind::Trash {
-        return ActionResult { ok: false, message: Some("No se puede enviar la raíz del escaneo a la papelera".into()) };
+        return ActionResult::fail(msg::trash_root());
     }
     if !tree.live(id) {
-        return ActionResult { ok: false, message: Some(format!("Id no válido: {id}")) };
+        return ActionResult::fail(msg::invalid_node(id));
     }
     let path = tree.path_wide(id);
-    let r = run_action(kind, &path);
-    if r.is_ok() && kind == ActionKind::Trash {
-        let _ = tree.remove(id);
-    }
-    match r {
-        Ok(()) => ActionResult { ok: true, message: (kind == ActionKind::Trash).then(|| "Movido a la papelera".to_string()) },
-        Err(e) => ActionResult { ok: false, message: Some(e) },
+    match run_action(kind, &path) {
+        Ok(()) => {
+            if kind == ActionKind::Trash {
+                let _ = tree.remove(id);
+            }
+            action_done(kind)
+        }
+        Err(e) => ActionResult::fail(e),
     }
 }

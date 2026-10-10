@@ -81,10 +81,10 @@ impl RawTree {
 pub fn build(mut raw: RawTree, root_path: String, sub: &[String]) -> Result<Tree, String> {
     let n = raw.len();
     if n == 0 || raw.root as usize >= n {
-        return Err("Escaneo vacío".into());
+        return Err("Empty scan".into());
     }
     if n >= NONE as usize {
-        return Err("Demasiadas entradas".into());
+        return Err("Too many entries".into());
     }
     let root0 = raw.root;
     // 1) Hijos en formato CSR
@@ -119,7 +119,7 @@ pub fn build(mut raw: RawTree, root_path: String, sub: &[String]) -> Result<Tree
             .iter()
             .copied()
             .find(|&k| raw.is_dir(k) && names::lossy(raw.name(k)).to_lowercase() == want);
-        root = found.ok_or_else(|| format!("No se encontró «{comp}» en el volumen"))?;
+        root = found.ok_or_else(|| format!("Folder not found in the volume index: {comp}"))?;
     }
 
     // 3) Orden por niveles desde la raíz (sólo lo alcanzable)

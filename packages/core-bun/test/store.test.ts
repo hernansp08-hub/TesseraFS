@@ -94,7 +94,9 @@ test('store: búsqueda ordenada por tamaño, consulta vacía y raíz', () => {
   expect(st.search('type:dir', root, 10).rows.map(r => r.name)).toEqual(['Users', 'Windows', 'sub']);
   expect(st.search('path:users\\sub', root, 10).total).toBe(1);
   expect(st.search('age:>1y', root, 10).rows.map(r => r.name)).toEqual(['notes.TXT']);
-  expect(st.search('size:>zz', root, 10).error).toBeTruthy();
+  // el error de la consulta (EngineMessage de compileQuery) pasa tal cual, sin convertirlo en texto
+  expect(st.search('size:>zz', root, 10).error).toMatchObject({ code: 'query.invalidValue', params: { value: 'zz' } });
+  expect(typeof st.search('size:>zz', root, 10).error?.message).toBe('string');
 });
 
 test('store: estadísticas por extensión', () => {

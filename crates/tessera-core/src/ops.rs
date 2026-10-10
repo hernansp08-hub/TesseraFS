@@ -3,14 +3,15 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use crate::msg;
 use crate::names;
 use crate::query::{now_secs, Query, Target};
 use crate::tree::Tree;
-use crate::types::{ChildrenResponse, ExtStat, SearchResponse, SearchRow, SortKey};
+use crate::types::{ChildrenResponse, EngineMessage, ExtStat, SearchResponse, SearchRow, SortKey};
 
-pub fn children(t: &Tree, id: u32, offset: u32, limit: u32, sort: SortKey, desc: bool) -> Result<ChildrenResponse, String> {
+pub fn children(t: &Tree, id: u32, offset: u32, limit: u32, sort: SortKey, desc: bool) -> Result<ChildrenResponse, EngineMessage> {
     if !t.live(id) {
-        return Err(format!("Id no válido: {id}"));
+        return Err(msg::invalid_node(id));
     }
     let kids = t.kids(id);
     let total = kids.len() as u32;
@@ -89,7 +90,7 @@ pub fn search(t: &Tree, query: &str, root: u32, limit: u32) -> SearchResponse {
         return SearchResponse { error: Some(e), ..Default::default() };
     }
     if !t.live(root) {
-        return SearchResponse { error: Some(format!("Id no válido: {root}")), ..Default::default() };
+        return SearchResponse { error: Some(msg::invalid_node(root)), ..Default::default() };
     }
     let now = now_secs();
     let mut hits: Vec<u32> = Vec::new();
@@ -132,9 +133,9 @@ pub fn search(t: &Tree, query: &str, root: u32, limit: u32) -> SearchResponse {
     SearchResponse { total, total_bytes, rows, error: None }
 }
 
-pub fn ext_stats(t: &Tree, root: u32) -> Result<Vec<ExtStat>, String> {
+pub fn ext_stats(t: &Tree, root: u32) -> Result<Vec<ExtStat>, EngineMessage> {
     if !t.live(root) {
-        return Err(format!("Id no válido: {root}"));
+        return Err(msg::invalid_node(root));
     }
     let mut acc: HashMap<u16, (u64, u64, u64)> = HashMap::new();
     let mut add = |id: u32| {
@@ -210,7 +211,10 @@ mod tests {
         let r = search(&t, "", 1, 10);
         assert_eq!(r.total, 3);
         let r = search(&t, "size:>abc", 0, 10);
-        assert!(r.error.is_some());
+        assert_eq!(r.error.unwrap().code, "query.invalidValue");
+        assert_eq!(search(&t, "", 999, 10).error.unwrap().code, "error.invalidNode");
+        assert_eq!(children(&t, 999, 0, 10, SortKey::Size, true).unwrap_err().code, "error.invalidNode");
+        assert_eq!(ext_stats(&t, 999).unwrap_err().get("id"), Some(&crate::types::Param::Int(999)));
         let e = ext_stats(&t, 0).unwrap();
         assert_eq!(e[0], ExtStat { ext: "bin".into(), size: 102, alloc: 16384, count: 3 });
         assert_eq!(e.iter().find(|x| x.ext.is_empty()).unwrap().count, 1);

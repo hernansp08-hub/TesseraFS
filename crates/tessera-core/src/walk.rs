@@ -20,11 +20,12 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
 use crate::build::RawTree;
+use crate::msg;
 use crate::names;
 use crate::scan::Progress;
 use crate::tree::NONE;
 use crate::attrs::*;
-use crate::types::flag;
+use crate::types::{flag, EngineMessage};
 
 const SYNCHRONIZE: u32 = 0x0010_0000;
 const FILE_OPEN: u32 = 1;
@@ -86,6 +87,10 @@ pub struct WalkOptions {
 
 pub struct WalkOutput {
     pub raw: RawTree,
+    /// Carpetas sin permiso de lectura y algunas de sus rutas.
+    pub denied: u64,
+    pub denied_samples: Vec<String>,
+    /// Carpetas con otros errores de lectura y algunas rutas con su NTSTATUS.
     pub errors: u64,
     pub error_samples: Vec<String>,
     pub hardlinks: u64,
@@ -96,8 +101,10 @@ struct Ctx<'a> {
     accs: Vec<Mutex<Acc>>,
     class: AtomicI32,
     buf_size: usize,
+    denied: AtomicU64,
     errors: AtomicU64,
-    samples: Mutex<Vec<String>>,
+    denied_samples: Mutex<Vec<String>>,
+    error_samples: Mutex<Vec<String>>,
     prog: &'a Progress,
     cancel: &'a AtomicBool,
     with_ids: bool,
@@ -107,13 +114,22 @@ thread_local! {
     static BUF: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
+const MAX_SAMPLES: usize = 20;
+
 impl Ctx<'_> {
     fn error(&self, path: &str, status: i32) {
-        self.errors.fetch_add(1, Relaxed);
-        let mut s = self.samples.lock().unwrap();
-        if s.len() < 20 {
-            let why = if status == STATUS_ACCESS_DENIED { "acceso denegado".to_string() } else { format!("NTSTATUS 0x{:08X}", status as u32) };
-            s.push(format!("{path}: {why}"));
+        if status == STATUS_ACCESS_DENIED {
+            self.denied.fetch_add(1, Relaxed);
+            let mut s = self.denied_samples.lock().unwrap();
+            if s.len() < MAX_SAMPLES {
+                s.push(path.to_string());
+            }
+        } else {
+            self.errors.fetch_add(1, Relaxed);
+            let mut s = self.error_samples.lock().unwrap();
+            if s.len() < MAX_SAMPLES {
+                s.push(format!("{path}: NTSTATUS 0x{:08X}", status as u32));
+            }
         }
     }
 }
@@ -186,7 +202,7 @@ pub(crate) fn verbatim(path: &str) -> String {
     }
 }
 
-fn open_root(path: &str) -> Result<Handle, String> {
+fn open_root(path: &str) -> Result<Handle, EngineMessage> {
     let w = wide(&verbatim(path));
     let h = unsafe {
         CreateFileW(
@@ -200,7 +216,7 @@ fn open_root(path: &str) -> Result<Handle, String> {
         )
     };
     if h == INVALID_HANDLE_VALUE {
-        return Err(format!("No se pudo abrir «{path}»: {}", crate::sys::last_error_text()));
+        return Err(msg::cannot_open(path, &crate::sys::last_error_text()));
     }
     Ok(Handle(h))
 }
@@ -396,7 +412,7 @@ fn enumerate<'s>(ctx: &'s Ctx<'s>, scope: &rayon::Scope<'s>, h: Arc<Handle>, id:
 }
 
 /// Recorre `root` (ruta absoluta) y devuelve las entradas en bruto (id 0 = raíz).
-pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool) -> Result<WalkOutput, String> {
+pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool) -> Result<WalkOutput, EngineMessage> {
     let rh = open_root(root)?;
     let mut ft: FILETIME = unsafe { std::mem::zeroed() };
     let root_mtime = if unsafe { GetFileTime(rh.0, std::ptr::null_mut(), std::ptr::null_mut(), &mut ft) } != 0 {
@@ -415,8 +431,10 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
         accs: (0..threads).map(|_| Mutex::new(Acc::default())).collect(),
         class: AtomicI32::new(CLASS_ID_EXTD),
         buf_size: opts.buf_size.max(64 * 1024),
+        denied: AtomicU64::new(0),
         errors: AtomicU64::new(0),
-        samples: Mutex::new(Vec::new()),
+        denied_samples: Mutex::new(Vec::new()),
+        error_samples: Mutex::new(Vec::new()),
         prog,
         cancel,
         with_ids: opts.dedupe_links,
@@ -427,7 +445,7 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
         pool.install(|| rayon::scope(|s| enumerate(ctx, s, Arc::new(rh), 0, root_path)));
     }
     if cancel.load(Relaxed) {
-        return Err("Escaneo cancelado".into());
+        return Err(msg::cancelled());
     }
     drop(pool);
 
@@ -436,7 +454,7 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
     let accs: Vec<Acc> = ctx.accs.into_iter().map(|m| m.into_inner().unwrap()).collect();
     let names_total: usize = accs.iter().map(|a| a.names.len()).sum();
     if names_total > u32::MAX as usize {
-        return Err("Demasiados nombres para el almacén".into());
+        return Err(msg::internal("Too many names for the name store"));
     }
     let mut raw = RawTree {
         parent: vec![NONE; n],
@@ -490,6 +508,7 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
             }
         }
     }
-    let error_samples = std::mem::take(&mut *ctx.samples.lock().unwrap());
-    Ok(WalkOutput { raw, errors: ctx.errors.load(Relaxed), error_samples, hardlinks })
+    let denied_samples = std::mem::take(&mut *ctx.denied_samples.lock().unwrap());
+    let error_samples = std::mem::take(&mut *ctx.error_samples.lock().unwrap());
+    Ok(WalkOutput { raw, denied: ctx.denied.load(Relaxed), denied_samples, errors: ctx.errors.load(Relaxed), error_samples, hardlinks })
 }

@@ -130,7 +130,7 @@ export class Mem {
 export function alignedAlloc(size: number): { p: Pointer; u8: Uint8Array; free(): void } {
   const k = kernel32();
   const p = k.VirtualAlloc(null, BigInt(size), 0x3000 /* COMMIT|RESERVE */, 0x04 /* READWRITE */);
-  if (!p) throw new Error('VirtualAlloc falló');
+  if (!p) throw new Error('VirtualAlloc failed');
   return { p, u8: new Uint8Array(toArrayBuffer(p, 0, size)), free: () => { k.VirtualFree(p, 0n, 0x8000 /* RELEASE */); } };
 }
 

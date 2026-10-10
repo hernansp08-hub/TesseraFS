@@ -53,6 +53,8 @@ Tipos en [`packages/protocol/src/types.ts`](../packages/protocol/src/types.ts). 
 
 Progreso: `ScanProgress.fraction` (0–1) es opcional; los motores lo envían cuando conocen el total de trabajo (lectura de la MFT). Sin él, la interfaz estima el avance con `bytes` frente al espacio usado de la unidad, y en carpetas sueltas lo muestra como indeterminado.
 
+Mensajes para el usuario (i18n): los motores nunca envían frases. Los avisos (`ScanResult.warnings`), los resultados de acciones y los errores son `EngineMessage { code, params?, message }`, donde `message` es el texto de reserva en inglés. En Tauri, los comandos fallan con `Err(EngineMessage)`; en HTTP, con un estado 4xx/5xx y un `EngineMessage` como cuerpo JSON. La lista de códigos está en [docs/tecnica/i18n.md](tecnica/i18n.md#mensajes-de-los-motores).
+
 Seguridad HTTP: el servidor escucha sólo en `127.0.0.1`, puerto aleatorio, y exige la cabecera `X-Tessera-Token` (token aleatorio inyectado en el HTML). Sin cabeceras CORS: otras webs no pueden llamar a la API.
 
 ### Formato binario "slice" v1 (little-endian)
