@@ -48,6 +48,26 @@ flowchart TD
 > [!TIP]
 > La edición portable no lleva ningún ejecutable propio. Sólo usa `bun.exe`, firmado por su editor, y Edge, que ya viene con Windows. Por eso suele funcionar donde el antivirus corporativo bloquea otros programas.
 
+### Descargar
+
+Cada versión se publica en la página **Releases** del repositorio con dos zips:
+
+| Archivo | Edición |
+|---|---|
+| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` (≈3,5 MB) | Escritorio |
+| `TesseraFS-X.Y.Z-portable-win-x64.zip` (≈37 MB) | Portable |
+| `SHA256SUMS.txt` | Sumas para comprobar que la descarga está íntegra |
+
+1. Descarga el zip de tu edición.
+2. **Desbloquéalo antes de descomprimir:** clic derecho › Propiedades › marca **Desbloquear** › Aceptar. Windows marca todo lo descargado de internet y, sin este paso, cada archivo extraído hereda la marca: más avisos al abrirlo.
+3. Clic derecho › **Extraer todo…** en la carpeta que prefieras.
+
+> [!TIP]
+> Para comprobar que el zip no se ha dañado ni modificado, compara su suma con la de `SHA256SUMS.txt`:
+> ```powershell
+> Get-FileHash .\TesseraFS-0.2.0-portable-win-x64.zip
+> ```
+
 ### Escritorio
 
 1. Copia `tesserafs-desktop.exe` donde quieras (por ejemplo, `C:\Herramientas`).

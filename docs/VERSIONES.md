@@ -51,42 +51,69 @@ Desarrollo en **tronco**:
 
 ## Publicar una versión
 
+Publicar es **crear la etiqueta y subirla**. GitHub Actions hace el resto: compila, prueba, empaqueta y crea la *release* con los zips.
+
 ```bash
-bun run release auto --dry   # muestra la versión y la entrada del CHANGELOG sin tocar nada
-bun run release auto         # sube la versión, escribe el CHANGELOG, hace commit y etiqueta
-git push --follow-tags       # publica (cuando haya repositorio remoto)
+bun run release auto --dry
+```
+Muestra la versión siguiente y la entrada del CHANGELOG sin tocar nada.
+
+```bash
+bun run release auto
+```
+Sube el número en todos los manifiestos, escribe el CHANGELOG, hace el commit `chore(release): vX.Y.Z` y crea la etiqueta.
+
+```bash
+git push --follow-tags
+```
+Sube el commit y la etiqueta: esto **lanza la publicación automática**.
+
+Otras formas de `release`: `patch`, `minor`, `major`, `minor --pre=beta` (→ `0.2.0-beta.1`), `pre` (→ `beta.2`), `final` (quita el sufijo) o un número exacto.
+
+### Qué hace GitHub Actions
+
+```mermaid
+flowchart LR
+    R["bun run release auto<br/>commit + etiqueta vX.Y.Z"] --> P["git push --follow-tags"]
+    P --> A{{"GitHub Actions<br/>.github/workflows/release.yml<br/>windows-latest"}}
+    A --> C["¿Etiqueta = versión<br/>de package.json?"]
+    C --> T["bun test<br/>cargo test"]
+    T --> B["bun run package --publish<br/>interfaz · exe · portable"]
+    B --> G["Release vX.Y.Z<br/>zips + SHA256SUMS + notas"]
 ```
 
-Otras formas: `patch`, `minor`, `major`, `minor --pre=beta` (→ `0.2.0-beta.1`), `pre` (→ `beta.2`), `final` (quita el sufijo) o un número exacto.
+| Paso | Detalle |
+|---|---|
+| Comprobación | La etiqueta (`v0.3.0`) debe coincidir con la versión de `package.json`; si no, el flujo se detiene |
+| Herramientas | Bun **1.3.14** fijado en el flujo (es el `bun.exe` que viaja en la portable) y Rust estable, con caché de compilación |
+| Pruebas | `bun test` y `cargo test --workspace --release`. Si fallan, **no se publica nada** |
+| Publicación | `bun run package --publish`. Si la release ya existe, reemplaza sus archivos y notas, así que el flujo se puede relanzar |
+| Duración y coste | Unos 15–25 min con caché. En un repositorio privado consume minutos de Actions (los de Windows cuentan doble) |
 
-### Publicar los zips en GitHub Releases
+Sigue el progreso en la pestaña **Actions** del repositorio o con `gh run watch`.
+
+**Probar sin publicar:** en *Actions › Publicar versión › Run workflow* (o `gh workflow run release.yml`), el flujo compila y empaqueta la rama elegida. Los zips quedan como artefacto del flujo durante 7 días, sin crear ninguna release.
+
+### Qué se publica
+
+| Archivo | Contenido |
+|---|---|
+| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` | `tesserafs-desktop.exe`, `LEEME.txt`, `LICENCIAS-TERCEROS.txt` (crates de Rust incluidos) y `licencias/` |
+| `TesseraFS-X.Y.Z-portable-win-x64.zip` | `bun.exe` (firmado, sin modificar), `tesserafs.js`, lanzadores, `LEEME.txt`, avisos de Bun y `licencias/` |
+| `SHA256SUMS.txt` | Sumas para comprobar las descargas (`Get-FileHash archivo.zip`) |
+
+Las versiones con sufijo (`-beta.1`) se publican como *prerelease*.
+
+### Publicar desde tu equipo (alternativa)
+
+Si GitHub Actions no está disponible, el mismo script funciona en local con `gh` autenticado:
 
 ```bash
 bun run package --publish
 ```
 
-```mermaid
-flowchart LR
-    R["bun run release auto<br/>commit + etiqueta vX.Y.Z"] --> P["git push --follow-tags"]
-    P --> K["bun run package --publish"]
-    K --> B["Compila interfaz,<br/>exe de escritorio y portable"]
-    B --> Z["Zips + LEEME + licencias<br/>+ SHA256SUMS.txt"]
-    Z --> G["gh release create vX.Y.Z<br/>notas del CHANGELOG"]
-```
+Sin `--publish` sólo deja los archivos en `dist/release/vX.Y.Z/` para revisarlos; `--skip-build` reutiliza lo ya compilado.
 
-| Archivo publicado | Contenido |
-|---|---|
-| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` | `tesserafs-desktop.exe`, `LEEME.txt`, `LICENCIAS-TERCEROS.txt` (crates de Rust incluidos) y `licencias/` |
-| `TesseraFS-X.Y.Z-portable-win-x64.zip` | `bun.exe` (firmado, sin modificar), `tesserafs.js`, lanzadores, `LEEME.txt`, avisos de Bun y `licencias/` |
-| `SHA256SUMS.txt` | Sumas para comprobar las descargas: `Get-FileHash archivo.zip` |
+### Pendiente: firma de código
 
-- Sin `--publish`, sólo deja los archivos en `dist/release/vX.Y.Z/`, para revisarlos antes.
-- `--skip-build` reutiliza lo ya compilado.
-- Las versiones con sufijo (`-beta.1`) se publican como *prerelease*.
-
-Antes de publicar, comprueba que todo esté en verde:
-```bash
-bun test && cargo test --workspace
-```
-
-Más adelante, un flujo de GitHub Actions podrá reaccionar a cada etiqueta `v*`: compilará el exe de escritorio y la carpeta portable, los firmará y creará la *release* con las notas del CHANGELOG.
+Cuando haya certificado (SignPath Foundation para proyectos open source, o Azure Artifact Signing), se añadirá al flujo un paso que firme `tesserafs-desktop.exe` antes de empaquetarlo. Así desaparece el aviso de SmartScreen y los antivirus confían más en el ejecutable.

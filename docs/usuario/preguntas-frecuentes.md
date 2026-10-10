@@ -45,6 +45,23 @@ Tras reiniciar, Windows aún no tiene la información de las carpetas en memoria
 
 Sí, con el modo normal. El modo rápido sólo funciona en volúmenes **NTFS locales**.
 
+## Descarga
+
+### ¿Cómo compruebo que la descarga es la buena?
+
+Cada release incluye `SHA256SUMS.txt`. Calcula la suma de tu zip y compárala con la de ese archivo:
+```powershell
+Get-FileHash .\TesseraFS-0.2.0-escritorio-win-x64.zip
+```
+Si las sumas no coinciden, el archivo se dañó al descargarlo o no es el original: vuelve a descargarlo de la página de Releases.
+
+### Al abrir los archivos, Windows avisa de que vienen de internet
+
+Windows marca todo lo descargado. Desbloquea el zip **antes** de descomprimirlo (clic derecho › Propiedades › Desbloquear) y los archivos extraídos ya no llevarán la marca. Si ya lo descomprimiste, en PowerShell:
+```powershell
+Get-ChildItem -Recurse .\TesseraFS-0.2.0-portable | Unblock-File
+```
+
 ## Antivirus y arranque
 
 ### El antivirus o SmartScreen bloquea `tesserafs-desktop.exe`

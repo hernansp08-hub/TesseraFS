@@ -41,7 +41,9 @@ bun run desktop:dev
 | `cargo build --release -p tessera-cli` | Herramienta de línea de comandos |
 | `bun test` | Pruebas de TypeScript (protocolo, interfaz, motor Bun) |
 | `cargo test --workspace` | Pruebas de Rust |
-| `bun run release <tipo>` | Publica una versión (ver [Versiones](../VERSIONES.md)) |
+| `bun run release <tipo>` | Sube la versión, escribe el CHANGELOG, hace el commit y la etiqueta (ver [Versiones](../VERSIONES.md)) |
+| `bun run package` | Compila las dos ediciones y genera los zips, sumas y notas en `dist/release/vX.Y.Z/` |
+| `bun run package --publish` | Además crea (o actualiza) la release en GitHub con `gh`; normalmente lo hace GitHub Actions |
 | `pwsh scripts/capturas.ps1` | Regenera las capturas de la documentación |
 
 > [!IMPORTANT]
@@ -69,7 +71,7 @@ gitGraph
 1. Crea una rama corta desde `main`: `feat/…`, `fix/…` o `perf/…` (en el diagrama, `feat-cancelar` y `fix-rutas`).
 2. Haz commits con [Conventional Commits](../VERSIONES.md#mensajes-de-commit-conventional-commits).
 3. Comprueba que todo esté en verde (`bun test` y `cargo test --workspace`) e integra en `main`.
-4. Cuando toque, ejecuta `bun run release auto` en `main`.
+4. Cuando toque, ejecuta `bun run release auto` en `main` y `git push --follow-tags`. Al llegar la etiqueta a GitHub, el flujo [`.github/workflows/release.yml`](../../.github/workflows/release.yml) prueba, empaqueta y publica la release (detalles en [Versiones](../VERSIONES.md#qué-hace-github-actions)).
 
 ## Pruebas
 

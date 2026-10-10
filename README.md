@@ -47,7 +47,7 @@ Las dos comparten la misma interfaz y dan los mismos resultados.
 
 ## Empezar
 
-**Usar:** descarga la edición que prefieras desde *Releases* y ábrela; no hay instalación. Todo se explica en la **[Guía de usuario](docs/usuario/guia.md)**.
+**Usar:** descarga el zip de la edición que prefieras desde **[Releases](../../releases/latest)**, desbloquéalo (Propiedades › Desbloquear), descomprímelo y ábrelo; no hay instalación. Todo se explica en la **[Guía de usuario](docs/usuario/guia.md#descargar)**.
 
 **Compilar** (Windows 10/11, [Bun](https://bun.sh) ≥ 1.3, [Rust](https://rustup.rs) estable):
 
