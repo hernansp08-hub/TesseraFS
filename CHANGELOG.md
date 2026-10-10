@@ -4,6 +4,16 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.4.0] - 2026-10-10
+
+### Añadido
+- **ui:** «¿Qué es esto?» en el panel de detalle y siete reglas de limpieza nuevas
+- **ui:** cesta «Para borrar» con selección múltiple y envío por lotes a la papelera
+- **ui:** cancelar el escaneo y pantalla de unidades al inicio
+
+### Corregido
+- **build:** la comprobación de firma de bun.exe funciona en GitHub Actions
+
 ## [0.3.0] - 2026-10-10
 
 ### Distribución
@@ -57,7 +67,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.3.0...HEAD
+[Sin publicar]: ../../compare/v0.4.0...HEAD
+[0.4.0]: ../../compare/v0.3.0...v0.4.0
 [0.3.0]: ../../compare/v0.2.0...v0.3.0
 [0.2.0]: ../../compare/v0.1.1...v0.2.0
 [0.1.1]: ../../compare/v0.1.0...v0.1.1
