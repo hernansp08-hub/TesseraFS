@@ -58,6 +58,7 @@ flowchart TD
 | **Optimización de distribución** | `DeliveryOptimization` de Windows, desde 100 MB | Configuración › Sistema › Almacenamiento › Archivos temporales |
 | **Volcados de memoria e informes de errores** | `C:\Windows\MEMORY.DMP`, `Minidump`, `LiveKernelReports`, `%LOCALAPPDATA%\CrashDumps` e informes de WER, desde 50 MB | El mismo ajuste de Archivos temporales |
 | **Caché de sombreadores** | `D3DSCache` y las de NVIDIA, AMD, Intel y Steam (`shadercache`), desde 200 MB | Bórrala con los juegos cerrados; la de DirectX está también en Archivos temporales. Los primeros arranques pueden ir a tirones. |
+| **OneDrive descargado** | La carpeta de OneDrive de cada usuario (también las de empresa, `OneDrive - Empresa`) cuando lo descargado ocupa más de 200 MB **en disco** | Botón **Liberar espacio** de la tarjeta: deja los archivos sólo en línea, como el Explorador. No se borra nada; se vuelven a descargar al abrirlos |
 
 > [!IMPORTANT]
 > TesseraFS **ignora** las carpetas `node_modules`, `target` y `.venv` que están dentro de programas instalados: `Program Files`, `AppData`, `ProgramData`, extensiones de VS Code… Esas no se regeneran solas: borrarlas rompería el programa.
@@ -68,7 +69,7 @@ flowchart TD
 |---|---|
 | **Modelos de IA locales** (`gguf`, `safetensors`, `ckpt`, `onnx`, agrupados por carpeta, desde 500 MB) | Desde la herramienta que los descargó: en LM Studio, *My Models*; en Ollama, `ollama rm <modelo>`. Así su catálogo sigue coherente. |
 | **Discos virtuales** (`vhdx`, `vhd`, desde 500 MB) | Crecen pero no encogen solos. WSL: limpia dentro de la distribución y activa el modo disperso con `wsl --manage <distro> --set-sparse true`. Docker: `docker system prune -a`. |
-| **Juegos instalados** (carpetas de `steamapps\common`, desde 1 GB) | Desinstálalos desde su tienda, o muévelos a otra unidad (Steam › Almacenamiento › Mover). No borres la carpeta a mano. |
+| **Juegos instalados** (carpetas de `steamapps\common`, desde 1 GB) | Desinstálalos desde su tienda, o muévelos a otra unidad (Steam › Almacenamiento › Mover). No borres la carpeta a mano. Para conservarlo ocupando menos, la tarjeta propone comprimirlo con `compact /c /s /i /q /exe:lzx` (sólo si aún no está comprimido). |
 | **Instaladores y archivos descargados** (`msi`, `exe`, `iso`, `zip`, `7z` de más de 100 MB en Descargas) | Si ya instalaste el programa, el instalador sobra |
 | **Puntos de restauración** (`System Volume Information`) | `vssadmin list shadowstorage` muestra cuánto ocupan. Ajusta el máximo o borra los antiguos en Panel de control › Sistema › Protección del sistema › Configurar. |
 
@@ -94,6 +95,9 @@ flowchart TD
 
 > [!TIP]
 > **Los proyectos de programación son la mina de oro.** En equipos de desarrollo, las carpetas `target`, `node_modules` y `.venv` suelen sumar decenas de gigas que se regeneran con una orden.
+
+> [!TIP]
+> **Liberar sin borrar.** Lo que está en OneDrive no hace falta tenerlo descargado: **Liberar espacio** lo deja sólo en la nube. Y un juego o una carpeta que casi no cambia puede comprimirse con `compact /c /s /i /exe:lzx "carpeta\*"`; el panel de detalle muestra después cuánto ahorra.
 
 > [!TIP]
 > **Copia la orden.** El botón junto a cada orden (`cargo clean`, `DISM …`) la copia al portapapeles para pegarla en una terminal.

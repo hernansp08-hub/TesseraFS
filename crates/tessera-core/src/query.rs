@@ -1,6 +1,6 @@
 //! Lenguaje de búsqueda: réplica fiel de `packages/protocol/src/query.ts`.
 //! Espacio = Y, `OR`/`|` = O, `-` = NO, comillas para espacios; claves ext, size/tam,
-//! alloc/asig, age/edad, path/ruta, name/nombre, re, type/tipo. Sin `type:` sólo archivos.
+//! alloc/asig, age/edad, path/ruta, name/nombre, re, type/tipo, attr/atrib. Sin `type:` sólo archivos.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use regex::{Regex, RegexBuilder};
 
 use crate::msg;
-use crate::types::EngineMessage;
+use crate::types::{flag, EngineMessage};
 
 /// Lo que la búsqueda necesita de cada nodo. `name_lower` y `path_lower` sólo se rellenan
 /// si la consulta lo pide (`needs_name_lower`, `needs_path`).
@@ -20,6 +20,8 @@ pub struct Target<'a> {
     pub size: f64,
     pub alloc: f64,
     pub mtime: f64,
+    /// Bits de `flag` (attr:).
+    pub flags: u16,
     pub path_lower: &'a str,
 }
 
@@ -57,6 +59,8 @@ enum P {
     NameSub(String),
     Re(Regex),
     Type { dir: bool },
+    /// Cualquiera de estos bits de `flag`.
+    Attr(u16),
 }
 
 struct Pred {
@@ -94,8 +98,32 @@ fn key_of(k: &str) -> Option<&'static str> {
         "name" | "nombre" => "name",
         "re" => "re",
         "type" | "tipo" => "type",
+        "attr" | "atrib" => "attr",
         _ => return None,
     })
+}
+
+/// Valores de attr: (con alias en español), ya en minúsculas y sin espacios.
+fn attr_bit(v: &str) -> Option<u16> {
+    Some(match v {
+        "cloud" | "nube" => flag::CLOUD,
+        "hidden" | "oculto" => flag::HIDDEN,
+        "system" | "sistema" => flag::SYSTEM,
+        "compressed" | "comprimido" => flag::COMPRESSED,
+        "hardlink" | "enlace" => flag::HARDLINK,
+        "sparse" | "disperso" => flag::SPARSE,
+        "reparse" | "reanalisis" => flag::REPARSE,
+        _ => return None,
+    })
+}
+
+/// attr:a,b → máscara de bits; un valor desconocido da `query.invalidValue` con el valor entero.
+fn attr_mask(v: &str) -> Result<u16, EngineMessage> {
+    let mut mask = 0;
+    for a in v.to_lowercase().split(',') {
+        mask |= attr_bit(a.trim()).ok_or_else(|| msg::query_invalid_value(v))?;
+    }
+    Ok(mask)
 }
 
 fn re_static(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
@@ -227,6 +255,7 @@ impl Query {
                             }
                         }
                         "re" => P::Re(RegexBuilder::new(&v).case_insensitive(true).build().map_err(|e| regex_error(&v, e))?),
+                        "attr" => P::Attr(attr_mask(&v)?),
                         "type" => {
                             let dir = dir_re.is_match(&v);
                             let file = file_re.is_match(&v);
@@ -295,6 +324,7 @@ impl Pred {
                     !t.is_dir
                 }
             }
+            P::Attr(mask) => t.flags & mask != 0,
         };
         r != self.neg
     }
@@ -319,6 +349,7 @@ mod tests {
         size: f64,
         mtime: f64,
         path: String,
+        flags: u16,
     }
     fn t(name: &str, size: f64, dir: bool, mtime: Option<f64>, path: Option<&str>) -> T {
         let ext = if name.contains('.') { name.rsplit('.').next().unwrap().to_lowercase() } else { String::new() };
@@ -330,7 +361,14 @@ mod tests {
             size,
             mtime: mtime.unwrap_or_else(now_secs),
             path: path.map(|p| p.to_string()).unwrap_or(format!("C:\\x\\{name}")).to_lowercase(),
+            flags: if dir { flag::DIR } else { 0 },
         }
+    }
+    /// Como `t` con bits de `flag` añadidos.
+    fn tf(name: &str, dir: bool, flags: u16) -> T {
+        let mut x = t(name, 1.0, dir, None, None);
+        x.flags |= flags;
+        x
     }
     fn m(q: &str, x: &T) -> bool {
         let target = Target {
@@ -341,6 +379,7 @@ mod tests {
             size: x.size,
             alloc: x.size,
             mtime: x.mtime,
+            flags: x.flags,
             path_lower: &x.path,
         };
         Query::compile(q).matches(&target, now_secs())
@@ -396,5 +435,38 @@ mod tests {
         assert!(!e.message.contains('\n'));
         let e = err("size:1..2..3");
         assert_eq!((e.code.as_str(), e.get("value")), ("query.invalidValue", Some(&crate::types::Param::Str("1..2..3".into()))));
+    }
+
+    #[test]
+    fn attr_key() {
+        let cloud = tf("a.docx", false, flag::CLOUD);
+        let hidden = tf("b.ini", false, flag::HIDDEN | flag::SYSTEM);
+        let plain = tf("c.txt", false, 0);
+        let cdir = tf("OneDrive", true, flag::CLOUD);
+        assert!(m("attr:cloud", &cloud) && !m("attr:cloud", &plain));
+        // Alias, mayúsculas, espacios alrededor de cada valor (entre comillas) y O dentro de la clave
+        assert!(m("atrib:NUBE", &cloud));
+        assert!(m(r#"attr:"cloud, oculto""#, &hidden) && m(r#"attr:"cloud, oculto""#, &cloud));
+        assert!(m("attr:sistema", &hidden) && !m("attr:sistema", &cloud));
+        assert!(m("attr:compressed,enlace,disperso,reanalisis", &tf("x", false, flag::SPARSE)));
+        for (v, f) in [("comprimido", flag::COMPRESSED), ("hardlink", flag::HARDLINK), ("sparse", flag::SPARSE), ("reparse", flag::REPARSE)] {
+            assert!(m(&format!("attr:{v}"), &tf("x", false, f)), "{v}");
+            assert!(!m(&format!("attr:{v}"), &plain), "{v}");
+        }
+        // Negación y Y con otras claves
+        assert!(m("-attr:cloud", &plain) && !m("-attr:cloud", &cloud));
+        assert!(m("ext:docx attr:cloud", &cloud) && !m("ext:txt attr:cloud", &cloud));
+        // Carpetas: sólo con type:dir, como las demás claves; el bit DIR no cuenta
+        assert!(!m("attr:cloud", &cdir));
+        assert!(m("type:dir attr:cloud", &cdir));
+        assert!(!m("type:dir attr:cloud", &tf("d", true, 0)));
+        // Valor desconocido o vacío: query.invalidValue con el valor entero tras attr:
+        let err = |q: &str| Query::compile(q).error.unwrap();
+        let e = err("attr:cloud,Raro");
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("query.invalidValue", "Invalid value: \"cloud,Raro\""));
+        assert_eq!(e.get("value"), Some(&crate::types::Param::Str("cloud,Raro".into())));
+        assert_eq!(err("-atrib:dir").get("value"), Some(&crate::types::Param::Str("dir".into())));
+        assert_eq!(err("attr:").get("value"), Some(&crate::types::Param::Str("".into())));
+        assert_eq!(err("attr:cloud,").code, "query.invalidValue");
     }
 }

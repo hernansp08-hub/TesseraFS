@@ -4,6 +4,12 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+### Nube y compresión
+- **Liberar espacio de OneDrive sin borrar nada:** tarjeta en Liberar espacio, botón en el panel de detalle y en el menú del clic derecho. Deja los archivos descargados sólo en línea, como el Explorador.
+- La tarjeta de cada juego propone comprimirlo con `compact /exe:lzx` si aún no está comprimido.
+- El panel de detalle distingue los archivos de la nube descargados de los que están sólo en línea, y muestra cuánto ahorra la compresión.
+- Filtro `attr:` (`atrib:`) por atributos: nube, oculto, sistema, comprimido, enlace duro, disperso y punto de reanálisis.
+
 ## [0.7.0] - 2026-10-10
 
 ### Línea de comandos

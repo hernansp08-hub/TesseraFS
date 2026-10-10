@@ -190,13 +190,32 @@ function addCopies(root) {
   [3.4, 4.1, 2.9, 5.2, 3.7, 4.6].forEach((m, i) => twice(`IMG_20${41 + i}.jpg`, m * MB + i * 4093, t(300 - i * 9), [y25], [imp]));
   void pics;
   for (let i = first; i < N.length; i++) N[i].copy = true; // para el historial simulado: llegaron «hace poco»
+  addOneDrive(at(...me));
 }
+// OneDrive: archivos de la nube (cloud), unos descargados y otros sólo en línea (online: no ocupan disco)
+function addOneDrive(me) {
+  const od = dir(me, 'OneDrive'), t = d => T1 - d * 86400;
+  const put = (path, size, online, days) => {
+    const parts = path.split('/'), name = parts.pop();
+    const p = parts.reduce((x, nm) => x.kids.find(k => k.name === nm) || dir(x, nm), od);
+    const f = file(p, name, size, t(days)); f.cloud = true; f.online = online;
+  };
+  put('Documentos/Presentación cliente.pptx', 248 * MB, false, 12);
+  put('Documentos/Informe anual 2025.pdf', 36 * MB, false, 40);
+  put('Documentos/Contratos/Contrato 2024.pdf', 4 * MB, true, 300);
+  put('Imágenes/Álbum cámara/VID_20250803.mp4', 1.9 * GB, false, 70);
+  put('Imágenes/Álbum cámara/VID_20250612.mp4', 1.3 * GB, true, 120);
+  [7.2, 6.1, 5.8, 6.6, 7.9, 5.4, 6.3, 7.1].forEach((m, i) => put(`Imágenes/Álbum cámara/IMG_${2101 + i}.jpg`, m * MB, i % 3 === 0, 60 + i));
+  put('Escritorio/Copia de seguridad del móvil.zip', 3.4 * GB, false, 25);
+  for (const n of N) if (n.cloud || n === od || isUnder(n, od)) n.cloud = n.cloud || n.isDir && n !== od;
+}
+const isUnder = (n, root) => { for (let p = n.parent; p; p = p.parent) if (p === root) return true; return false; };
 // Agregación ascendente en una pasada: cada padre tiene id menor que sus hijos
 function aggregate() {
   for (let i = N.length - 1; i >= 0; i--) {
     const n = N[i];
     if (!n.isDir) {
-      n.alloc = n.size <= 700 ? 0 : Math.ceil(n.size / 4096) * 4096;
+      n.alloc = n.online || n.size <= 700 ? 0 : Math.ceil(n.size / 4096) * 4096;
       if (n.comp) n.alloc = Math.ceil(n.alloc * .47 / 4096) * 4096;
       n.ualloc = n.hl ? 0 : n.alloc;
     }

@@ -11,6 +11,7 @@ import { fail } from './errors';
 interface DNode {
   id: number; name: string; parent: DNode | null; isDir: boolean; size: number; alloc: number; files: number; dirs: number;
   mtime: number; ext: string; kids: DNode[] | null; mk: DNode[] | null; comp: boolean; hl: boolean; hidden: boolean; depth: number; copy?: boolean;
+  cloud?: boolean; online?: boolean;
 }
 
 const GB = 1024 ** 3;
@@ -34,7 +35,7 @@ export class DemoBackend implements Backend {
     const { N, root } = buildSample(); this.N = N; this.root = root; this.ready = true;
   }
   private flags(n: DNode) {
-    return (n.isDir ? FLAG.DIR : 0) | (n.hidden ? FLAG.HIDDEN : 0) | (n.hl ? FLAG.HARDLINK : 0) | (n.comp ? FLAG.COMPRESSED : 0);
+    return (n.isDir ? FLAG.DIR : 0) | (n.hidden ? FLAG.HIDDEN : 0) | (n.hl ? FLAG.HARDLINK : 0) | (n.comp ? FLAG.COMPRESSED : 0) | (n.cloud ? FLAG.CLOUD : 0);
   }
   private row(n: DNode): NodeRow {
     const r: NodeRow = { id: n.id, parentId: n.parent ? n.parent.id : -1, name: n.parent ? n.name : 'C:\\', isDir: n.isDir, size: n.size, alloc: n.alloc,
@@ -106,7 +107,7 @@ export class DemoBackend implements Backend {
     while (st.length) {
       const n = st.pop()!;
       if (n.kids) for (const k of n.kids) st.push(k);
-      const t = { name: n.name, ext: n.ext, isDir: n.isDir, size: n.size, alloc: n.alloc, mtime: n.mtime, path: () => this.path(n) };
+      const t = { name: n.name, ext: n.ext, isDir: n.isDir, size: n.size, alloc: n.alloc, mtime: n.mtime, flags: this.flags(n), path: () => this.path(n) };
       if (n.parent && q.match(t)) { hits.push(n); bytes += n.size; }
     }
     hits.sort((a, b) => b.size - a.size);
@@ -275,6 +276,13 @@ export class DemoBackend implements Backend {
       properties: 'Demo: the app would open the Windows Properties dialog.',
       trash: `Demo: nothing was moved. The app would send "${n.name}" to the Recycle Bin.`,
     };
+    if (kind === 'freeUp') {
+      // Lo que haría la app real: archivos de la nube descargados → «sólo en línea»
+      let count = 0, bytes = 0; const st = [n];
+      while (st.length) { const x = st.pop()!; if (x.kids) st.push(...x.kids); else if (x.cloud && x.alloc > 0) { count++; bytes += x.alloc; } }
+      if (!count) return { ok: false, code: 'action.nothingToFree', message: 'There are no downloaded cloud files here to free up' };
+      return { ok: false, code: 'demo.freeUp', params: { count, bytes }, message: `Demo: nothing changed. The app would set ${count} files to online-only.` };
+    }
     if (!msg[kind]) return { ok: false, code: 'demo.unavailable', message: 'Action not available in the demo.' };
     return { ok: kind !== 'trash', code: 'demo.' + kind, params: { name: n.name }, message: msg[kind] };
   }

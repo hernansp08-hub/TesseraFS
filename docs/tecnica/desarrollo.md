@@ -88,7 +88,7 @@ gitGraph
 | `packages/core-bun/test` | Almacén, parser MFT con registros sintéticos, recorrido real de una carpeta temporal, mensajes con código | `bun test packages/core-bun` |
 | `packages/i18n/test` | Catálogos (claves, ICU, argumentos, etiquetas, francés), formatos, negociación y uso de las claves en código y motores | `bun test packages/i18n` |
 | `crates/tessera-core` | Parser MFT, slice, búsqueda, recorrido | `cargo test --workspace` |
-| Prueba cruzada Rust ↔ TS | Mismo slice byte a byte y mismas búsquedas | `bun crates/tessera-cli/tests/crosscheck.ts` (tras generar los archivos con `tessera-cli`) |
+| Prueba cruzada Rust ↔ TS | Mismo slice byte a byte y mismas búsquedas, incluidas las de `attr:` | `bun crates/tessera-cli/tests/crosscheck.ts` (tras generar los archivos con `tessera-cli`; la cabecera del script explica cómo y avisa si falta alguna consulta de `attr:`) |
 
 Variables útiles:
 - `TESSERA_TEST_DIR`: carpeta donde las pruebas de Bun crean sus archivos.

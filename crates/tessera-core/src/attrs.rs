@@ -2,14 +2,20 @@
 
 use crate::types::flag;
 
+pub const ATTR_READONLY: u32 = 0x1;
 pub const ATTR_HIDDEN: u32 = 0x2;
 pub const ATTR_SYSTEM: u32 = 0x4;
 pub const ATTR_DIRECTORY: u32 = 0x10;
+pub const ATTR_ARCHIVE: u32 = 0x20;
+pub const ATTR_TEMPORARY: u32 = 0x100;
 pub const ATTR_SPARSE: u32 = 0x200;
 pub const ATTR_REPARSE: u32 = 0x400;
 pub const ATTR_COMPRESSED: u32 = 0x800;
 pub const ATTR_OFFLINE: u32 = 0x1000;
+pub const ATTR_NOT_CONTENT_INDEXED: u32 = 0x2000;
 pub const ATTR_RECALL_ON_OPEN: u32 = 0x4_0000;
+pub const ATTR_PINNED: u32 = 0x8_0000;
+pub const ATTR_UNPINNED: u32 = 0x10_0000;
 pub const ATTR_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
 
 pub const TAG_WOF: u32 = 0x8000_0017;

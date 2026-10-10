@@ -138,7 +138,7 @@ Cada evento `ScanProgress` lleva la fase, los elementos, los bytes, el tiempo, u
 - La ruta completa sólo se construye si la consulta usa `path:` o si la fila entra en el resultado.
 - 80–140 ms (Rust) y 140–300 ms (Bun) sobre 1,46 M nodos.
 
-Las 21 consultas de la prueba cruzada (`crates/tessera-cli/tests/crosscheck.ts`) dan los mismos totales, bytes, orden y rutas en Rust y en TypeScript.
+Las consultas de la prueba cruzada (`crates/tessera-cli/tests/crosscheck.ts`) dan los mismos totales, bytes, orden y rutas en Rust y en TypeScript; entre ellas tienen que estar las 8 de `attr:` (`ATTR_QUERIES`), y un valor no válido tiene que dar el mismo error en los dos.
 
 ## Duplicados
 
@@ -222,6 +222,16 @@ Con administrador, en un volumen NTFS local, el escaneo guarda la **posición de
 4. Recorre esas carpetas con un único grupo de hilos y las injerta todas de una vez; sólo entonces guarda la nueva posición del diario.
 
 La lectura real del diario necesita administrador y no se ejecuta en las pruebas automáticas (`usn_refresh_elevated` está marcada `#[ignore]`); el analizador de registros, la resolución de carpetas y el conjunto mínimo sí tienen pruebas con datos sintéticos. La portable responde siempre `refresh.unavailable`.
+
+## Liberar espacio de OneDrive
+
+`action('freeUp', id)` deja «sólo en línea» los archivos de la nube descargados bajo un archivo o una carpeta, igual que «Liberar espacio» del Explorador (`attrib +U -P`):
+
+1. Candidatos: el nodo y sus descendientes vivos con `FLAG.CLOUD`. Cuentan los archivos con `alloc > 0`; las carpetas también se marcan (lo que llegue después queda sólo en línea) pero no cuentan.
+2. Para cada uno, `GetFileAttributesW`; si ya tiene `OFFLINE` o `RECALL_ON_DATA_ACCESS` se salta. Si no, `SetFileAttributesW` con `(attrs & AJUSTABLES & ~PINNED) | UNPINNED`, donde AJUSTABLES son los bits que acepta esa llamada (READONLY, HIDDEN, SYSTEM, ARCHIVE, TEMPORARY, OFFLINE, NOT_CONTENT_INDEXED, PINNED, UNPINNED).
+3. Resultado: `action.freedUp {count, bytes}` (bytes = suma de `alloc` de los cambiados), `action.nothingToFree` si no había nada descargado, o `action.failed` si fallaron todos.
+
+El árbol no se toca: el proveedor (OneDrive) vacía los archivos después, en segundo plano, y la interfaz vuelve a escanear la carpeta a los 5 s. El cálculo de atributos y la selección de candidatos tienen pruebas puras; las pruebas nunca cambian atributos de archivos reales.
 
 ## Exportar
 

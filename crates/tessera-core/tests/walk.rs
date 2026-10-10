@@ -133,6 +133,25 @@ fn coded_errors() {
     assert!(s.tree.live(id), "un fallo no quita el nodo");
 }
 
+#[test]
+fn free_up_without_cloud_files() {
+    let d = TempDir::new("liberar");
+    let f = d.file("sub/a.bin", 20_000);
+    d.file("b.txt", 10);
+    let mut s = run(&d.0);
+    // Sin archivos de la nube no hay candidatos: nunca se llega a SetFileAttributesW
+    assert!(tessera_core::freeup::candidates(&s.tree, 0).is_empty(), "la carpeta temporal no debía tener archivos de la nube");
+    let before = (s.tree.size(0), s.tree.alloc(0), s.tree.files(0));
+    for id in [0, find(&s.tree, &d.0.join("sub")), find(&s.tree, &f)] {
+        let r = tessera_core::action(&mut s.tree, ActionKind::FreeUp, id);
+        assert_eq!((r.ok, r.code.as_deref(), r.params.is_none()), (false, Some("action.nothingToFree"), true));
+        assert!(r.message.is_some());
+    }
+    assert_eq!((s.tree.size(0), s.tree.alloc(0), s.tree.files(0)), before, "el árbol no cambia");
+    let r = tessera_core::action(&mut s.tree, ActionKind::FreeUp, 999_999);
+    assert_eq!((r.ok, r.code.as_deref()), (false, Some("error.invalidNode")));
+}
+
 /// Envía un archivo temporal a la Papelera: `cargo test -- --ignored papelera`.
 #[test]
 #[ignore]

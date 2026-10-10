@@ -12,7 +12,7 @@ const CONTRACT = [
   'dup.readErrors',
   'error.invalidPath', 'error.notFolder', 'error.cannotOpen', 'error.scanBusy', 'error.dupBusy', 'error.noScan', 'error.invalidNode',
   'error.cancelled', 'error.unsupportedPlatform', 'error.internal',
-  'action.trashed', 'action.trashRoot', 'action.trashNotMoved', 'action.cancelled', 'action.failed', 'action.unknown',
+  'action.trashed', 'action.freedUp', 'action.nothingToFree', 'action.trashRoot', 'action.trashNotMoved', 'action.cancelled', 'action.failed', 'action.unknown',
   'elevation.failed',
   'history.notFound', 'history.otherRoot', 'history.saveFailed', 'history.readFailed',
   'export.invalidName', 'export.failed', 'export.notFound',
@@ -44,6 +44,10 @@ test('messages: forma del objeto y plurales en inglés', () => {
     code: 'history.otherRoot', params: { path: 'D:\\' }, message: 'That snapshot is of another folder (D:\\)',
   });
   expect(msg('export.invalidName', { name: 'a/b' }).message).toBe('Invalid file name: a/b');
+  expect(msg('action.freedUp', { count: 1, bytes: 4096 }).message).toBe('1 file set to online-only; 4,096 bytes will be freed shortly');
+  expect(msg('action.freedUp', { count: 3, bytes: 5_000_000 })).toEqual({
+    code: 'action.freedUp', params: { count: 3, bytes: 5_000_000 }, message: '3 files set to online-only; 5,000,000 bytes will be freed shortly',
+  });
 });
 
 test('walkWarnings: sólo dos recuentos (con rutas de muestra), nunca una línea por carpeta', () => {

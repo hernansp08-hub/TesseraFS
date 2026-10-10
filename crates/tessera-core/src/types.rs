@@ -276,6 +276,9 @@ pub enum ActionKind {
     Reveal,
     Properties,
     Trash,
+    /// Pasa a «sólo en línea» los archivos de la nube descargados (ver [`crate::freeup`]).
+    #[serde(rename = "freeUp")]
+    FreeUp,
 }
 
 impl std::str::FromStr for ActionKind {
@@ -287,6 +290,7 @@ impl std::str::FromStr for ActionKind {
             "reveal" => Ok(Self::Reveal),
             "properties" => Ok(Self::Properties),
             "trash" => Ok(Self::Trash),
+            "freeUp" => Ok(Self::FreeUp),
             _ => Err(s.to_string()),
         }
     }
@@ -567,6 +571,14 @@ mod tests {
         assert_eq!(serde_json::to_value(e).unwrap(), serde_json::json!({ "code": "error.internal", "params": { "error": "boom" }, "message": "Internal error: boom" }));
         assert_eq!("trash".parse::<ActionKind>(), Ok(ActionKind::Trash));
         assert_eq!("nuke".parse::<ActionKind>(), Err("nuke".to_string()));
+        assert_eq!("freeUp".parse::<ActionKind>(), Ok(ActionKind::FreeUp));
+        assert_eq!(serde_json::to_value(ActionKind::FreeUp).unwrap(), "freeUp");
+        assert_eq!(serde_json::from_str::<ActionKind>(r#""freeUp""#).unwrap(), ActionKind::FreeUp);
+        let a = serde_json::to_value(ActionResult::ok_with(msg::freed_up(2, 3 << 20))).unwrap();
+        assert_eq!(a["params"], serde_json::json!({ "count": 2, "bytes": 3 << 20 }));
+        assert_eq!(a["message"], "2 files set to online-only; 3.0 MB will be freed shortly");
+        let a = serde_json::to_value(ActionResult::fail(msg::nothing_to_free())).unwrap();
+        assert_eq!((a["ok"].clone(), a["code"].clone(), a.get("params")), (false.into(), "action.nothingToFree".into(), None));
     }
 
     #[test]

@@ -31,7 +31,7 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 const fail = errorResponse;
 const num = (v: string | null, def: number) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? n : def; };
 const SORTS: SortKey[] = ['size', 'alloc', 'name', 'files', 'mtime', 'delta'];
-const ACTIONS: ActionKind[] = ['open', 'reveal', 'properties', 'trash'];
+const ACTIONS: ActionKind[] = ['open', 'reveal', 'properties', 'trash', 'freeUp'];
 const ENGINES: EngineChoice[] = ['auto', 'mft', 'walk'];
 
 if (Bun.isMainThread) await main();

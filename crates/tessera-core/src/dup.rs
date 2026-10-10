@@ -285,22 +285,6 @@ fn hash_file(m: &Meter, id: u32, want: u64, whole: bool) -> Option<Hash> {
     })
 }
 
-/// Antepone `\\?\` (o `\\?\UNC\`) para que la ruta llegue tal cual a Windows: rutas largas y
-/// nombres con punto o espacio final.
-#[cfg(windows)]
-fn verbatim_wide(path: Vec<u16>) -> Vec<u16> {
-    let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
-    if path.starts_with(&w(r"\\?\")) || path.starts_with(&w(r"\\.\")) {
-        return path;
-    }
-    let (mut out, rest) = match path.strip_prefix(&w(r"\\")[..]) {
-        Some(unc) => (w(r"\\?\UNC\"), unc),
-        None => (w(r"\\?\"), &path[..]),
-    };
-    out.extend_from_slice(rest);
-    out
-}
-
 /// Abre para lectura secuencial sin bloquear a otros procesos ni recuperar datos remotos.
 #[cfg(windows)]
 fn open(t: &Tree, id: u32) -> std::io::Result<std::fs::File> {
@@ -309,7 +293,7 @@ fn open(t: &Tree, id: u32) -> std::io::Result<std::fs::File> {
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_OPEN_NO_RECALL, FILE_FLAG_SEQUENTIAL_SCAN, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
-    let path = std::ffi::OsString::from_wide(&verbatim_wide(t.path_wide(id)));
+    let path = std::ffi::OsString::from_wide(&crate::walk::verbatim_wide(t.path_wide(id)));
     std::fs::OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
@@ -320,17 +304,4 @@ fn open(t: &Tree, id: u32) -> std::io::Result<std::fs::File> {
 #[cfg(not(windows))]
 fn open(t: &Tree, id: u32) -> std::io::Result<std::fs::File> {
     std::fs::File::open(t.path(id))
-}
-
-#[cfg(all(test, windows))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn verbatim_paths() {
-        let v = |s: &str| String::from_utf16(&verbatim_wide(s.encode_utf16().collect())).unwrap();
-        assert_eq!(v(r"C:\a\b. "), r"\\?\C:\a\b. ");
-        assert_eq!(v(r"\\srv\share\x"), r"\\?\UNC\srv\share\x");
-        assert_eq!(v(r"\\?\C:\x"), r"\\?\C:\x");
-    }
 }

@@ -94,6 +94,11 @@ test('engine: escaneo, slice, hijos, búsqueda, extensiones y nodos', async () =
   expect(s.rows[0].path).toBe(path.join(R, 'sub', 'c.dll'));
   expect(e.search({ query: '', root: r.rootId, limit: 1 }).rows[0].name).toBe('c.dll');
   expect(e.search({ query: 'type:dir name:"empty"', root: r.rootId, limit: 5 }).total).toBe(1);
+  // attr: con las banderas leídas del disco
+  expect(e.search({ query: 'attr:hidden', root: r.rootId, limit: 5 }).rows.map(x => x.name)).toEqual(['h.txt']);
+  expect(e.search({ query: 'attr:hardlink', root: r.rootId, limit: 5 }).total).toBe(1);
+  expect(e.search({ query: 'type:dir attr:reparse', root: r.rootId, limit: 5 }).rows.map(x => x.name)).toEqual(['jx']);
+  expect(e.search({ query: 'attr:hidden,cloud -name:h.txt', root: r.rootId, limit: 5 }).total).toBe(0);
 
   const ex = e.extStats(r.rootId);
   expect(ex[0].ext).toBe('dll');

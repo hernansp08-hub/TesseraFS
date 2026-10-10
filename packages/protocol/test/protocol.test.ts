@@ -41,6 +41,14 @@ test('slice: roundtrip with pruning', () => {
   expect(out[2].parent!.name).toBe('a');
 });
 
+test('query: only real keys, units and attributes (same as Rust)', () => {
+  expect(compileQuery('attr:constructor').error?.code).toBe('query.invalidValue');
+  expect(compileQuery('attr:__proto__').error?.code).toBe('query.invalidValue');
+  expect(compileQuery('size:>1constructor').error?.code).toBe('query.invalidValue');
+  expect(compileQuery('constructor:x').error).toBeUndefined(); // no es una clave: texto normal
+  expect(compileQuery('constructor:x').match(T('constructor:x.txt', 1))).toBe(true);
+});
+
 test('query: quoted values after a key', () => {
   expect(compileQuery('type:dir name:"System Volume Information"').match(T('System Volume Information', 1, { isDir: true }))).toBe(true);
   expect(compileQuery('"Cities Skylines"').match(T('Cities Skylines II', 1))).toBe(true);

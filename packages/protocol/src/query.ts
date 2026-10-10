@@ -1,4 +1,4 @@
-import type { EngineMessage } from "./types";
+import { FLAG, type EngineMessage } from "./types";
 
 // Lenguaje de búsqueda de TesseraFS. Ver docs/ARQUITECTURA.md (el motor Rust replica estas reglas).
 
@@ -9,6 +9,7 @@ export interface QueryTarget {
   size: number;
   alloc: number;
   mtime: number;   // segundos Unix
+  flags?: number;  // bits de FLAG (attr:); sin ellos, 0
   path(): string;  // ruta completa; se llama sólo si hace falta
 }
 
@@ -31,17 +32,25 @@ const UNIT: Record<string, number> = { '': 1, b: 1, k: 1024, m: 1024 ** 2, g: 10
 const AGE: Record<string, number> = { d: 86400, w: 7 * 86400, mo: 30 * 86400, y: 365 * 86400 };
 const KEYS: Record<string, string> = {
   ext: 'ext', size: 'size', tam: 'size', alloc: 'alloc', asig: 'alloc', age: 'age', edad: 'age',
-  path: 'path', ruta: 'path', name: 'name', nombre: 'name', re: 're', type: 'type', tipo: 'type',
+  path: 'path', ruta: 'path', name: 'name', nombre: 'name', re: 're', type: 'type', tipo: 'type', attr: 'attr', atrib: 'attr',
+};
+/** Valores de attr: (con alias en español); varios separados por comas = cualquiera de ellos. */
+const ATTRS: Record<string, number> = {
+  cloud: FLAG.CLOUD, nube: FLAG.CLOUD, hidden: FLAG.HIDDEN, oculto: FLAG.HIDDEN, system: FLAG.SYSTEM, sistema: FLAG.SYSTEM,
+  compressed: FLAG.COMPRESSED, comprimido: FLAG.COMPRESSED, hardlink: FLAG.HARDLINK, enlace: FLAG.HARDLINK,
+  sparse: FLAG.SPARSE, disperso: FLAG.SPARSE, reparse: FLAG.REPARSE, reanalisis: FLAG.REPARSE,
 };
 
 type Pred = (t: QueryTarget, now: number) => boolean;
+/** Busca sólo claves propias: «constructor» o «__proto__» no son claves, unidades ni atributos. */
+const own = <T>(o: Record<string, T>, k: string): T | undefined => Object.hasOwn(o, k) ? o[k] : undefined;
 
 function wildcard(p: string): RegExp {
   return new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
 }
 function num(s: string, units: Record<string, number>): number {
   const m = s.trim().toLowerCase().match(/^(\d+(?:[.,]\d+)?)\s*([a-z]*)$/);
-  if (!m || !(m[2] in units)) fail("query.invalidValue", `Invalid value: "${s}"`, { value: s });
+  if (!m || own(units, m[2]) === undefined) fail("query.invalidValue", `Invalid value: "${s}"`, { value: s });
   return parseFloat(m[1].replace(',', '.')) * units[m[2]];
 }
 function compare(spec: string, units: Record<string, number>): (v: number) => boolean {
@@ -69,7 +78,7 @@ export function compileQuery(q: string): CompiledQuery {
       if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
       let p: Pred;
       const kv = tok.match(/^([a-záéíóú]+):(.*)$/i);
-      const key = kv ? KEYS[kv[1].toLowerCase()] : undefined;
+      const key = kv ? own(KEYS, kv[1].toLowerCase()) : undefined;
       if (kv && key) {
         const v = kv[2];
         switch (key) {
@@ -83,6 +92,15 @@ export function compileQuery(q: string): CompiledQuery {
           case 'path': { const s = v.toLowerCase(); p = t => t.path().toLowerCase().includes(s); break; }
           case 'name': { const r = /[*?]/.test(v) ? wildcard(v) : null, s = v.toLowerCase(); p = t => r ? r.test(t.name) : t.name.toLowerCase().includes(s); break; }
           case 're': { const r = new RegExp(v, 'i'); p = t => r.test(t.name); break; }
+          case 'attr': {
+            let mask = 0;
+            for (const a of v.toLowerCase().split(',')) {
+              const bit = own(ATTRS, a.trim());
+              if (!bit) fail("query.invalidValue", `Invalid value: "${v}"`, { value: v });
+              mask |= bit;
+            }
+            p = t => ((t.flags ?? 0) & mask) !== 0; break;
+          }
           case 'type': {
             const dir = /^(dir|carpeta|folder)$/i.test(v), file = /^(file|archivo)$/i.test(v);
             if (!dir && !file) fail("query.invalidType", `Invalid type: "${v}" (use dir or file)`, { value: v });

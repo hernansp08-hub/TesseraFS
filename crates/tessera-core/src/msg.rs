@@ -9,6 +9,17 @@ fn plural(n: u64, one: &str, other: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { other })
 }
 
+/// Tamaño legible para los textos de reserva (KB = 1024 bytes, como el Explorador).
+fn human_bytes(b: u64) -> String {
+    const UNITS: [&str; 5] = ["bytes", "KB", "MB", "GB", "TB"];
+    let (mut v, mut i) = (b as f64, 0);
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { plural(b, "byte", "bytes") } else { format!("{v:.1} {}", UNITS[i]) }
+}
+
 /// Añade al texto de reserva (sólo registros y CLI) hasta 5 ejemplos, uno por línea.
 fn with_samples(mut message: String, samples: &[String]) -> String {
     for s in samples.iter().take(5) {
@@ -117,6 +128,19 @@ pub fn internal(error: &str) -> EngineMessage {
 
 pub fn trashed() -> EngineMessage {
     EngineMessage::new("action.trashed", "Moved to the Recycle Bin")
+}
+
+/// `count`: archivos de la nube que pasaron a «sólo en línea»; `bytes`: su espacio asignado, que
+/// el proveedor (OneDrive) libera poco después.
+pub fn freed_up(count: u64, bytes: u64) -> EngineMessage {
+    let n = plural(count, "file", "files");
+    EngineMessage::new("action.freedUp", format!("{n} set to online-only; {} will be freed shortly", human_bytes(bytes)))
+        .param("count", count)
+        .param("bytes", bytes)
+}
+
+pub fn nothing_to_free() -> EngineMessage {
+    EngineMessage::new("action.nothingToFree", "There are no downloaded cloud files here to free up")
 }
 
 pub fn trash_root() -> EngineMessage {

@@ -22,6 +22,8 @@ export const kernel32 = lazy(() => dlopen('kernel32.dll', {
   GetDiskFreeSpaceExW: { args: [P, P, P, P], returns: i32 },
   GetDiskFreeSpaceW: { args: [P, P, P, P, P], returns: i32 },
   GetFileAttributesExW: { args: [P, i32, P], returns: i32 },
+  GetFileAttributesW: { args: [P], returns: u32 },
+  SetFileAttributesW: { args: [P, u32], returns: i32 },
   GetFullPathNameW: { args: [P, u32, P, P], returns: u32 },
   VirtualAlloc: { args: [P, u64, u32, u32], returns: P },
   VirtualFree: { args: [P, u64, u32], returns: i32 },
@@ -81,9 +83,12 @@ export const FILE_FLAG_NO_BUFFERING = 0x20000000;
 export const FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000;
 
 export const ATTR = {
-  READONLY: 0x1, HIDDEN: 0x2, SYSTEM: 0x4, DIRECTORY: 0x10, ARCHIVE: 0x20, SPARSE: 0x200, REPARSE: 0x400,
-  COMPRESSED: 0x800, OFFLINE: 0x1000, RECALL_ON_OPEN: 0x40000, RECALL_ON_DATA_ACCESS: 0x400000,
+  READONLY: 0x1, HIDDEN: 0x2, SYSTEM: 0x4, DIRECTORY: 0x10, ARCHIVE: 0x20, NORMAL: 0x80, TEMPORARY: 0x100, SPARSE: 0x200,
+  REPARSE: 0x400, COMPRESSED: 0x800, OFFLINE: 0x1000, NOT_CONTENT_INDEXED: 0x2000, RECALL_ON_OPEN: 0x40000,
+  PINNED: 0x80000, UNPINNED: 0x100000, RECALL_ON_DATA_ACCESS: 0x400000,
 } as const;
+/** Lo que devuelve GetFileAttributesW si falla. */
+export const INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF;
 
 export const REPARSE_TAG_WOF = 0x80000017;
 /** Las etiquetas "name surrogate" (bit 29) son enlaces: junctions, symlinks, puntos de montaje. */

@@ -118,6 +118,7 @@ pub fn search(t: &Tree, query: &str, root: u32, limit: u32) -> SearchResponse {
             size: t.size(id) as f64,
             alloc: t.alloc(id) as f64,
             mtime: t.mtime(id) as f64,
+            flags: t.flags(id),
             path_lower: path,
         };
         if q.matches(&target, now) {
@@ -178,7 +179,7 @@ mod tests {
         r.push(a, b"z.bin", 1, 4096, 30, 0);
         r.push(a, b"a1.bin", 100, 8192, 40, 0);
         r.push(a, b"Y.bin", 1, 4096, 30, 0);
-        r.push(root, b"README", 7, 0, 50, 0);
+        r.push(root, b"README", 7, 0, 50, flag::HIDDEN);
         r.root = root;
         build(r, "C:\\".into(), &[]).unwrap()
     }
@@ -209,6 +210,9 @@ mod tests {
         assert_eq!(r.rows[0].path, "C:\\node_modules\\a1.bin");
         let r = search(&t, "path:node_modules", 0, 10);
         assert_eq!(r.total, 3);
+        // attr: usa los bits de flag del nodo
+        assert_eq!(search(&t, "attr:hidden", 0, 10).rows[0].node.name, "README");
+        assert_eq!(search(&t, "-atrib:oculto", 0, 10).total, 4);
         let r = search(&t, "type:dir", 0, 10);
         assert_eq!(r.total, 1);
         assert_eq!(r.rows[0].path, "C:\\node_modules");

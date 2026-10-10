@@ -549,6 +549,7 @@ export function renderInspector() {
     : `<div class="actions"><button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button><button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button>`
       + `<button class="btn sm${S.marked.has(r.id) ? ' on' : ''}" type="button" data-act="mark" aria-pressed="${S.marked.has(r.id)}"${r.parentId >= 0 ? '' : ' disabled'}>${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}</button>`
       + (r.isDir ? `<button class="btn sm" type="button" data-act="rescan" title="${tx('menu.rescan')}">${tx('insp.rescan')}</button>` : '')
+      + (canFreeUp(r) ? `<button class="btn sm" type="button" data-act="freeUp" title="${tx('menu.freeUp.title')}">${tx('menu.freeUp')}</button>` : '')
       + `<button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button></div>`;
   const inMarked = markedAncestor(r);
   el.innerHTML = `<div class="insp-top"><span class="sw lg" style="background:${rgb(rowColor(r))}"></span><div class="insp-id"><div class="insp-kind">${esc(kind)}</div><h2 class="insp-name" title="${esc(r.name)}">${esc(nameOf(r))}</h2></div></div>`
@@ -561,7 +562,10 @@ export function renderInspector() {
     + `<div><dt>${tx('insp.modified')}</dt><dd>${fmtD(r.mtime)}</dd></div>`
     + (H.cmp && (r.fresh || r.prev != null) ? `<div><dt>${tx('insp.change')}</dt><dd>${deltaHTML(r) || tx('changes.same')}</dd></div>` : '') + `</dl>`
     + (r.flags & FLAG.HARDLINK ? `<p class="note">${tx('insp.note.hardlink')}</p>` : '')
-    + (r.flags & FLAG.CLOUD ? `<p class="note">${tx('insp.note.cloud')}</p>` : '')
+    + (r.flags & FLAG.CLOUD ? `<p class="note">${tx(r.isDir ? 'insp.note.cloud' : r.alloc ? 'insp.cloud.local' : 'insp.cloud.online')}</p>` : '')
+    // Ahorro en disco: en archivos, sólo si están comprimidos (los de la nube ya tienen su nota); en carpetas, puede ser
+    // compresión o archivos sólo en línea
+    + (savedOnDisk(r) && (r.isDir || r.flags & FLAG.COMPRESSED) ? `<p class="note">${tx(r.flags & FLAG.COMPRESSED ? 'insp.saved' : 'insp.saved.cloud', { saved: fmtB(r.size - r.alloc), pct: fmtP(1 - r.alloc / r.size) })}</p>` : '')
     + (inMarked ? `<p class="note marked-note">${tx('basket.alreadyIn', { name: inMarked.row.name })}</p>` : '')
     + knownHTML(r, path)
     + acts;
@@ -569,7 +573,7 @@ export function renderInspector() {
 // Primero una regla de limpieza que lo describa (con su riesgo y su orden), después las carpetas conocidas.
 // Se calcula una vez por elemento: alguna regla pregunta al motor por los hijos (CACHEDIR.TAG de Rust).
 async function knownFor(r: NodeRow, path: string): Promise<Known | null> {
-  const tg = { name: r.name, path, isDir: r.isDir, ext: r.ext };
+  const tg = { name: r.name, path, isDir: r.isDir, ext: r.ext, size: r.size, alloc: r.alloc };
   for (const rule of RULES) {
     if (!ruleMatches(rule, tg)) continue;
     if (rule.needs && !(await hasChild(r.id, rule.needs).catch(() => false))) continue;
@@ -593,6 +597,30 @@ function knownHTML(r: NodeRow, path: string | undefined): string {
   return `<div class="known">${head}<p class="known-t">${esc(keyText(k.title))}</p><p>${esc(tk(`clean.${k.rule.id}.why`))}</p>`
     + (k.cmd ? `<div class="cmd"><code>${esc(k.cmd)}</code><button class="icon-btn sm" type="button" data-act="copy-cmd" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div>` : '')
     + (k.rule.how ? `<p class="how">${esc(tk(howKey(k.rule)))}</p>` : '') + `</div>`;
+}
+// ---------- OneDrive y compresión ----------
+/** Ocupa en disco claramente menos que su tamaño (compresión o archivos sólo en la nube). */
+const savedOnDisk = (r: NodeRow) => r.size >= 1024 ** 2 && r.alloc < r.size * .97;
+const ONEDRIVE = /\\OneDrive( - [^\\]+)?(\\|$)/i;
+/** Hay algo de la nube descargado: un archivo con FLAG.CLOUD que ocupa disco, o una carpeta de OneDrive que ocupa disco. */
+function canFreeUp(r: NodeRow) {
+  if (!r.alloc) return false;
+  if (r.flags & FLAG.CLOUD) return true;
+  const p = S.pathCache.get(r.id);
+  return r.isDir && !!p && ONEDRIVE.test(p + '\\');
+}
+/**
+ * Deja los archivos de la nube descargados como «sólo en línea» (siguen en OneDrive y vuelven a bajar al abrirlos).
+ * El proveedor los vacía en segundo plano: pasados unos segundos se vuelve a escanear la carpeta para verlo.
+ */
+async function freeUp(r: NodeRow) {
+  try {
+    const res = await B.action('freeUp', r.id);
+    toast(res.code ? msgText(res) : t(res.ok ? 'toast.done' : 'toast.actionFailed'));
+    if (!res.ok) return;
+    const folder = r.isDir ? r : await rowOf(r.parentId).catch(() => null);
+    if (folder && folder.parentId >= 0) setTimeout(() => { if (!S.scanning) rescanFolder(folder); }, 5000);
+  } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
 }
 async function doAction(kind: ActionKind, r: NodeRow) {
   try {
@@ -624,6 +652,7 @@ $('insp').addEventListener('click', e => {
     case 'trash-ok': S.confirmTrash = false; renderInspector(); doAction('trash', r); break;
     case 'mark': toggleMark(r); break;
     case 'rescan': rescanFolder(r); break;
+    case 'freeUp': freeUp(r); break;
     case 'copy-cmd': { const k = S.known.get(r.id); if (k && 'rule' in k && k.cmd) copyText(k.cmd, 'toast.commandCopied'); break; }
   }
 });
@@ -689,7 +718,7 @@ async function loadClean() {
   const cards: CleanCard[] = [];
   for (const rule of RULES) {
     const res = await B.search({ query: rule.q, root: S.root.id, limit: 200 }).catch(() => null); if (!res || res.error) continue;
-    let rows = res.rows.filter(r => (!rule.ok || rule.ok(r)) && (!rule.min || rule.group || r.size >= rule.min));
+    let rows = res.rows.filter(r => (!rule.ok || rule.ok(r)) && (!rule.min || rule.group || (rule.useAlloc ? r.alloc : r.size) >= rule.min));
     if (rule.needs) { const keep: SearchRow[] = []; for (const r of rows.slice(0, 40)) if (await hasChild(r.id, rule.needs).catch(() => false)) keep.push(r); rows = keep; }
     if (rule.group) {
       const by = new Map<string, SearchRow[]>(); for (const r of rows) { const k = parentPath(r.path); by.set(k, [...(by.get(k) || []), r]); }
@@ -699,7 +728,7 @@ async function loadClean() {
         const path = await pathOf(parent.id).catch(() => parentPath(list[0].path));
         cards.push({ row: { ...parent, size }, path, rule, title: titleOf(rule, list[0]), cmd: cmdOf(rule, list[0]), count: list.length, rows: list });
       }
-    } else for (const r of rows) cards.push({ row: r, path: r.path, rule, title: titleOf(rule, r), cmd: cmdOf(rule, r) });
+    } else for (const r of rows) cards.push({ row: rule.useAlloc ? { ...r, size: r.alloc } : r, path: r.path, rule, title: titleOf(rule, r), cmd: cmdOf(rule, r) });
   }
   const order = { ok: 0, warn: 1, bad: 2 }; cards.sort((a, b) => order[a.rule.risk] - order[b.rule.risk] || b.row.size - a.row.size);
   S.clean = cards; $('cleanCount').textContent = String(cards.length);
@@ -718,7 +747,8 @@ async function renderClean() {
       + (c.rule.how ? `<p class="how">${esc(tk(howKey(c.rule)))}</p>` : '')
       + `</div><div class="cl-side"><span class="cl-size">${fmtB(c.row.size)}</span><span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span><button class="btn sm" type="button" data-loc="${i}">${tx('clean.locate')}</button>`
       // Lo que gestiona Windows no se marca; en las tarjetas agrupadas se marcan los archivos, no su carpeta
-      + (c.rule.risk === 'bad' ? '' : `<button class="btn sm${cardMarked(c) ? ' on' : ''}" type="button" data-mark="${i}" aria-pressed="${cardMarked(c)}">${tx(cardMarked(c) ? 'mark.remove' : c.rows ? 'clean.markFiles' : 'clean.mark')}</button>`)
+      + (c.rule.action === 'freeUp' ? `<button class="btn sm primary" type="button" data-free="${i}">${tx('clean.freeUp')}</button>`
+        : c.rule.risk === 'bad' ? '' : `<button class="btn sm${cardMarked(c) ? ' on' : ''}" type="button" data-mark="${i}" aria-pressed="${cardMarked(c)}">${tx(cardMarked(c) ? 'mark.remove' : c.rows ? 'clean.markFiles' : 'clean.mark')}</button>`)
       + `</div></article>`).join('');
 }
 $('cleanBody').addEventListener('click', async e => {
@@ -730,6 +760,8 @@ $('cleanBody').addEventListener('click', async e => {
     for (const r of rows) if (S.marked.has(r.id) === on) await toggleMark(r, true);
     afterMarksChanged(); renderClean(); return;
   }
+  const fr = t.closest('[data-free]') as HTMLElement;
+  if (fr) { freeUp(S.clean![+fr.dataset.free!].row); return; }
   const lb = t.closest('[data-loc]') as HTMLElement; if (!lb) return;
   const r = S.clean![+lb.dataset.loc!].row; setTab('tree'); await locate(r); zoomToRow(r);
 });
@@ -1222,6 +1254,7 @@ function nodeMenu(r: NodeRow, x: number, y: number) {
     + `<button type="button" role="menuitem" data-m="tree">${tx('menu.locate')}</button><hr>`
     + (r.parentId >= 0 ? `<button type="button" role="menuitem" data-m="mark">${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}<span>${tx('key.space')}</span></button>` : '')
     + (r.isDir ? `<button type="button" role="menuitem" data-m="rescan">${tx('menu.rescan')}<span>${r.parentId < 0 || (zoomRow()?.id === r.id) ? tx('key.f5') : ''}</span></button>` : '')
+    + (canFreeUp(r) ? `<button type="button" role="menuitem" data-m="freeUp">${tx('menu.freeUp')}</button>` : '')
     + `<button type="button" role="menuitem" data-m="properties">${tx('menu.properties')}</button>`
     + `<button type="button" role="menuitem" data-m="trash" class="danger">${tx('menu.trash')}<span>${tx('key.delete')}</span></button>`, x, y, 'node', r.id);
 }
@@ -1250,6 +1283,7 @@ menu.addEventListener('click', e => {
       case 'zoom': zoomToRow(r); break;
       case 'tree': setTab('tree'); locate(r); break;
       case 'rescan': rescanFolder(r); break;
+      case 'freeUp': freeUp(r); break;
       case 'trash': select(r); S.confirmTrash = true; renderInspector(); break;
       case 'mark': toggleMark(r); break;
     }

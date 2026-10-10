@@ -80,6 +80,20 @@ describe('reglas de limpieza', () => {
     expect(finds(id, path)).toBe(false);
   });
 
+  test('juegos: sugiere comprimirlos con compact si no lo están', () => {
+    const p = 'D:\\SteamLibrary\\steamapps\\common\\Hades II';
+    expect(cmdOf(rule('game'), { ...target(p), size: 8e9, alloc: 8e9 })).toBe(`compact /c /s /i /q /exe:lzx "${p}\\*"`);
+    expect(cmdOf(rule('game'), { ...target(p), size: 8e9, alloc: 5e9 })).toBeUndefined(); // ya comprimido
+  });
+
+  test('OneDrive: la raíz de cada OneDrive, por espacio en disco y con su propia acción', () => {
+    expect(finds('oneDrive', 'C:\\Users\\ana\\OneDrive')).toBe(true);
+    expect(finds('oneDrive', 'C:\\Users\\ana\\OneDrive - Contoso')).toBe(true);
+    expect(finds('oneDrive', 'C:\\Users\\ana\\OneDrive\\Documentos')).toBe(false);
+    expect(finds('oneDrive', 'D:\\Copias\\OneDrive')).toBe(false);
+    expect(rule('oneDrive')).toMatchObject({ useAlloc: true, action: 'freeUp', risk: 'ok' });
+  });
+
   test('archivos y carpetas: cada regla sólo describe lo que busca', () => {
     expect(ruleKind(rule('crashDumps'))).toBe('any');
     expect(ruleKind(rule('nodeModules'))).toBe('dir');

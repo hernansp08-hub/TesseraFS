@@ -34,6 +34,7 @@ Sin la clave `type:`, el filtro sólo devuelve **archivos**. Para incluir carpet
 | `name:` (`nombre:`) | `name:backup` · `name:*.bak` | Texto o comodín sobre el nombre |
 | `re:` | `re:^IMG_\d{4}` | Expresión regular sobre el nombre |
 | `type:` (`tipo:`) | `type:dir` · `tipo:carpeta` · `type:file` | Carpetas o archivos |
+| `attr:` (`atrib:`) | `attr:cloud` · `atrib:oculto,sistema` · `attr:compressed` | Atributos: `cloud` (OneDrive y similares), `hidden`, `system`, `compressed`, `hardlink`, `sparse`, `reparse`; en español `nube`, `oculto`, `sistema`, `comprimido`, `enlace`, `disperso`, `reanalisis`. Varios con comas = cualquiera |
 
 **Unidades de tamaño** (base 1024, como en Windows): `b`, `k`, `m`, `g`, `t`. `1g` = 1.073.741.824 bytes.
 
@@ -54,6 +55,8 @@ Sin la clave `type:`, el filtro sólo devuelve **archivos**. Para incluir carpet
 | Modelos de IA locales | `ext:gguf,safetensors,ckpt,onnx` |
 | Carpetas de dependencias de Node | `type:dir name:node_modules` |
 | Compilaciones de Rust | `type:dir name:target` |
+| Archivos de OneDrive descargados en este equipo | `attr:cloud alloc:>0` |
+| Lo que ya está comprimido | `attr:compressed` |
 | Entornos virtuales de Python | `type:dir name:.venv` |
 | Discos virtuales (WSL, Docker, Hyper-V) | `ext:vhdx,vhd` |
 | Copias de seguridad sueltas | `ext:bak,old,tmp size:>50m` |

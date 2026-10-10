@@ -203,22 +203,18 @@ async fn action(st: St<'_>, kind: String, id: u32) -> Res<ActionResult> {
     };
     let st = st.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Ruta exacta bajo lectura; la acción del Shell corre sin bloquear el árbol
-        let (path, generation) = {
+        // Ruta exacta (o, en freeUp, los elementos de la nube) bajo lectura; la acción corre sin bloquear el árbol
+        let (target, generation) = {
             let g = st.scan.read().map_err(poisoned)?;
             let Some(s) = g.as_ref() else { return Ok(ActionResult::fail(msg::no_scan())) };
-            if !s.tree.live(id) {
-                return Ok(ActionResult::fail(msg::invalid_node(id)));
+            match tessera_core::action_target(&s.tree, kind, id) {
+                Ok(t) => (t, st.generation.load(SeqCst)),
+                Err(e) => return Ok(ActionResult::fail(e)),
             }
-            if id == 0 && kind == ActionKind::Trash {
-                return Ok(ActionResult::fail(msg::trash_root()));
-            }
-            (s.tree.path_wide(id), st.generation.load(SeqCst))
         };
-        if let Err(e) = tessera_core::run_action(kind, &path) {
-            return Ok(ActionResult::fail(e));
-        }
-        if kind == ActionKind::Trash {
+        let r = tessera_core::run_action(kind, &target);
+        // freeUp no cambia el árbol: el proveedor vacía los archivos más tarde y la interfaz vuelve a escanear
+        if r.ok && kind == ActionKind::Trash {
             // Con el cerrojo tomado no puede empezar una búsqueda de duplicados mientras se espera la escritura
             let mut later = st.dup_trashed.lock().map_err(poisoned)?;
             if st.dup_busy.load(SeqCst) {
@@ -232,7 +228,7 @@ async fn action(st: St<'_>, kind: String, id: u32) -> Res<ActionResult> {
                 }
             }
         }
-        Ok(tessera_core::action_done(kind))
+        Ok(r)
     })
     .await
     .map_err(join_error)?

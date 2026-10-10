@@ -34,7 +34,9 @@ export const html = (key: MessageKey, params?: Params) => i18n.html(key, params)
 export function msgText(m: unknown): string {
   if (m && typeof m === 'object' && typeof (m as EngineMessage).code === 'string') {
     const em = m as EngineMessage, key = 'engine.' + em.code;
-    if (i18n.has(key)) return i18n.t(key, em.params);
+    // Los motores mandan los tamaños en bytes: aquí se formatean en el idioma activo
+    const params = em.params && typeof em.params.bytes === 'number' ? { ...em.params, bytes: i18n.bytes(em.params.bytes) } : em.params;
+    if (i18n.has(key)) return i18n.t(key, params);
     return em.message || em.code;
   }
   if (m instanceof Error) return m.message;

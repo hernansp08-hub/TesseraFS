@@ -113,6 +113,7 @@ Implementado en [`packages/protocol/src/query.ts`](../packages/protocol/src/quer
 - `age:<30d` modificado hace menos de 30 días · `age:>1y` (alias `edad:`). Unidades d w mo y.
 - `path:node_modules` subcadena de la ruta completa (alias `ruta:`) · `name:VT*` comodín sobre el nombre (alias `nombre:`)
 - `re:^VT[._]` expresión regular sobre el nombre · `type:dir|file` (alias `tipo:carpeta|archivo`)
+- `attr:cloud` atributos (alias `atrib:`), varios con comas = cualquiera: `cloud`/`nube`, `hidden`/`oculto`, `system`/`sistema`, `compressed`/`comprimido`, `hardlink`/`enlace`, `sparse`/`disperso`, `reparse`/`reanalisis`. Usa los bits de `FLAG`.
 - Palabra suelta: comodín si lleva `*` o `?`; si no, subcadena del nombre. Todo sin distinguir mayúsculas.
 - Sin `type:`, sólo se devuelven archivos.
 - Resultados ordenados por tamaño descendente; `total`/`totalBytes` cuentan todas las coincidencias y `rows` trae las `limit` primeras. Consulta vacía = todos los archivos bajo `root` (la lista de "más grandes"). `path` es la ruta completa de Windows (`C:\Windows\WinSxS`; la raíz es `C:\`).

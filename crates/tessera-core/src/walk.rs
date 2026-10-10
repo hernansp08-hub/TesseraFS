@@ -213,6 +213,21 @@ pub(crate) fn verbatim(path: &str) -> String {
     }
 }
 
+/// Como [`verbatim`] para una ruta UTF-16 exacta (sin terminador): rutas largas y nombres con
+/// punto o espacio final llegan tal cual a Windows.
+pub(crate) fn verbatim_wide(path: Vec<u16>) -> Vec<u16> {
+    let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+    if path.starts_with(&w(r"\\?\")) || path.starts_with(&w(r"\\.\")) {
+        return path;
+    }
+    let (mut out, rest) = match path.strip_prefix(&w(r"\\")[..]) {
+        Some(unc) => (w(r"\\?\UNC\"), unc),
+        None => (w(r"\\?\"), &path[..]),
+    };
+    out.extend_from_slice(rest);
+    out
+}
+
 fn open_root(path: &str) -> Result<Handle, EngineMessage> {
     open_dir(&wide(&verbatim(path))).map_err(|code| msg::cannot_open(path, &crate::sys::error_text(code as i32)))
 }

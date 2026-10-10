@@ -60,7 +60,8 @@ mod imp {
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
     use windows_sys::Win32::Storage::FileSystem::{
-        GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, GetVolumePathNameW,
+        GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetDriveTypeW, GetFileAttributesW, GetLogicalDrives, GetVolumeInformationW, GetVolumePathNameW,
+        SetFileAttributesW, INVALID_FILE_ATTRIBUTES,
     };
     use windows_sys::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -280,6 +281,28 @@ mod imp {
         })
     }
 
+    /// Atributos de una ruta exacta, sin abrir el archivo (no lo descarga de la nube).
+    /// El error es `action.failed` con el texto del sistema.
+    pub fn file_attributes(path: &[u16]) -> Result<u32, EngineMessage> {
+        let p = zt(&crate::walk::verbatim_wide(path.to_vec()));
+        let a = unsafe { GetFileAttributesW(p.as_ptr()) };
+        if a == INVALID_FILE_ATTRIBUTES {
+            Err(msg::action_failed(&super::last_error_text()))
+        } else {
+            Ok(a)
+        }
+    }
+
+    /// Cambia los atributos de una ruta exacta (`action.failed` con el texto del sistema).
+    pub fn set_file_attributes(path: &[u16], attrs: u32) -> Result<(), EngineMessage> {
+        let p = zt(&crate::walk::verbatim_wide(path.to_vec()));
+        if unsafe { SetFileAttributesW(p.as_ptr(), attrs) } == 0 {
+            Err(msg::action_failed(&super::last_error_text()))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Envía a la Papelera de reciclaje (nunca borra de forma permanente).
     pub fn trash(path: &[u16]) -> Result<(), EngineMessage> {
         use std::os::windows::ffi::OsStringExt;
@@ -346,6 +369,12 @@ mod imp {
         Err(msg::unsupported_platform())
     }
     pub fn trash(_p: &[u16]) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
+    }
+    pub fn file_attributes(_p: &[u16]) -> Result<u32, EngineMessage> {
+        Err(msg::unsupported_platform())
+    }
+    pub fn set_file_attributes(_p: &[u16], _attrs: u32) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())
     }
 }

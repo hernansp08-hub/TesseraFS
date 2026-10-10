@@ -19,6 +19,7 @@ TesseraFS te muestra **qué ocupa tu disco** en unos segundos. Dibuja la unidad 
 8. [Panel de detalle y acciones](#8-panel-de-detalle-y-acciones)
 9. [Filtrar](#9-filtrar)
 10. [Liberar espacio](#10-liberar-espacio)
+    - [OneDrive y compresión](#onedrive-y-compresión)
     - [Archivos duplicados](#archivos-duplicados)
     - [Qué ha cambiado: historial y comparación](#qué-ha-cambiado-historial-y-comparación)
     - [Exportar e informes](#exportar-e-informes)
@@ -271,6 +272,7 @@ Arriba a la derecha está todo sobre lo seleccionado: tipo, tamaño, porcentaje 
 | Mostrar en el Explorador | Abre el Explorador con el elemento seleccionado |
 | Entrar en el mapa | Hace de esa carpeta la raíz del mapa |
 | Marcar para borrar | Lo añade a la pestaña **Para borrar** (ver abajo) |
+| Liberar espacio (dejar sólo en línea) | Sólo en archivos y carpetas de OneDrive con algo descargado: lo deja sólo en la nube, sin borrar nada (ver [OneDrive y compresión](#onedrive-y-compresión)) |
 | Papelera… | Pide confirmación en el propio panel y lo mueve a la **Papelera de reciclaje** |
 
 > [!CAUTION]
@@ -303,6 +305,7 @@ size:>1g                      archivos de más de 1 GB
 age:>2y size:>100m            grandes y sin tocar en dos años
 path:Downloads ext:msi,exe    instaladores olvidados en Descargas
 -ext:dll size:>500m           grandes que no son DLL
+attr:cloud alloc:>0           archivos de OneDrive descargados en este equipo
 ```
 
 La referencia completa y un recetario están en **[Filtros](filtros.md)**. El botón **?** junto al campo muestra ejemplos que se aplican con un clic.
@@ -324,6 +327,15 @@ Cada tarjeta explica qué es, cuánto ocupa y cómo liberarlo bien: con la orden
 ![Pestaña Liberar espacio](../img/limpieza.png)
 
 Detalles y procedimientos seguros en **[Liberar espacio](liberar-espacio.md)**.
+
+### OneDrive y compresión
+
+Hay espacio que se puede recuperar **sin borrar nada**:
+
+- **OneDrive descargado.** Si la carpeta de OneDrive ocupa más de 200 MB en disco, aparece una tarjeta con el botón **Liberar espacio**. Hace lo mismo que el Explorador (clic derecho › Liberar espacio): los archivos quedan **sólo en línea**, siguen en OneDrive y se vuelven a descargar al abrirlos. También funciona con una carpeta o un archivo concretos, desde el panel de detalle o el menú del clic derecho. OneDrive los vacía en segundo plano; unos segundos después TesseraFS vuelve a escanear la carpeta para mostrar el espacio recuperado.
+- **Juegos sin comprimir.** La tarjeta de cada juego propone una orden `compact /c /s /i /q /exe:lzx "…\*"` para comprimirlo con la compresión de Windows. Se juega igual y suele ocupar bastante menos. Ejecútala en una terminal (como administrador si el juego está en `Program Files`); las actualizaciones pueden descomprimir los archivos que cambien.
+
+El panel de detalle indica si un archivo de la nube está **descargado** o **sólo en línea**, y cuánto ahorra la **compresión** cuando ocupa en disco claramente menos que su tamaño. En [Filtros](filtros.md), `attr:cloud`, `attr:compressed` y el resto de atributos buscan por esas marcas.
 
 ### Archivos duplicados
 

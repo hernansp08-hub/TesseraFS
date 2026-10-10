@@ -9,6 +9,7 @@ import {
   type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest, type SearchResponse, type VolumeInfo,
 } from '../../protocol/src/index.ts';
 import { EngineError, engineError, errorText, msg, type MessageCode, type MessageParams } from './messages.ts';
+import { freeUp } from './cloud.ts';
 import { findDuplicates } from './dup.ts';
 import { clearHistory, compareHistory, deleteHistory, exportFile, exportedFile, listHistory, saveHistory } from './history.ts';
 import { mftScan } from './mft.ts';
@@ -415,6 +416,8 @@ export class TesseraEngine {
         if (r.ok) s.remove(id);
         return r;
       }
+      // sólo cambia atributos (nunca borra) y no toca el árbol: el proveedor vacía los archivos después (cloud.ts)
+      case 'freeUp': return freeUp(s, id);
       default:
         return result(false, 'action.unknown', { kind: String(kind) });
     }

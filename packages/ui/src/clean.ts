@@ -4,7 +4,7 @@
 //   conocida: known.<id>
 export type Risk = 'ok' | 'warn' | 'bad';
 /** Lo que una regla necesita de un elemento (una fila de búsqueda cumple esta forma). */
-export interface Target { name: string; path: string; isDir: boolean; ext: string }
+export interface Target { name: string; path: string; isDir: boolean; ext: string; size?: number; alloc?: number }
 export type Key = [key: string, params?: Record<string, string>];
 
 export interface Rule {
@@ -20,6 +20,10 @@ export interface Rule {
   cmd?: string | ((t: Target) => string | undefined);
   /** Id de la regla cuyo texto «cómo» se muestra (true = el suyo). */
   how?: true | string;
+  /** El tamaño que cuenta es el que ocupa en disco (alloc), no el lógico: p. ej. OneDrive descargado. */
+  useAlloc?: boolean;
+  /** Acción propia de la tarjeta en lugar de marcar para borrar. */
+  action?: 'freeUp';
   /** Agrupa los archivos por carpeta en una sola tarjeta. */
   group?: boolean;
   /** Tamaño mínimo para proponerlo. */
@@ -48,6 +52,8 @@ const PACKAGE_CACHES: [RegExp, string, string][] = [
   [/\\\.nuget\\packages$/i, 'NuGet', 'dotnet nuget locals all --clear'],
   [/\\AppData\\Local\\go-build$/i, 'Go', 'go clean -cache'],
 ];
+/** Sin comprimir: ocupa en disco al menos el 90 % de su tamaño (sin datos, se supone que sí). */
+const uncompressed = (t: Target) => t.size == null || t.alloc == null || t.alloc >= t.size * .9;
 const browserOf = (p: string) => BROWSERS.find(([re]) => re.test(p))?.[1];
 const packageCacheOf = (p: string) => PACKAGE_CACHES.find(([re]) => re.test(p));
 
@@ -76,7 +82,12 @@ export const RULES: Rule[] = [
   // ---- Revisar: es tuyo, decides tú ----
   { id: 'aiModels', q: 'ext:gguf,safetensors,ckpt,onnx', risk: 'warn', group: true, ok: t => /^(gguf|safetensors|ckpt|onnx)$/i.test(t.ext), min: 500 * MB },
   { id: 'virtualDisks', q: 'ext:vhdx,vhd', risk: 'warn', cmd: 'wsl --manage <distro> --set-sparse true', ok: t => /^vhdx?$/i.test(t.ext), min: 500 * MB },
-  { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: t => ['clean.game.title', { name: t.name }], ok: t => /\\steamapps\\common\\[^\\]+$/i.test(t.path), min: 1 * GB },
+  { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: t => ['clean.game.title', { name: t.name }], ok: t => /\\steamapps\\common\\[^\\]+$/i.test(t.path), min: 1 * GB,
+    // Sin desinstalarlo: comprimirlo con WOF (se lee igual; sólo si aún no está comprimido)
+    cmd: t => uncompressed(t) ? `compact /c /s /i /q /exe:lzx "${t.path}\\*"` : undefined, how: true },
+  // OneDrive: lo descargado en este equipo puede quedarse sólo en la nube sin borrar nada
+  { id: 'oneDrive', q: 'type:dir name:OneDrive', risk: 'ok', useAlloc: true, action: 'freeUp', how: true,
+    ok: t => /^[A-Z]:\\Users\\[^\\]+\\OneDrive( - [^\\]+)?$/i.test(t.path), min: 200 * MB },
   { id: 'downloads', q: 'path:Downloads ext:msi,exe,iso,zip,7z size:>100m', risk: 'warn', group: true, min: 200 * MB },
   { id: 'restorePoints', q: 'type:dir name:"System Volume Information"', risk: 'warn', cmd: 'vssadmin list shadowstorage', ok: t => /^[A-Z]:\\System Volume Information$/i.test(t.path), min: 100 * MB },
   // ---- No borrar a mano: lo gestiona Windows ----

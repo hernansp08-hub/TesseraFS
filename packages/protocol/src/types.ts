@@ -85,7 +85,12 @@ export interface SearchResponse { total: number; totalBytes: number; rows: Searc
 
 export interface ExtStat { ext: string; size: number; alloc: number; count: number }
 
-export type ActionKind = 'open' | 'reveal' | 'properties' | 'trash';
+/**
+ * `freeUp`: libera espacio de OneDrive (u otro proveedor de archivos en la nube) sin borrar: los archivos con FLAG.CLOUD
+ * que están descargados pasan a «sólo en línea» (atributo UNPINNED, sin PINNED), como «Liberar espacio» del Explorador.
+ * El proveedor los vacía después, en segundo plano. Sobre una carpeta, se aplica a todo lo que contiene.
+ */
+export type ActionKind = 'open' | 'reveal' | 'properties' | 'trash' | 'freeUp';
 /** `code` + `params` se traducen en la interfaz; `message` es el texto del sistema o de reserva en inglés. */
 export interface ActionResult { ok: boolean; code?: string; params?: Record<string, string | number>; message?: string }
 

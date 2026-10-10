@@ -99,6 +99,41 @@ test('store: búsqueda ordenada por tamaño, consulta vacía y raíz', () => {
   expect(typeof st.search('size:>zz', root, 10).error?.message).toBe('string');
 });
 
+test('store: attr: usa las banderas de cada nodo (archivos y, con type:dir, carpetas)', () => {
+  const st = new Store();
+  const root = st.addRoot('C:\\Users\\me');
+  const od = add(st, root, 'OneDrive', true, 0, NOW, FLAG.CLOUD);
+  add(st, od, 'video.mp4', false, 300, NOW, FLAG.CLOUD);
+  add(st, od, 'doc.pdf', false, 200, NOW, FLAG.CLOUD);
+  const app = add(st, root, 'AppData', true, 0, NOW, FLAG.HIDDEN);
+  add(st, app, 'sys.dat', false, 50, NOW, FLAG.HIDDEN | FLAG.SYSTEM);
+  add(st, app, 'packed.log', false, 40, NOW, FLAG.COMPRESSED);
+  add(st, root, 'plain.txt', false, 10);
+  add(st, root, 'boot.ini', false, 5, NOW, FLAG.SYSTEM);
+  st.finalize();
+  const names = (q: string) => st.search(q, root, 100).rows.map(r => r.name);
+  expect(names('attr:cloud')).toEqual(['video.mp4', 'doc.pdf']);
+  expect(names('ATRIB:Nube')).toEqual(['video.mp4', 'doc.pdf']);
+  expect(names('attr:hidden,system')).toEqual(['sys.dat', 'boot.ini']); // comas = cualquiera de ellos
+  expect(names('attr:"hidden , system"')).toEqual(['sys.dat', 'boot.ini']);
+  expect(names('-attr:compressed')).toEqual(['video.mp4', 'doc.pdf', 'sys.dat', 'plain.txt', 'boot.ini']);
+  expect(names('attr:hidden -attr:system')).toEqual([]);
+  expect(names('attr:compressed OR attr:sparse')).toEqual(['packed.log']);
+  expect(st.search('attr:cloud', root, 0)).toEqual({ total: 2, totalBytes: 500, rows: [] });
+  // sin type: sólo archivos; con type:dir, las carpetas con esa bandera (no basta con que la tenga algo de dentro)
+  expect(names('type:dir attr:hidden')).toEqual(['AppData']);
+  expect(names('type:dir attr:cloud')).toEqual(['OneDrive']);
+  expect(names('type:dir attr:system')).toEqual([]);
+  expect(names('type:dir -attr:hidden')).toEqual(['OneDrive']);
+  // valor desconocido: query.invalidValue con todo lo que va tras attr:
+  expect(st.search('attr:bogus', root, 10)).toMatchObject({ total: 0, rows: [], error: { code: 'query.invalidValue', params: { value: 'bogus' } } });
+  expect(st.search('attr:cloud,nope', root, 10).error).toMatchObject({ code: 'query.invalidValue', params: { value: 'cloud,nope' } });
+  // lo quitado del árbol (papelera) ya no aparece
+  st.remove(od);
+  expect(names('attr:cloud')).toEqual([]);
+  expect(names('attr:system')).toEqual(['sys.dat', 'boot.ini']);
+});
+
 test('store: estadísticas por extensión', () => {
   const { st, root } = sample();
   const ex = st.extStats(root);
