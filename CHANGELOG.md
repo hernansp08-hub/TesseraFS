@@ -4,6 +4,8 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.3.0] - 2026-10-10
+
 ### Distribución
 - Un único `README.txt` en los cinco idiomas dentro de cada zip, en lugar de `LEEME.txt`.
 
@@ -13,6 +15,10 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 ### Corregido
 - **core-bun:** una ruta inexistente o que no es una carpeta ya no descarta el escaneo anterior.
 - **core:** en una unidad FAT32 o de red, el aviso dice que la MFT no está disponible ahí, en lugar de pedir administrador.
+
+### Añadido
+- **i18n:** interfaz en English, Español, Português (Brasil), Français y Deutsch
+- **core:** avisos, errores y acciones con código traducible
 
 ## [0.2.0] - 2026-10-08
 
@@ -51,7 +57,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.2.0...HEAD
+[Sin publicar]: ../../compare/v0.3.0...HEAD
+[0.3.0]: ../../compare/v0.2.0...v0.3.0
 [0.2.0]: ../../compare/v0.1.1...v0.2.0
 [0.1.1]: ../../compare/v0.1.0...v0.1.1
 [0.1.0]: ../../releases/tag/v0.1.0
