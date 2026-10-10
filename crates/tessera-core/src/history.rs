@@ -46,6 +46,7 @@ const FRESH: u64 = u64::MAX - 1;
 
 /// Comparación activa: por cada nodo del árbol, su tamaño en el resumen, «nuevo» o «desconocido»
 /// (un archivo de menos de 1 MiB que no está en el resumen). Vive en el [`Tree`].
+#[derive(Default)]
 pub struct Comparison {
     state: Vec<u64>,
 }
@@ -680,8 +681,9 @@ mod tests {
             elapsed_ms: 1,
             volume: None,
             warnings: vec![],
+            can_refresh: None,
         };
-        Scan { tree, result, scanned_at: 1_791_654_312 }
+        Scan { tree, result, scanned_at: 1_791_654_312, usn: None, serial: 0 }
     }
 
     /// Formato del resumen en disco: lo leen las dos ediciones.

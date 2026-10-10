@@ -1,5 +1,8 @@
-//! tessera-cli: escanea una ruta e imprime el resumen, los archivos más grandes y,
-//! opcionalmente, un slice binario o un volcado JSON para pruebas cruzadas.
+//! tessera-cli: escanea una ruta e imprime el resumen; lista los archivos y carpetas más grandes
+//! (tabla, CSV o JSON); comprueba el espacio libre de un volumen sin escanear; gestiona el
+//! historial y, para pruebas cruzadas, escribe un slice binario o un volcado JSON.
+
+mod cmds;
 
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
@@ -7,11 +10,37 @@ use std::time::Instant;
 
 use tessera_core::{ops, slice, ChangeRow, DupProgress, EngineChoice, History, ScanOptions, ScanPhase, ScanProgress, SortKey, Tree};
 
-const USO: &str = "Uso:
-  tessera-cli scan <ruta> [opciones]
-  tessera-cli history [list | delete <id> | clear]   Historial (JSON; respeta TESSERA_HISTORY_DIR)
+const USO: &str = "tessera-cli: línea de comandos de TesseraFS (analizador de espacio en disco)
 
-Opciones:
+Uso:
+  tessera-cli scan <ruta> [opciones de scan]        Escanea e imprime el resumen
+  tessera-cli top <ruta> [opciones de top]          Los archivos y carpetas más grandes (tabla, CSV o JSON)
+  tessera-cli check <ruta> --min-free <umbral>      Comprueba el espacio libre del volumen, sin escanear
+  tessera-cli history [list | delete <id> | clear]  Historial (JSON; respeta TESSERA_HISTORY_DIR)
+  tessera-cli --help                                Esta ayuda (también `help` o `<orden> --help`)
+
+top <ruta>  (escanea y muestra lo más grande):
+  --files N                Los N archivos más grandes, a cualquier profundidad
+  --folders N              Las N carpetas más grandes a la profundidad --depth
+                           (sin --files ni --folders: 10 de cada; con uno solo, sólo ese)
+  --depth D                Profundidad de las carpetas: 1 = hijas directas de la raíz (1)
+  --format table|csv|json  Formato (table)
+                             csv: UTF-8 sin BOM, separado por comas, con cabecera
+                               kind,path,name,size,alloc,files,dirs,mtime (kind = file | folder),
+                               tamaños en bytes y fechas ISO 8601 en UTC
+                             json: {\"root\", \"scannedAt\", \"files\": [...], \"folders\": [...]}, filas
+                               como SearchRow del contrato (fechas en segundos Unix)
+  --out FICHERO            Escribe en ese archivo en vez de en la salida estándar
+  --engine auto|walk|mft   Motor (auto)
+  Los avisos del escaneo van a la salida de errores.
+
+check <ruta>  (no escanea: sólo mira el volumen que contiene la ruta):
+  --min-free UMBRAL        Espacio libre mínimo: porcentaje del volumen (\"10%\") o tamaño (\"500MB\",
+                           \"20GB\", \"1.5TB\"; K/KB/KiB = 1024 bytes, como el Explorador; sin unidad, bytes)
+  Imprime una línea de estado (OK o BAJO). Código de salida: 0 si queda al menos ese espacio,
+  2 si queda menos y 1 si hay un error o los argumentos no son válidos (para tareas programadas).
+
+Opciones de scan:
   --engine auto|walk|mft   Motor (por defecto auto)
   --top N                  Archivos más grandes a mostrar (10)
   --threads N              Hilos del recorrido (núcleos lógicos)
@@ -32,7 +61,10 @@ Opciones:
   --flags                  Estadísticas de flags (enlaces duros, comprimidos, nube…)
   --children               Lista los hijos de la raíz con sus totales (con --history-compare, por delta)
   --progress               Muestra el progreso
-  --repeat N               Repite el escaneo N veces (medición)";
+  --repeat N               Repite el escaneo N veces (medición)
+
+Códigos de salida de scan, top e history: 0 bien, 1 error, 2 uso incorrecto.
+";
 
 fn human(b: u64) -> String {
     let units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -111,9 +143,15 @@ fn change_line(c: &ChangeRow) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("history") {
-        history_cmd(&args[1..]);
+    if matches!(args.first().map(String::as_str), Some("help" | "ayuda")) || args.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{USO}");
         return;
+    }
+    match args.first().map(String::as_str) {
+        Some("history") => return history_cmd(&args[1..]),
+        Some("top") => std::process::exit(cmds::top_cmd(&args[1..])),
+        Some("check") => std::process::exit(cmds::check_cmd(&args[1..])),
+        _ => {}
     }
     if args.first().map(String::as_str) != Some("scan") || args.len() < 2 {
         eprintln!("{USO}");

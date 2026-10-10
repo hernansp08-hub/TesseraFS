@@ -50,6 +50,8 @@ export interface ScanResult {
   elapsedMs: number;
   volume: VolumeInfo | null;
   warnings: EngineMessage[]; // p. ej. { code: 'scan.mftNeedsAdmin', message: 'MFT unavailable…' }
+  /** true si `refresh()` puede actualizar con el diario USN de NTFS (escritorio, con administrador). */
+  canRefresh?: boolean;
 }
 
 export interface NodeRow {
@@ -155,6 +157,25 @@ export interface CompareResult {
   removed: RemovedRow[]; // hasta `limit`, por tamaño
 }
 
+// ---------- Volver a escanear y actualizar ----------
+/** Resultado de volver a escanear una carpeta: la misma carpeta (mismo id) con su contenido nuevo. */
+export interface RescanResult {
+  row: NodeRow;            // la carpeta ya actualizada
+  before: number;          // su tamaño antes
+  entries: number;         // elementos leídos
+  elapsedMs: number;
+  warnings: EngineMessage[]; // scan.accessDenied / scan.readErrors, como en el escaneo
+}
+/** Resultado de `refresh()`: lo que el diario USN dijo que cambió, ya vuelto a escanear. */
+export interface RefreshResult {
+  folders: number;         // carpetas vueltas a escanear
+  records: number;         // registros del diario leídos
+  before: number;          // tamaño de la raíz antes
+  after: number;           // y después
+  elapsedMs: number;
+  warnings: EngineMessage[];
+}
+
 /** Archivo exportado en Descargas\TesseraFS. */
 export interface ExportResult { path: string }
 
@@ -193,6 +214,17 @@ export interface Backend {
   exportFile(name: string, data: string, base64: boolean): Promise<ExportResult>;
   /** Abre el Explorador con un archivo exportado seleccionado (sólo dentro de Descargas\TesseraFS). */
   revealExport(path: string): Promise<ActionResult>;
+  /**
+   * Vuelve a escanear una carpeta (no la raíz) y la sustituye en el árbol: los ids del resto no cambian; los de
+   * su interior, sí. Quita la comparación activa. Progreso como el del escaneo; se cancela con `cancelScan`.
+   */
+  rescan(id: number, onProgress: (p: ScanProgress) => void): Promise<RescanResult>;
+  /**
+   * Lee el diario USN desde el último escaneo o actualización y vuelve a escanear sólo las carpetas que cambiaron.
+   * Sólo si `ScanResult.canRefresh`; si no, `refresh.unavailable`. Si el diario se reinició o perdió registros,
+   * `refresh.journalReset` (la interfaz hace entonces un escaneo completo).
+   */
+  refresh(onProgress: (p: ScanProgress) => void): Promise<RefreshResult>;
   elevation(): Promise<ElevationInfo>;
   relaunchElevated(): Promise<void>;
 }

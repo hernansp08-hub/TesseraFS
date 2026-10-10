@@ -1,7 +1,8 @@
 // Motores reales: Tauri (Rust en el mismo proceso) y HTTP local (edición portable con Bun).
 import type {
   ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, CompareResult, DupProgress, DupRequest, DupResult, ElevationInfo,
-  ExportResult, ExtStat, HistoryEntry, NodeRow, ScanProgress, ScanRequest, ScanResult, SearchRequest, SearchResponse, VolumeInfo,
+  ExportResult, ExtStat, HistoryEntry, NodeRow, RefreshResult, RescanResult, ScanProgress, ScanRequest, ScanResult, SearchRequest,
+  SearchResponse, VolumeInfo,
 } from '@tessera/protocol';
 import { engineFailure, isEngineMessage } from './errors';
 
@@ -36,6 +37,14 @@ export class TauriBackend implements Backend {
   compareClear() { return this.call<void>('compare_clear'); }
   exportFile(name: string, data: string, base64: boolean) { return this.call<ExportResult>('export_file', { name, data, base64 }); }
   revealExport(path: string) { return this.call<ActionResult>('reveal_export', { path }); }
+  rescan(id: number, onProgress: (p: ScanProgress) => void) {
+    const ch = new this.core.Channel<ScanProgress>(); ch.onmessage = onProgress;
+    return this.call<RescanResult>('rescan', { id, onProgress: ch });
+  }
+  refresh(onProgress: (p: ScanProgress) => void) {
+    const ch = new this.core.Channel<ScanProgress>(); ch.onmessage = onProgress;
+    return this.call<RefreshResult>('refresh', { onProgress: ch });
+  }
   async slice(root: number, minBytes: number, maxNodes: number) {
     const r = await this.call<ArrayBuffer | number[]>('slice', { root, minBytes, maxNodes });
     return r instanceof ArrayBuffer ? r : new Uint8Array(r).buffer;
@@ -105,6 +114,12 @@ export class HttpBackend implements Backend {
   async compareClear() { await this.post('/api/compare/clear', {}); }
   exportFile(name: string, data: string, base64: boolean) { return this.post<ExportResult>('/api/export', { name, data, base64 }); }
   revealExport(path: string) { return this.post<ActionResult>('/api/export/reveal', { path }); }
+  rescan(id: number, onProgress: (p: ScanProgress) => void) {
+    return this.withEvents('message', d => { if ((d as ScanProgress)?.phase) onProgress(d as ScanProgress); }, () => this.post<RescanResult>('/api/rescan', { id }));
+  }
+  refresh(onProgress: (p: ScanProgress) => void) {
+    return this.withEvents('message', d => { if ((d as ScanProgress)?.phase) onProgress(d as ScanProgress); }, () => this.post<RefreshResult>('/api/refresh', {}));
+  }
   async slice(root: number, minBytes: number, maxNodes: number) {
     return (await this.req('/api/slice?' + this.qs({ root, min: minBytes, max: maxNodes }))).arrayBuffer();
   }

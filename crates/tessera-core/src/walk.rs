@@ -14,8 +14,9 @@ use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{NtCreateFile, NtQueryDirectoryFile, NtQueryInformationFile};
 use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, UNICODE_STRING};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, GetFileTime, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FileAttributeTagInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, GetFileTime, BY_HANDLE_FILE_INFORMATION,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -74,6 +75,8 @@ struct Acc {
     name_len: Vec<u16>,
     names: Vec<u8>,
     fid: Vec<u128>,
+    /// FRN de las carpetas (id, FileId de 64 bits).
+    dfrn: Vec<(u32, u64)>,
     /// Asignado real de archivos que el listado da como 0 (comprimidos con WOF).
     fix: Vec<(u32, u64)>,
 }
@@ -83,6 +86,8 @@ pub struct WalkOptions {
     pub buf_size: usize,
     /// Detectar enlaces duros por FileId (sólo NTFS/ReFS).
     pub dedupe_links: bool,
+    /// Guardar el FRN de las carpetas (el FileId del listado; en NTFS, registro | secuencia << 48).
+    pub frn: bool,
 }
 
 pub struct WalkOutput {
@@ -94,6 +99,11 @@ pub struct WalkOutput {
     pub errors: u64,
     pub error_samples: Vec<String>,
     pub hardlinks: u64,
+    /// Atributos (0 si no se pudieron leer) y etiqueta de reparse de la carpeta raíz, según el sistema.
+    pub root_attrs: u32,
+    pub root_tag: u32,
+    /// Con `frn`: todas las carpetas tienen FRN (el sistema de archivos da FileId en el listado).
+    pub frn_complete: bool,
 }
 
 struct Ctx<'a> {
@@ -108,6 +118,7 @@ struct Ctx<'a> {
     prog: &'a Progress,
     cancel: &'a AtomicBool,
     with_ids: bool,
+    want_frn: bool,
 }
 
 thread_local! {
@@ -203,7 +214,28 @@ pub(crate) fn verbatim(path: &str) -> String {
 }
 
 fn open_root(path: &str) -> Result<Handle, EngineMessage> {
-    let w = wide(&verbatim(path));
+    open_dir(&wide(&verbatim(path))).map_err(|code| msg::cannot_open(path, &crate::sys::error_text(code as i32)))
+}
+
+/// Abre una carpeta para listarla (ruta UTF-16 exacta, sin terminador); el error es el de Win32.
+pub(crate) fn open_dir_wide(path: &[u16]) -> Result<Handle, u32> {
+    let bs = b'\\' as u16;
+    let starts = |p: &str| path.len() >= p.len() && path.iter().zip(p.encode_utf16()).all(|(&a, b)| a == b);
+    let mut w: Vec<u16> = Vec::with_capacity(path.len() + 9);
+    if starts(r"\\?\") || starts(r"\\.\") {
+        w.extend_from_slice(path);
+    } else if path.len() >= 2 && path[0] == bs && path[1] == bs {
+        w.extend(r"\\?\UNC".encode_utf16());
+        w.extend_from_slice(&path[1..]);
+    } else {
+        w.extend(r"\\?\".encode_utf16());
+        w.extend_from_slice(path);
+    }
+    w.push(0);
+    open_dir(&w)
+}
+
+fn open_dir(w: &[u16]) -> Result<Handle, u32> {
     let h = unsafe {
         CreateFileW(
             w.as_ptr(),
@@ -216,9 +248,35 @@ fn open_root(path: &str) -> Result<Handle, EngineMessage> {
         )
     };
     if h == INVALID_HANDLE_VALUE {
-        return Err(msg::cannot_open(path, &crate::sys::last_error_text()));
+        return Err(unsafe { windows_sys::Win32::Foundation::GetLastError() });
     }
     Ok(Handle(h))
+}
+
+/// Atributos, etiqueta de reparse, fecha de modificación y FRN de una carpeta abierta (atributos y
+/// FRN en 0 si el sistema no los da).
+fn root_info(h: &Handle) -> (u32, u32, u32, u64) {
+    let mut fi: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(h.0, &mut fi) } == 0 {
+        let mut ft: FILETIME = unsafe { std::mem::zeroed() };
+        let mtime = if unsafe { GetFileTime(h.0, std::ptr::null_mut(), std::ptr::null_mut(), &mut ft) } != 0 {
+            filetime_to_unix(((ft.dwHighDateTime as i64) << 32) | ft.dwLowDateTime as i64)
+        } else {
+            0
+        };
+        return (0, 0, mtime, 0);
+    }
+    let ft = fi.ftLastWriteTime;
+    let mtime = filetime_to_unix(((ft.dwHighDateTime as i64) << 32) | ft.dwLowDateTime as i64);
+    let mut tag = 0;
+    if fi.dwFileAttributes & ATTR_REPARSE != 0 {
+        let mut ti = FILE_ATTRIBUTE_TAG_INFO::default();
+        let size = std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32;
+        if unsafe { GetFileInformationByHandleEx(h.0, FileAttributeTagInfo, &mut ti as *mut _ as *mut _, size) } != 0 {
+            tag = ti.ReparseTag;
+        }
+    }
+    (fi.dwFileAttributes, tag, mtime, ((fi.nFileIndexHigh as u64) << 32) | fi.nFileIndexLow as u64)
 }
 
 #[inline]
@@ -359,6 +417,11 @@ fn enumerate<'s>(ctx: &'s Ctx<'s>, scope: &rayon::Scope<'s>, h: Arc<Handle>, id:
                     acc.flags.push(fl);
                     acc.name_off.push(off);
                     acc.name_len.push(blen.min(u16::MAX as u32) as u16);
+                    if is_dir && ctx.want_frn {
+                        if let Some(at) = id_at {
+                            acc.dfrn.push((eid, rd64(data, o + at) as u64));
+                        }
+                    }
                     if ctx.with_ids {
                         let fid = match id_at {
                             Some(at) if !is_dir && class == CLASS_ID_EXTD => u128::from_le_bytes(data[o + at..o + at + 16].try_into().unwrap()),
@@ -411,21 +474,32 @@ fn enumerate<'s>(ctx: &'s Ctx<'s>, scope: &rayon::Scope<'s>, h: Arc<Handle>, id:
     }
 }
 
+/// Pool de hilos del recorrido.
+pub(crate) fn pool(threads: usize) -> Result<rayon::ThreadPool, EngineMessage> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.max(1))
+        .thread_name(|i| format!("tessera-walk-{i}"))
+        .build()
+        .map_err(|e| msg::internal(&e.to_string()))
+}
+
 /// Recorre `root` (ruta absoluta) y devuelve las entradas en bruto (id 0 = raíz).
 pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool) -> Result<WalkOutput, EngineMessage> {
     let rh = open_root(root)?;
-    let mut ft: FILETIME = unsafe { std::mem::zeroed() };
-    let root_mtime = if unsafe { GetFileTime(rh.0, std::ptr::null_mut(), std::ptr::null_mut(), &mut ft) } != 0 {
-        filetime_to_unix(((ft.dwHighDateTime as i64) << 32) | ft.dwLowDateTime as i64)
-    } else {
-        0
-    };
-    let threads = opts.threads.max(1);
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .thread_name(|i| format!("tessera-walk-{i}"))
-        .build()
-        .map_err(|e| e.to_string())?;
+    walk_in(&pool(opts.threads)?, rh, root, opts, prog, cancel)
+}
+
+/// Recorre la carpeta ya abierta `rh` (`root` es su ruta, para el progreso y los avisos) en `pool`.
+pub(crate) fn walk_in(
+    pool: &rayon::ThreadPool,
+    rh: Handle,
+    root: &str,
+    opts: &WalkOptions,
+    prog: &Progress,
+    cancel: &AtomicBool,
+) -> Result<WalkOutput, EngineMessage> {
+    let (root_attrs, root_tag, root_mtime, root_frn) = root_info(&rh);
+    let threads = pool.current_num_threads().max(1);
     let ctx = Ctx {
         next_id: AtomicU32::new(1),
         accs: (0..threads).map(|_| Mutex::new(Acc::default())).collect(),
@@ -438,6 +512,7 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
         prog,
         cancel,
         with_ids: opts.dedupe_links,
+        want_frn: opts.frn,
     };
     let root_path: Arc<str> = root.into();
     {
@@ -447,7 +522,6 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
     if cancel.load(Relaxed) {
         return Err(msg::cancelled());
     }
-    drop(pool);
 
     // Unir los acumuladores por hilo en un RawTree indexado por id
     let n = ctx.next_id.load(Relaxed) as usize;
@@ -466,6 +540,7 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
         name_len: vec![0; n],
         names: Vec::with_capacity(names_total),
         root: 0,
+        frn: Vec::new(),
     };
     raw.flags[0] = flag::DIR;
     raw.mtime[0] = root_mtime;
@@ -486,6 +561,7 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
                 fids.push((a.fid[j], a.id[j]));
             }
         }
+        raw.frn.extend_from_slice(&a.dfrn);
         for &(i, al) in &a.fix {
             raw.alloc[i as usize] = al;
             if al < raw.size[i as usize] {
@@ -494,6 +570,13 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
         }
     }
     drop(accs);
+    let frn_complete = opts.frn && root_frn != 0 && ctx.class.load(Relaxed) != CLASS_FULL;
+    if opts.frn {
+        if root_frn != 0 {
+            raw.frn.push((0, root_frn));
+        }
+        raw.frn.sort_unstable();
+    }
     // Enlaces duros: el mismo FileId bajo varios nombres asigna espacio una sola vez
     let mut hardlinks = 0u64;
     if !fids.is_empty() {
@@ -510,5 +593,15 @@ pub fn walk(root: &str, opts: &WalkOptions, prog: &Progress, cancel: &AtomicBool
     }
     let denied_samples = std::mem::take(&mut *ctx.denied_samples.lock().unwrap());
     let error_samples = std::mem::take(&mut *ctx.error_samples.lock().unwrap());
-    Ok(WalkOutput { raw, denied: ctx.denied.load(Relaxed), denied_samples, errors: ctx.errors.load(Relaxed), error_samples, hardlinks })
+    Ok(WalkOutput {
+        raw,
+        denied: ctx.denied.load(Relaxed),
+        denied_samples,
+        errors: ctx.errors.load(Relaxed),
+        error_samples,
+        hardlinks,
+        root_attrs,
+        root_tag,
+        frn_complete,
+    })
 }

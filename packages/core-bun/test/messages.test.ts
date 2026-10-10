@@ -16,6 +16,7 @@ const CONTRACT = [
   'elevation.failed',
   'history.notFound', 'history.otherRoot', 'history.saveFailed', 'history.readFailed',
   'export.invalidName', 'export.failed', 'export.notFound',
+  'rescan.root', 'refresh.unavailable', 'refresh.journalReset',
 ];
 
 test('messages: exactamente los códigos del contrato, con texto en inglés sin marcadores sueltos', () => {
@@ -90,6 +91,9 @@ test('http: estados por código y cuerpo JSON que es un EngineMessage', async ()
     [engineError('export.invalidName', { name: 'a/b' }), 400],
     [engineError('export.failed', { error: 'x' }), 500],
     [engineError('export.notFound', { path: 'C:\\x' }), 404],
+    [engineError('rescan.root'), 400],
+    [engineError('refresh.unavailable'), 409],
+    [engineError('refresh.journalReset'), 409],
   ];
   for (const [err, status] of cases) {
     const r = errorResponse(err);

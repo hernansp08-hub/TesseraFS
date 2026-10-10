@@ -46,6 +46,9 @@ const EN = {
   'export.invalidName': (p: MessageParams) => `Invalid file name: ${p.name}`,
   'export.failed': (p: MessageParams) => `Couldn't save the file: ${p.error}`,
   'export.notFound': (p: MessageParams) => `Not an exported file: ${p.path}`,
+  'rescan.root': () => "The scan root can't be rescanned on its own: scan it again",
+  'refresh.unavailable': () => 'Quick update needs the desktop edition with administrator rights on a local NTFS drive',
+  'refresh.journalReset': () => "Windows' change journal can't tell everything that changed since the last scan: a full scan is needed",
 } satisfies Record<string, (p: MessageParams) => string>;
 
 export type MessageCode = keyof typeof EN;
@@ -94,9 +97,11 @@ export function toEngineMessage(e: unknown): EngineMessage {
 /** Estado HTTP para un código de error: 400 entrada no válida, 404 nodo/resumen/archivo desconocido, 409 estado, 500 interno. */
 export function httpStatus(code: string): number {
   switch (code) {
-    case 'error.invalidPath': case 'error.notFolder': case 'error.cannotOpen': case 'action.unknown': case 'export.invalidName': return 400;
+    case 'error.invalidPath': case 'error.notFolder': case 'error.cannotOpen': case 'action.unknown': case 'export.invalidName':
+    case 'rescan.root': return 400;
     case 'error.invalidNode': case 'history.notFound': case 'export.notFound': return 404;
-    case 'error.noScan': case 'error.scanBusy': case 'error.dupBusy': case 'error.cancelled': case 'history.otherRoot': return 409;
+    case 'error.noScan': case 'error.scanBusy': case 'error.dupBusy': case 'error.cancelled': case 'history.otherRoot':
+    case 'refresh.unavailable': case 'refresh.journalReset': return 409;
     default: return 500;
   }
 }

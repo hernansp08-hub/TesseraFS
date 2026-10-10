@@ -99,6 +99,17 @@ Mientras escanea, la tarjeta central muestra la fase, el porcentaje, los element
 
 **Cancelar:** durante el escaneo, el botón Escanear pasa a **Cancelar** (también vale **Esc** o el botón de la tarjeta). Si ya tenías un escaneo anterior y el motor lo conserva, se vuelve a él; si no, vuelves a la pantalla de unidades.
 
+### Ponerse al día sin escanear todo
+
+Después de borrar o mover cosas no hace falta repetir el escaneo completo:
+
+- **Volver a escanear esta carpeta** (clic derecho en una carpeta, o el botón del panel de detalle) lee sólo esa carpeta y la sustituye en el árbol. El resto del escaneo, la selección y el mapa se conservan.
+- **Actualizar** (aparece en la cabecera con la edición de escritorio en modo rápido, sobre una unidad NTFS local) pregunta a Windows qué cambió desde el escaneo, con su *diario de cambios*, y vuelve a escanear sólo esas carpetas. Si Windows no puede decirlo todo (el diario se reinició o es muy antiguo), hace un escaneo completo.
+- **F5** hace siempre lo más rápido disponible: Actualizar si se puede, si no la carpeta del mapa, y en la raíz un escaneo completo.
+
+> [!NOTE]
+> Al volver a escanear se quita la comparación de la pestaña Cambios y los resultados de Duplicados, porque se refieren al árbol anterior. Lo marcado para borrar que siga existiendo se conserva. Un archivo con enlaces duros dentro y fuera de la carpeta puede contarse dos veces hasta el siguiente escaneo completo.
+
 ### Modo rápido (con administrador) y modo normal
 
 TesseraFS tiene dos formas de leer el disco y elige sola la mejor posible:
@@ -385,6 +396,7 @@ Al terminar, el aviso tiene un botón **Mostrar** que abre el Explorador con el 
 | **1 · 2 · 3** | Color por categoría, extensión o antigüedad |
 | **Espacio** | Marcar o desmarcar la fila para borrar |
 | **Ctrl+clic** | Marcar o desmarcar en el mapa y en las listas |
+| **F5** | Actualizar: lo que cambió, la carpeta del mapa o un escaneo completo |
 | **Supr** | Mover a la papelera (pide confirmación) |
 | **Esc** | Cancelar el escaneo, quitar el resaltado, cancelar la confirmación o cerrar menús |
 | Divisor + **← →** / **↑ ↓** | Redimensionar paneles (con **Mayús**, pasos largos) |

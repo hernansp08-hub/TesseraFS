@@ -130,6 +130,44 @@ test('store: quitar un nodo corrige ancestros y orden', () => {
   expect(nodes.map(n => n.name)).toEqual(['C:\\', 'Windows', 'B.DLL', 'a.dll', 'notes.TXT', 'Users', '.gitignore']);
 });
 
+test('store: injertar una carpeta vuelta a recorrer (graft)', () => {
+  const { st, root, win, users, sub } = sample();
+  st.setCompare({ prev: new Float64Array(st.n), st: new Uint8Array(st.n) });
+  const v = st.version;
+  // Users pasa a tener x.zip (10) y nested\y.dll (20): menguó y queda detrás de Windows (405)
+  const t = new Store(4);
+  t.addRoot('C:\\Users', 777);
+  add(t, 0, 'x.zip', false, 10);
+  const nested = add(t, 0, 'nested', true);
+  add(t, nested, 'y.dll', false, 20);
+  t.finalize();
+  expect(st.graft(users, t)).toBe(1051);
+  expect(st.n).toBe(13);
+  expect([6, 7, 8, 9, sub].some(id => st.has(id))).toBe(false); // lo antiguo murió
+  expect(st.row(users)).toMatchObject({ id: users, parentId: root, name: 'Users', size: 30, files: 2, dirs: 1, mtime: 777, childCount: 2 });
+  expect(Array.from(st.children(users)).map(id => st.name(id))).toEqual(['nested', 'x.zip']);
+  expect(Array.from(st.children(root))).toEqual([win, users]);
+  expect([st.size(root), st.files(root), st.dirs(root)]).toEqual([435, 5, 3]);
+  expect(st.path(12)).toBe('C:\\Users\\nested\\y.dll');
+  expect(st.extStats(root).find(e => e.ext === 'zip')).toEqual({ ext: 'zip', size: 10, alloc: 10, count: 1 });
+  expect(st.extStats(root).find(e => e.ext === 'iso')).toBeUndefined();
+  expect(st.search('', root, 10).total).toBe(5);
+  expect(st.cmp).toBeNull();
+  expect(st.version).toBe(v + 1);
+  // creció: vuelve delante de Windows; ids nuevos otra vez y el padre siempre con id menor
+  const t2 = new Store(4);
+  t2.addRoot('C:\\Users');
+  add(t2, 0, 'huge.vhdx', false, 5000);
+  t2.finalize();
+  expect(st.graft(users, t2)).toBe(30);
+  expect(Array.from(st.children(root))).toEqual([users, win]);
+  expect(st.has(12)).toBe(false);
+  expect(st.size(root)).toBe(5405);
+  for (let i = 1; i < st.n; i++) expect(st.par[i]).toBeLessThan(i);
+  const { nodes } = decodeSlice(encodeSlice(st, root, 0, 100));
+  expect(nodes.map(n => n.name)).toEqual(['C:\\', 'Users', 'huge.vhdx', 'Windows', 'B.DLL', 'a.dll', 'notes.TXT']);
+});
+
 test('store: enlaces duros por clave de archivo', () => {
   const st = new Store(16, true);
   const root = st.addRoot('C:\\');

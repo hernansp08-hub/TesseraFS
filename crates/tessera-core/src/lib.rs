@@ -7,6 +7,7 @@
 //! - [`dup::duplicates`] busca archivos duplicados (tamaño, primeros 64 KiB y BLAKE3 completo).
 //! - [`history::History`] guarda resúmenes de los escaneos y compara el escaneo cargado con uno de ellos.
 //! - [`export`] guarda los archivos exportados en Descargas\TesseraFS.
+//! - [`rescan`] vuelve a escanear una carpeta del árbol cargado y actualiza con el diario USN ([`usn`]).
 
 pub mod attrs;
 pub mod build;
@@ -18,16 +19,19 @@ pub mod msg;
 pub mod names;
 pub mod ops;
 pub mod query;
+pub mod rescan;
 pub mod scan;
 pub mod slice;
 pub mod sys;
 pub mod tree;
 pub mod types;
+pub mod usn;
 #[cfg(windows)]
 pub mod walk;
 
 pub use dup::duplicates;
 pub use history::{Comparison, History};
+pub use rescan::{refresh, refresh_shared, rescan, rescan_shared};
 pub use scan::{scan, Progress, Scan, ScanOptions};
 pub use tree::Tree;
 pub use types::*;

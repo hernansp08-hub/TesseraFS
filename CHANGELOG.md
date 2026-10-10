@@ -4,6 +4,11 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+### Línea de comandos
+- `tessera-cli top`: los archivos y carpetas más grandes en tabla, CSV o JSON.
+- `tessera-cli check --min-free 10%`: aviso de poco espacio con código de salida para tareas programadas.
+- `tessera-cli.exe` va ahora en el zip de la edición de escritorio, con su guía en docs/usuario/linea-de-comandos.md.
+
 ## [0.6.0] - 2026-10-10
 
 ### Añadido

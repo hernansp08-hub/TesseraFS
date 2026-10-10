@@ -144,7 +144,24 @@ async function main() {
           return fail(e); // EngineError → 400/409; cualquier otro → 500 error.internal
         } finally { if (sampler) clearInterval(sampler); }
       }
-      case 'POST /api/cancel': return json(engine.cancel());
+      case 'POST /api/cancel': return json(engine.cancel()); // también un rescan
+      case 'POST /api/rescan': {
+        server.timeout(req, 0);
+        const b = await req.json().catch(() => null) as { id?: unknown } | null;
+        if (!b || typeof b.id !== 'number') return fail(msg('error.invalidNode', { id: String(b?.id ?? '') }), 400);
+        try {
+          // mismo canal SSE (sin nombre) que el escaneo
+          const r = await engine.rescan(b.id, scanEvent);
+          log(`rescan ${b.id}: ${r.entries} entries in ${r.elapsedMs} ms; ${r.before} -> ${r.row.size} bytes`
+            + (r.warnings.length ? `; warnings: ${r.warnings.map(w => w.code).join(', ')}` : ''));
+          return json(r);
+        } catch (e) {
+          log(`rescan ${b.id} failed:`, e instanceof Error ? e.message : e);
+          return fail(e);
+        }
+      }
+      // sólo el motor Rust (escritorio con administrador) lee el diario USN: aquí siempre 409 refresh.unavailable
+      case 'POST /api/refresh': return json(await engine.refresh(scanEvent));
       case 'POST /api/duplicates': {
         server.timeout(req, 0); // lee archivos: puede tardar minutos
         const b = await req.json().catch(() => null) as { root?: unknown; minSize?: unknown; limit?: unknown } | null;

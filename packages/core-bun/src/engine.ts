@@ -3,10 +3,10 @@ import { ptr } from 'bun:ffi';
 import { win32 as winPath } from 'node:path';
 import { availableParallelism } from 'node:os';
 import {
-  encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type CompareResult, type DupProgress,
+  FLAG, encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type CompareResult, type DupProgress,
   type DupRequest, type DupResult, type ElevationInfo, type Engine,
-  type EngineMessage, type ExportResult, type ExtStat, type HistoryEntry, type NodeRow, type ScanProgress, type ScanRequest,
-  type ScanResult, type SearchRequest, type SearchResponse, type VolumeInfo,
+  type EngineMessage, type ExportResult, type ExtStat, type HistoryEntry, type NodeRow, type RefreshResult, type RescanResult,
+  type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest, type SearchResponse, type VolumeInfo,
 } from '../../protocol/src/index.ts';
 import { EngineError, engineError, errorText, msg, type MessageCode, type MessageParams } from './messages.ts';
 import { findDuplicates } from './dup.ts';
@@ -15,7 +15,7 @@ import { mftScan } from './mft.ts';
 import { Store } from './store.ts';
 import { checkRoot, walkScan, type WalkOutcome } from './walk.ts';
 import './walkworker.ts'; // registra el worker cuando este módulo se carga como tal
-import { Mem, isElevated, kernel32, lastError, ole32, quietErrors, readW, shell32, winErrorText, wstr, wstr2 } from './win32.ts';
+import { ATTR, Mem, isElevated, kernel32, lastError, ole32, quietErrors, readW, shell32, winErrorText, wstr, wstr2 } from './win32.ts';
 
 export interface EngineOptions {
   /** Workers para el recorrido; 0 = hilo principal. Por defecto: la mitad de los hilos (2..8). */
@@ -247,11 +247,77 @@ export class TesseraEngine {
     }
   }
 
-  /** Pide parar el escaneo en curso; `scan` se rechaza con error.cancelled. False si no había ninguno. */
+  /** Pide parar el escaneo (o rescan) en curso; se rechaza con error.cancelled. False si no había ninguno. */
   cancel(): boolean {
     if (!this.scanning) return false;
     this.cancelled = true;
     return true;
+  }
+
+  /**
+   * Vuelve a recorrer una carpeta (no la raíz) y la injerta en el árbol cargado (Store.graft): la carpeta conserva su
+   * id, lo de dentro estrena ids y el resto no cambia. Siempre con el recorrido (aunque el escaneo fuera por MFT) y
+   * en un almacén aparte: cancelar deja el árbol como estaba. Mientras dura cuenta como un escaneo (`scanning`):
+   * scan, duplicates, historySave y compare responden error.scanBusy; las consultas siguen viendo el árbol anterior.
+   * Enlaces duros: se tratan como en un escaneo, pero sólo dentro de la carpeta; un archivo con otro nombre fuera
+   * de ella puede quedar contado dos veces (limitación conocida, hasta el próximo escaneo completo).
+   */
+  async rescan(id: number, onProgress: (p: ScanProgress) => void = () => { }): Promise<RescanResult> {
+    if (this.scanning) throw engineError('error.scanBusy');
+    if (this.dupRunning) throw engineError('error.dupBusy');
+    const s = this.need(id);
+    if (id === s.rootId) throw engineError('rescan.root');
+    const path = s.path(id);
+    if (!s.isDir(id)) throw engineError('error.notFolder', { path });
+    const ri = checkRoot(path); // ya no existe o ya no es carpeta: error.cannotOpen / error.notFolder, sin tocar nada
+    // en marcha antes del primer await: un cancel() inmediato ya lo para
+    this.scanning = true; this.cancelled = false;
+    const isCancelled = () => this.cancelled;
+    const t0 = performance.now();
+    const ms = () => Math.round(performance.now() - t0);
+    try {
+      onProgress({ phase: 'walk', entries: 0, bytes: 0, elapsedMs: 0, detail: path });
+      const warnings: EngineMessage[] = [];
+      let sub: Store;
+      if (s.fl[id] & FLAG.REPARSE) {
+        // un punto de reanálisis (junction, enlace simbólico) no se sigue, como en el escaneo: queda vacío
+        sub = new Store(1); sub.addRoot(path, ri.mtime, s.fl[id]);
+      } else {
+        const isNtfs = volumeInfo(volumeRoot(path))?.fs.toUpperCase() === 'NTFS';
+        const w = await walkScan(path, {
+          threads: this.opts.threads ?? defaultThreads(), workerUrl: this.opts.workerUrl, trackKeys: isNtfs, isCancelled,
+          onProgress: p => onProgress({ phase: 'walk', entries: p.entries, bytes: p.bytes, elapsedMs: ms(), detail: p.detail }),
+        });
+        sub = w.store;
+        for (const n of w.notes) this.opts.log?.(n);
+        warnings.push(...walkWarnings(w));
+        if (isNtfs) sub.dedupHardlinks();
+        // lo que sale de la etiqueta de reparse (nube, WOF) no se lee en la raíz del recorrido: se conserva
+        if (ri.attrs & ATTR.REPARSE) sub.fl[0] |= s.fl[id] & (FLAG.CLOUD | FLAG.COMPRESSED);
+      }
+      if (this.cancelled) throw engineError('error.cancelled');
+      sub.finalize();
+      // mientras tanto pudo ir a la papelera (ella o un antepasado)
+      if (this.store !== s || !s.has(id)) throw engineError('error.invalidNode', { id });
+      const oldCount = s.nf[id] + s.nd[id];
+      const before = s.graft(id, sub);
+      const r = this.result, root = s.rootId;
+      if (r) this.result = { ...r, bytes: s.sz[root], files: s.nf[root], dirs: s.nd[root], entries: r.entries + sub.n - 1 - oldCount };
+      const out: RescanResult = { row: s.row(id), before, entries: sub.n - 1, elapsedMs: ms(), warnings };
+      onProgress({ phase: 'done', entries: out.entries, bytes: out.row.size, elapsedMs: out.elapsedMs });
+      Bun.gc(true); // las columnas anteriores del árbol y el almacén del recorrido
+      return out;
+    } catch (e) {
+      onProgress({ phase: 'error', entries: 0, bytes: 0, elapsedMs: ms() }); // el error en sí llega como EngineMessage
+      throw e;
+    } finally {
+      this.scanning = false;
+    }
+  }
+
+  /** Actualizar con el diario USN sólo existe en el motor Rust (escritorio con administrador): aquí, siempre refresh.unavailable. */
+  async refresh(_onProgress?: (p: ScanProgress) => void): Promise<RefreshResult> {
+    throw engineError('refresh.unavailable');
   }
 
   /** Archivos duplicados bajo `root` (ver dup.ts). Exige un escaneo cargado y ninguna operación larga en curso. */

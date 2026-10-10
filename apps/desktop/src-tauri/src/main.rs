@@ -10,14 +10,15 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State, WebviewWindowBuilder};
 use tessera_core::{
     export, msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult, ElevationInfo, EngineChoice,
-    EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, Scan, ScanOptions, ScanProgress, ScanResult, SearchResponse, SortKey,
-    VolumeInfo,
+    EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, RefreshResult, RescanResult, Scan, ScanOptions, ScanProgress, ScanResult,
+    SearchResponse, SortKey, VolumeInfo,
 };
 
 type Res<T> = Result<T, EngineMessage>;
 
 /// Estado compartido: el último escaneo y su generación (cambia con cada escaneo nuevo).
-/// Un escaneo y una búsqueda de duplicados no pueden coincidir.
+/// Un escaneo (o un rescan / refresh, que comparten `busy` y `cancel`) y una búsqueda de duplicados
+/// no pueden coincidir.
 #[derive(Default)]
 struct AppState {
     scan: RwLock<Option<Scan>>,
@@ -72,21 +73,34 @@ async fn volumes() -> Res<Vec<VolumeInfo>> {
     tauri::async_runtime::spawn_blocking(sys::volumes).await.map_err(join_error)
 }
 
-#[tauri::command]
-async fn scan(st: St<'_>, path: String, engine: Option<EngineChoice>, on_progress: Channel<ScanProgress>) -> Res<ScanResult> {
-    let st = st.inner().clone();
+/// Empieza un trabajo que sustituye o cambia el árbol (escaneo, rescan, refresh): uno a la vez
+/// (`error.scanBusy`) y nunca durante una búsqueda de duplicados, que lee el árbol (`error.dupBusy`).
+fn begin_tree_job(st: &AppState) -> Res<()> {
     if st.busy.swap(true, SeqCst) {
         return Err(msg::scan_busy());
     }
-    // La búsqueda de duplicados lee el árbol actual: no se puede sustituir mientras dura
     if st.dup_busy.load(SeqCst) {
         st.busy.store(false, SeqCst);
         return Err(msg::dup_busy());
     }
     // Se limpia antes de lanzar el trabajo: una cancelación que llegue justo después no se pierde
     st.cancel.store(false, SeqCst);
+    Ok(())
+}
+
+/// Ejecuta `f` como trabajo del árbol en un hilo de trabajo y libera `busy` al terminar.
+async fn tree_job<T: Send + 'static>(st: &St<'_>, f: impl FnOnce(&AppState) -> Res<T> + Send + 'static) -> Res<T> {
+    let st = st.inner().clone();
+    begin_tree_job(&st)?;
     let job = st.clone();
-    let r = tauri::async_runtime::spawn_blocking(move || {
+    let r = tauri::async_runtime::spawn_blocking(move || f(&job)).await.map_err(join_error);
+    st.busy.store(false, SeqCst);
+    r?
+}
+
+#[tauri::command]
+async fn scan(st: St<'_>, path: String, engine: Option<EngineChoice>, on_progress: Channel<ScanProgress>) -> Res<ScanResult> {
+    tree_job(&st, move |job| {
         let cb = move |p: ScanProgress| {
             let _ = on_progress.send(p);
         };
@@ -94,16 +108,40 @@ async fn scan(st: St<'_>, path: String, engine: Option<EngineChoice>, on_progres
         let res = s.result.clone();
         *job.scan.write().map_err(poisoned)? = Some(s);
         job.generation.fetch_add(1, SeqCst);
-        Ok::<_, EngineMessage>(res)
+        Ok(res)
     })
     .await
-    .map_err(join_error);
-    st.busy.store(false, SeqCst);
-    r?
 }
 
-/// Pide parar el escaneo en curso; el comando `scan` pendiente termina con `error.cancelled`.
-/// El escaneo anterior, si lo había, sigue cargado.
+/// Vuelve a escanear una carpeta (no la raíz) y la sustituye en el árbol. El disco se lee sin
+/// cerrojo (las consultas siguen respondiendo) y el injerto se hace bajo escritura; `cancel_scan`
+/// lo para y el árbol queda como estaba.
+#[tauri::command]
+async fn rescan(st: St<'_>, id: u32, on_progress: Channel<ScanProgress>) -> Res<RescanResult> {
+    tree_job(&st, move |job| {
+        let cb = move |p: ScanProgress| {
+            let _ = on_progress.send(p);
+        };
+        tessera_core::rescan_shared(&job.scan, id, &ScanOptions::default(), &cb, &job.cancel)
+    })
+    .await
+}
+
+/// Actualiza con el diario USN (`refresh.unavailable` sin `ScanResult.canRefresh`,
+/// `refresh.journalReset` si hace falta un escaneo completo). Mismo cerrojo y cancelación que `rescan`.
+#[tauri::command]
+async fn refresh(st: St<'_>, on_progress: Channel<ScanProgress>) -> Res<RefreshResult> {
+    tree_job(&st, move |job| {
+        let cb = move |p: ScanProgress| {
+            let _ = on_progress.send(p);
+        };
+        tessera_core::refresh_shared(&job.scan, &ScanOptions::default(), &cb, &job.cancel)
+    })
+    .await
+}
+
+/// Pide parar el escaneo (o el rescan / refresh) en curso; el comando pendiente termina con
+/// `error.cancelled`. El escaneo anterior, si lo había, sigue cargado y sin cambios.
 #[tauri::command]
 fn cancel_scan(st: St<'_>) -> bool {
     let busy = st.busy.load(SeqCst);
@@ -204,17 +242,7 @@ async fn action(st: St<'_>, kind: String, id: u32) -> Res<ActionResult> {
 #[tauri::command]
 async fn duplicates(st: St<'_>, root: u32, min_size: f64, limit: u32, on_progress: Channel<DupProgress>) -> Res<DupResult> {
     let st = st.inner().clone();
-    {
-        let _order = st.dup_trashed.lock().map_err(poisoned)?;
-        if st.dup_busy.swap(true, SeqCst) {
-            return Err(msg::dup_busy());
-        }
-    }
-    if st.busy.load(SeqCst) {
-        st.dup_busy.store(false, SeqCst);
-        return Err(msg::scan_busy());
-    }
-    st.dup_cancel.store(false, SeqCst);
+    begin_duplicates(&st)?;
     let job = st.clone();
     let r = tauri::async_runtime::spawn_blocking(move || {
         // `as` satura: negativos y NaN → 0
@@ -228,6 +256,23 @@ async fn duplicates(st: St<'_>, root: u32, min_size: f64, limit: u32, on_progres
         end_duplicates(&st);
     }
     r.map_err(join_error)?
+}
+
+/// Empieza una búsqueda de duplicados: una a la vez (`error.dupBusy`) y nunca durante un escaneo,
+/// rescan o refresh (`error.scanBusy`).
+fn begin_duplicates(st: &AppState) -> Res<()> {
+    {
+        let _order = st.dup_trashed.lock().map_err(poisoned)?;
+        if st.dup_busy.swap(true, SeqCst) {
+            return Err(msg::dup_busy());
+        }
+    }
+    if st.busy.load(SeqCst) {
+        st.dup_busy.store(false, SeqCst);
+        return Err(msg::scan_busy());
+    }
+    st.dup_cancel.store(false, SeqCst);
+    Ok(())
 }
 
 fn run_duplicates(st: &AppState, root: u32, min_size: u64, limit: u32, on_progress: Channel<DupProgress>) -> Res<DupResult> {
@@ -358,6 +403,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             volumes,
             scan,
+            rescan,
+            refresh,
             cancel_scan,
             slice,
             children,
@@ -381,4 +428,30 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while starting TesseraFS");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tree_jobs_and_duplicates_exclude_each_other() {
+        let st = AppState::default();
+        // Un escaneo, rescan o refresh a la vez; limpia la cancelación pendiente
+        st.cancel.store(true, SeqCst);
+        begin_tree_job(&st).unwrap();
+        assert!(!st.cancel.load(SeqCst));
+        assert_eq!(begin_tree_job(&st).unwrap_err().code, "error.scanBusy");
+        // Durante el trabajo no empieza una búsqueda de duplicados (y no se queda marcada)
+        assert_eq!(begin_duplicates(&st).unwrap_err().code, "error.scanBusy");
+        assert!(!st.dup_busy.load(SeqCst));
+        st.busy.store(false, SeqCst);
+        // Durante la búsqueda no empieza un trabajo del árbol (y `busy` vuelve a quedar libre)
+        begin_duplicates(&st).unwrap();
+        assert_eq!(begin_duplicates(&st).unwrap_err().code, "error.dupBusy");
+        assert_eq!(begin_tree_job(&st).unwrap_err().code, "error.dupBusy");
+        assert!(!st.busy.load(SeqCst));
+        end_duplicates(&st);
+        begin_tree_job(&st).unwrap();
+    }
 }

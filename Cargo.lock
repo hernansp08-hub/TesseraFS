@@ -3332,6 +3332,7 @@ dependencies = [
 name = "tessera-cli"
 version = "0.6.0"
 dependencies = [
+ "serde",
  "serde_json",
  "tessera-core",
 ]

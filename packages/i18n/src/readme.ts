@@ -20,7 +20,7 @@ function section(i: I18n, edition: Edition, version: string): string[] {
   const name = LOCALES.find(l => l.code === i.locale)!.name;
   const title = `${t('readme.title', { version })} · ${t(edition === 'desktop' ? 'app.edition.desktop' : 'app.edition.portable')}`;
   const paras = edition === 'desktop'
-    ? ['readme.desktop.open', 'readme.desktop.smartscreen', 'readme.desktop.webview', 'readme.fastMode', 'readme.privacy']
+    ? ['readme.desktop.open', 'readme.desktop.smartscreen', 'readme.desktop.webview', 'readme.fastMode', 'readme.cli', 'readme.privacy']
     : ['readme.portable.open', 'readme.portable.signed', 'readme.portable.vbs', 'readme.fastMode', 'readme.links', 'readme.portable.privacy', 'readme.privacy'];
   const lines = [`[${name}]`, title, '='.repeat(Math.min(92, title.length)), ''];
   for (const k of paras) lines.push(...wrap(t(k)), '');

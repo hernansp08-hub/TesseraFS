@@ -194,6 +194,35 @@ flowchart LR
 
 Para comprobar a mano: `tessera-cli scan <ruta> --history-save`, `tessera-cli scan <ruta> --history-compare <id> [--children]` y `tessera-cli history [list | delete <id> | clear]`, con `TESSERA_HISTORY_DIR` para no tocar el historial real.
 
+## Volver a escanear una carpeta
+
+`rescan(id)` (Rust `rescan.rs`, Bun `Store.graft`) recorre una carpeta aparte, sin bloquear el árbol, y al terminar la **injerta**:
+
+```mermaid
+flowchart LR
+    W["Recorrido de la carpeta<br/>(árbol aparte, cancelable)"] --> G["Injerto"]
+    G --> K["La carpeta conserva su id;<br/>sus descendientes quedan muertos"]
+    G --> N["Contenido nuevo al final<br/>(cada padre antes que sus hijos)"]
+    G --> A["Antepasados: tamaños,<br/>archivos y carpetas por diferencia"]
+    G --> C["Cachés de orden y extensiones<br/>invalidadas · comparación fuera"]
+```
+
+- Los ids de fuera no cambian; los de dentro, sí (los antiguos dan `error.invalidNode`). Lo muerto no se recupera hasta el siguiente escaneo completo.
+- Siempre con el motor de recorrido, aunque el escaneo fuera por MFT: las cifras pueden diferir un poco (la MFT cuenta, por ejemplo, los flujos alternativos).
+- Los enlaces duros se detectan sólo dentro de la carpeta: un archivo con otro nombre fuera de ella puede contarse dos veces hasta el siguiente escaneo completo.
+- Cancelar antes del injerto deja el árbol exactamente como estaba.
+
+## Actualizar con el diario USN (escritorio)
+
+Con administrador, en un volumen NTFS local, el escaneo guarda la **posición del diario de cambios** de NTFS (al empezar, para no perder lo que cambie mientras dura) y el **FRN** de cada carpeta (de la MFT o del FileId del recorrido). `refresh()` (`usn.rs`):
+
+1. Lee `FSCTL_READ_USN_JOURNAL` desde esa posición; si el diario cambió de id o perdió registros → `refresh.journalReset` (la interfaz hace un escaneo completo).
+2. De cada registro toma la carpeta padre y, si es una carpeta, la propia; resuelve los FRN a carpetas del árbol, subiendo por las carpetas nuevas del mismo lote.
+3. Se queda con el conjunto mínimo (sin carpetas dentro de otras); si incluye la raíz o pasa de 2000 → escaneo completo.
+4. Recorre esas carpetas con un único grupo de hilos y las injerta todas de una vez; sólo entonces guarda la nueva posición del diario.
+
+La lectura real del diario necesita administrador y no se ejecuta en las pruebas automáticas (`usn_refresh_elevated` está marcada `#[ignore]`); el analizador de registros, la resolución de carpetas y el conjunto mínimo sí tienen pruebas con datos sintéticos. La portable responde siempre `refresh.unavailable`.
+
 ## Exportar
 
 `exportFile` escribe en `Descargas\TesseraFS` (carpeta conocida de Descargas, o `TESSERA_EXPORT_DIR`): el nombre no puede llevar rutas ni caracteres reservados, y si ya existe se añade « (2)». `revealExport` sólo abre el Explorador para archivos dentro de esa carpeta. Los CSV, JSON, informes HTML y PNG los compone la interfaz; el motor sólo guarda los bytes.

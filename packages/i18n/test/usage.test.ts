@@ -21,7 +21,7 @@ function files(dir: string, ext: RegExp, out: string[] = []): string[] {
 const read = (p: string) => readFileSync(p, 'utf8');
 
 // Los `code: '…'` de la demo son códigos de motor, no claves: se comprueban aparte
-const UI = [...files(join(ROOT, 'packages/ui/src'), /\.ts$/), join(ROOT, 'packages/ui/index.html')].map(read).join('\n').replace(/code: '[^']*'/g, '');
+const UI = [...files(join(ROOT, 'packages/ui/src'), /\.ts$/), join(ROOT, 'packages/ui/index.html')].map(read).join('\n').replace(/code: '[^']*'|fail\('[^']*'|code === '[^']*'/g, '');
 // README.txt de los zips: lo compone packages/i18n/src/readme.ts, que usan los dos empaquetadores
 const PACKAGING = ['packages/i18n/src/readme.ts', 'scripts/package.ts', 'apps/portable/pack.ts'].map(f => join(ROOT, f)).filter(existsSync).map(read).join('\n');
 // Literales con forma de clave («tab.files», "map.color.ext») de un espacio de nombres conocido
@@ -34,7 +34,7 @@ const rustSrc = files(join(ROOT, 'crates'), /\.rs$/).concat(files(join(ROOT, 'ap
 const rustCodes = [...rustSrc.matchAll(/EngineMessage::new\(\s*"([a-zA-Z]+\.[a-zA-Z]+)"/g)].map(m => m[1]);
 const queryCodes = [...read(join(ROOT, 'packages/protocol/src/query.ts')).matchAll(/['"](query\.[a-zA-Z]+)['"]/g)].map(m => m[1]);
 const demoSrc = read(join(ROOT, 'packages/ui/src/backends/demo.ts'));
-const demoCodes = [...demoSrc.matchAll(/code: '([a-z]+\.[a-zA-Z]+)'/g)].map(m => m[1])
+const demoCodes = [...demoSrc.matchAll(/(?:code: |fail\()'([a-z]+\.[a-zA-Z]+)'/g)].map(m => m[1])
   .concat([...(demoSrc.match(/const msg: Record<string, string> = \{([\s\S]*?)\n\s*\};/)?.[1] ?? '').matchAll(/^\s*(\w+):/gm)].map(x => 'demo.' + x[1]));
 
 describe('uso de las claves', () => {

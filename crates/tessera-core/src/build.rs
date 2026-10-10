@@ -23,6 +23,8 @@ pub struct RawTree {
     pub name_len: Vec<u16>,
     pub names: Vec<u8>,
     pub root: u32,
+    /// FRN de NTFS de las carpetas (id en bruto, FRN), sólo si el motor los guardó (para `refresh`).
+    pub frn: Vec<(u32, u64)>,
 }
 
 impl RawTree {
@@ -37,6 +39,7 @@ impl RawTree {
             name_len: Vec::with_capacity(n),
             names: Vec::with_capacity(n * 16),
             root: 0,
+            frn: Vec::new(),
         }
     }
 
@@ -216,6 +219,18 @@ pub fn build(mut raw: RawTree, root_path: String, sub: &[String]) -> Result<Tree
     }
     drop(kids);
     drop(start);
+    // FRN de las carpetas con los ids nuevos (en orden de id)
+    let frn = if raw.frn.is_empty() {
+        Vec::new()
+    } else {
+        let mut new_of = vec![NONE; n];
+        for (j, &v) in raw_of.iter().enumerate() {
+            new_of[v as usize] = j as u32;
+        }
+        let mut f: Vec<(u32, u64)> = raw.frn.iter().filter(|e| (e.0 as usize) < n && new_of[e.0 as usize] != NONE).map(|&(v, x)| (new_of[v as usize], x)).collect();
+        f.sort_unstable();
+        f
+    };
 
     let g64 = |src: &Vec<u64>| -> Vec<u64> { raw_of.par_iter().map(|&v| src[v as usize]).collect() };
     let g32 = |src: &Vec<u32>| -> Vec<u32> { raw_of.par_iter().map(|&v| src[v as usize]).collect() };
@@ -274,6 +289,8 @@ pub fn build(mut raw: RawTree, root_path: String, sub: &[String]) -> Result<Tree
         removed: Default::default(),
         dirty: Default::default(),
         cmp: Default::default(),
+        frn,
+        frn_map: Default::default(),
     })
 }
 
@@ -330,6 +347,59 @@ mod tests {
         assert_eq!(t.name(k[0]), "b.TXT");
         assert!(!t.live(a1));
         assert!(t.remove(a1).is_err());
+    }
+
+    #[test]
+    fn graft_replaces_folder_contents() {
+        // raíz(151) → a(101) → a1.bin 100, a2.bin 1 ; b.TXT 50 ; vacia
+        let mut t = sample();
+        let a = 1;
+        let old = t.kids(a).to_vec();
+        t.frn = vec![(0, 5), (a, 10), (3, 12)];
+        t.set_comparison(Some(std::sync::Arc::new(crate::history::Comparison::default())));
+        // Lo nuevo de a: n.iso 300 y sub/ con z.TXT 7 (la extensión txt ya existe; iso es nueva)
+        let mut r = RawTree::with_capacity(4);
+        let root = r.push(NONE, b"", 0, 0, 99, flag::DIR);
+        r.push(root, b"n.iso", 300, 4096, 1, 0);
+        let sub = r.push(root, b"sub", 0, 0, 2, flag::DIR);
+        r.push(sub, b"z.TXT", 7, 4096, 3, 0);
+        r.frn = vec![(root, 11), (sub, 20)];
+        r.root = root;
+        let s = build(r, "C:\\a".into(), &[]).unwrap();
+        let n0 = t.len() as u32;
+        t.graft(a, s, Some(flag::DIR | flag::HIDDEN)).unwrap();
+        // La carpeta conserva su id; lo de antes queda muerto; lo nuevo va al final
+        assert!(t.live(a));
+        assert!(old.iter().all(|&k| !t.live(k)));
+        let k = t.kids(a).to_vec();
+        assert_eq!(k.iter().map(|&k| t.name(k).into_owned()).collect::<Vec<_>>(), ["n.iso", "sub"]);
+        assert!(k.iter().all(|&k| k >= n0 && t.parent(k) == Some(a)));
+        let sub = k[1];
+        let z = t.kids(sub).get(0);
+        assert_eq!((t.path(z), t.ext(z), t.size(sub)), ("C:\\a\\sub\\z.TXT".to_string(), "txt", 7));
+        assert_eq!(t.ext(k[0]), "iso");
+        // Totales: la carpeta, los de `sub`; la raíz, por diferencia (151 − 101 + 307)
+        assert_eq!((t.size(a), t.files(a), t.dirs(a), t.mtime(a), t.flags(a)), (307, 2, 1, 99, flag::DIR | flag::HIDDEN));
+        assert_eq!((t.size(0), t.files(0), t.dirs(0)), (357, 3, 3));
+        assert_eq!(t.alloc(0), 3 * 4096);
+        assert_eq!(t.child_count(a), 2);
+        assert_eq!(t.kids(0).to_vec()[0], a);
+        // FRN: la carpeta toma el nuevo; las carpetas nuevas, el suyo; lo muerto ya no se encuentra
+        assert_eq!(t.frn_of(a), Some(11));
+        assert_eq!((t.dir_by_frn(11), t.dir_by_frn(20), t.dir_by_frn(10), t.dir_by_frn(12)), (Some(a), Some(sub), None, Some(3)));
+        assert!(t.comparison().is_none(), "la comparación se quita");
+        // Otra vez, ahora más pequeña: el orden de la raíz se recalcula (b.TXT 50 pasa delante)
+        let mut r = RawTree::with_capacity(2);
+        let root = r.push(NONE, b"", 0, 0, 0, flag::DIR);
+        r.push(root, b"x", 1, 8, 0, 0);
+        r.root = root;
+        t.graft(a, build(r, "C:\\a".into(), &[]).unwrap(), None).unwrap();
+        assert!(!t.live(sub) && !t.live(z));
+        assert_eq!((t.size(a), t.mtime(a), t.flags(a), t.size(0), t.files(0), t.dirs(0)), (1, 99, flag::DIR | flag::HIDDEN, 51, 2, 2));
+        assert_eq!(t.name(t.kids(0).get(0)), "b.TXT");
+        assert!(t.graft(0, sample(), None).is_err(), "la raíz no");
+        assert!(t.graft(2, sample(), None).is_err(), "un archivo no");
+        assert!(t.graft(sub, sample(), None).is_err(), "lo muerto no");
     }
 
     #[test]

@@ -172,6 +172,27 @@ export class DemoBackend implements Backend {
   }
   async cancelDuplicates() { if (!this.dupRunning) return false; this.dupCancelled = true; return true; }
 
+  // Volver a escanear una carpeta: en la demo nada cambia, pero se simula el recorrido y su progreso
+  async rescan(id: number, onProgress: (p: ScanProgress) => void) {
+    const n = this.node(id);
+    if (!n.parent) throw fail('rescan.root', 'The scan root can’t be rescanned on its own');
+    if (!n.isDir) throw fail('error.notFolder', `Not a folder: ${this.path(n)}`, { path: this.path(n) });
+    if (this.scanning || this.dupRunning) throw fail('error.scanBusy', 'A scan is already in progress');
+    const t0 = performance.now(), total = n.files + n.dirs, dur = 700;
+    this.scanning = true; this.cancelled = false;
+    try {
+      for (let p = 0; p < 1;) {
+        if (this.cancelled) throw fail('error.cancelled', 'Scan cancelled');
+        p = Math.min(1, (performance.now() - t0) / dur);
+        onProgress({ phase: 'walk', entries: Math.round(total * p), bytes: n.size * p, elapsedMs: performance.now() - t0, detail: this.path(n) });
+        await new Promise(r => setTimeout(r, 60));
+      }
+    } finally { this.scanning = false; }
+    this.cmp = null;
+    return { row: this.row(n), before: n.size, entries: total, elapsedMs: performance.now() - t0, warnings: [] };
+  }
+  async refresh(): Promise<never> { throw fail('refresh.unavailable', 'Quick update is not available'); }
+
   // ---------- Historial simulado ----------
   private entry(id: string, at: number, bytes: number, files: number, dirs: number): HistoryEntry {
     return { id, path: 'C:\\', scannedAt: Math.round(at), engine: 'mft', bytes, files, dirs, nodes: 0, fileBytes: 0 };

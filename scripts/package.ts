@@ -1,5 +1,5 @@
 // Empaqueta la versión actual en zips listos para publicar y, con --publish, crea la release en GitHub.
-//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-escritorio-win-x64.zip   tesserafs-desktop.exe + README multilingüe + licencias
+//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-escritorio-win-x64.zip   tesserafs-desktop.exe + tessera-cli.exe + README multilingüe + licencias
 //   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-portable-win-x64.zip     carpeta portable (bun.exe firmado + tesserafs.js) + licencias
 //   dist/release/vX.Y.Z/SHA256SUMS.txt                            sumas de comprobación
 //   dist/release/vX.Y.Z/NOTAS.md                                  notas de la release (del CHANGELOG)
@@ -29,9 +29,12 @@ const out = (cmd: string[]) => Bun.spawnSync(cmd, { cwd: ROOT }).stdout.toString
 if (!skipBuild) {
   run(['bun', 'packages/ui/build.ts']);
   run(['bunx', 'tauri', 'build', '--no-bundle'], join(ROOT, 'apps', 'desktop'));
+  run(['cargo', 'build', '--release', '-p', 'tessera-cli']);
   run(['bun', 'apps/portable/pack.ts']);
 }
 const exe = join(ROOT, 'target', 'release', 'tesserafs-desktop.exe');
+const cli = join(ROOT, 'target', 'release', 'tessera-cli.exe');
+if (!existsSync(cli)) die('No existe target/release/tessera-cli.exe');
 const portable = join(ROOT, 'apps', 'portable', 'dist', 'TesseraFS-portable');
 if (!existsSync(exe)) die('No existe target/release/tesserafs-desktop.exe');
 if (!existsSync(join(portable, 'tesserafs.js'))) die('No existe la carpeta portable');
@@ -72,7 +75,7 @@ rmSync(OUT, { recursive: true, force: true }); mkdirSync(OUT, { recursive: true 
 const stage = join(OUT, 'stage'); mkdirSync(stage);
 
 const deskName = `TesseraFS-${version}-escritorio`, deskDir = join(stage, deskName);
-mkdirSync(deskDir); cpSync(exe, join(deskDir, 'tesserafs-desktop.exe'));
+mkdirSync(deskDir); cpSync(exe, join(deskDir, 'tesserafs-desktop.exe')); cpSync(cli, join(deskDir, 'tessera-cli.exe'));
 // README.txt en todos los idiomas de la interfaz (claves readme.* de packages/i18n)
 writeFileSync(join(deskDir, 'README.txt'), readmeText('desktop', version));
 addLicenses(deskDir, rustNotices());

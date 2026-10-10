@@ -175,6 +175,23 @@ pub fn export_not_found(path: &str) -> EngineMessage {
     EngineMessage::new("export.notFound", format!("Not an exported file: {path}")).param("path", path)
 }
 
+// ---- Volver a escanear una carpeta y actualizar con el diario USN ----
+
+/// Se pidió volver a escanear la raíz por partes (hay que escanearla entera).
+pub fn rescan_root() -> EngineMessage {
+    EngineMessage::new("rescan.root", "The scan root can't be rescanned on its own: scan it again")
+}
+
+/// Sin diario USN utilizable: portable, sin administrador, no NTFS o sin letra de unidad.
+pub fn refresh_unavailable() -> EngineMessage {
+    EngineMessage::new("refresh.unavailable", "Quick update needs the desktop edition with administrator rights on a local NTFS drive")
+}
+
+/// El diario se reinició, perdió registros o cambió demasiado: hace falta un escaneo completo.
+pub fn refresh_journal_reset() -> EngineMessage {
+    EngineMessage::new("refresh.journalReset", "The change journal can't tell everything that changed since the last scan: a full scan is needed")
+}
+
 // ---- Errores de sintaxis de la búsqueda (SearchResponse.error), igual que packages/protocol/src/query.ts ----
 
 pub fn query_invalid_value(value: &str) -> EngineMessage {

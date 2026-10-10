@@ -60,6 +60,8 @@ Tipos en [`packages/protocol/src/types.ts`](../packages/protocol/src/types.ts). 
 | Quitar la comparación | `compare_clear` | `POST /api/compare/clear` | — |
 | Exportar | `export_file {name, data, base64}` | `POST /api/export` `{name, data, base64}` (hasta 64 MiB) | `ExportResult` |
 | Mostrar lo exportado | `reveal_export {path}` | `POST /api/export/reveal` `{path}` | `ActionResult` |
+| Volver a escanear una carpeta | `rescan {id, onProgress: Channel<ScanProgress>}` | `POST /api/rescan` `{id}` + eventos SSE del escaneo | `RescanResult`; se cancela con `cancel_scan` / `POST /api/cancel` |
+| Actualizar con el diario USN | `refresh {onProgress: Channel<ScanProgress>}` | `POST /api/refresh` (siempre `refresh.unavailable` en la portable) | `RefreshResult` |
 | Elevación | `elevation` / `relaunch_elevated` | `GET /api/elevation` / `POST /api/relaunch-elevated` | `ElevationInfo` |
 
 Historial: cada resumen son dos archivos en `%LOCALAPPDATA%\TesseraFS\history`, con el mismo formato en las dos ediciones:

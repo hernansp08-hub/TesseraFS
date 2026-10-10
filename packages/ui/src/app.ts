@@ -548,6 +548,7 @@ export function renderInspector() {
     ? `<div class="confirm"><p>${tx('insp.confirmTrash', { name: r.name, size: fmtB(r.size) })}</p><div><button class="btn sm" type="button" data-act="cancel">${tx('insp.cancel')}</button><button class="btn sm danger solid" type="button" data-act="trash-ok">${tx('insp.trashConfirm')}</button></div></div>`
     : `<div class="actions"><button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button><button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button>`
       + `<button class="btn sm${S.marked.has(r.id) ? ' on' : ''}" type="button" data-act="mark" aria-pressed="${S.marked.has(r.id)}"${r.parentId >= 0 ? '' : ' disabled'}>${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}</button>`
+      + (r.isDir ? `<button class="btn sm" type="button" data-act="rescan" title="${tx('menu.rescan')}">${tx('insp.rescan')}</button>` : '')
       + `<button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button></div>`;
   const inMarked = markedAncestor(r);
   el.innerHTML = `<div class="insp-top"><span class="sw lg" style="background:${rgb(rowColor(r))}"></span><div class="insp-id"><div class="insp-kind">${esc(kind)}</div><h2 class="insp-name" title="${esc(r.name)}">${esc(nameOf(r))}</h2></div></div>`
@@ -622,6 +623,7 @@ $('insp').addEventListener('click', e => {
     case 'cancel': S.confirmTrash = false; renderInspector(); break;
     case 'trash-ok': S.confirmTrash = false; renderInspector(); doAction('trash', r); break;
     case 'mark': toggleMark(r); break;
+    case 'rescan': rescanFolder(r); break;
     case 'copy-cmd': { const k = S.known.get(r.id); if (k && 'rule' in k && k.cmd) copyText(k.cmd, 'toast.commandCopied'); break; }
   }
 });
@@ -1219,6 +1221,7 @@ function nodeMenu(r: NodeRow, x: number, y: number) {
     + `<button type="button" role="menuitem" data-m="zoom">${tx('menu.zoom')}</button>`
     + `<button type="button" role="menuitem" data-m="tree">${tx('menu.locate')}</button><hr>`
     + (r.parentId >= 0 ? `<button type="button" role="menuitem" data-m="mark">${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}<span>${tx('key.space')}</span></button>` : '')
+    + (r.isDir ? `<button type="button" role="menuitem" data-m="rescan">${tx('menu.rescan')}<span>${r.parentId < 0 || (zoomRow()?.id === r.id) ? tx('key.f5') : ''}</span></button>` : '')
     + `<button type="button" role="menuitem" data-m="properties">${tx('menu.properties')}</button>`
     + `<button type="button" role="menuitem" data-m="trash" class="danger">${tx('menu.trash')}<span>${tx('key.delete')}</span></button>`, x, y, 'node', r.id);
 }
@@ -1246,6 +1249,7 @@ menu.addEventListener('click', e => {
       case 'copy': pathOf(r.id).then(p => copyText(p, 'toast.pathCopied')); break;
       case 'zoom': zoomToRow(r); break;
       case 'tree': setTab('tree'); locate(r); break;
+      case 'rescan': rescanFolder(r); break;
       case 'trash': select(r); S.confirmTrash = true; renderInspector(); break;
       case 'mark': toggleMark(r); break;
     }
@@ -1375,7 +1379,7 @@ export async function startScan() {
     S.chain = [S.root]; S.expanded = new Set([S.root.id]); S.slice = null;
     if (res.volume) { S.vol = S.vols.find(v => v.path === res.volume!.path) || res.volume; }
     const ext = await B.extStats(S.root.id); setExtRanking(ext.map(e => e.ext)); S.ext = ext;
-    $('enginePill').hidden = false; renderScanSummary();
+    $('enginePill').hidden = false; renderScanSummary(); renderRefreshBtn();
     renderVolume(); updateCrumbs(); renderComposition();
     await rebuildTree(); await loadSlice(true);
     fadeMapState(); wrap.classList.remove('reveal'); void wrap.offsetWidth; wrap.classList.add('reveal');
@@ -1403,7 +1407,7 @@ async function afterCancel() {
   if (kept) { fadeMapState(); renderScanSummary(); toast(t('toast.scanCancelled')); return; }
   S.scan = null; S.root = null; S.chain = []; S.slice = null; S.sel = null; S.hl = null; S.clean = null; S.files = []; S.ext = []; resetChanges();
   S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.expanded.clear();
-  $('enginePill').hidden = true; $('scanTxt').textContent = ''; $('hlChip').hidden = true; $('cleanCount').textContent = ''; $('filesCount').textContent = '';
+  $('enginePill').hidden = true; $('scanTxt').textContent = ''; $('refreshBtn').hidden = true; $('hlChip').hidden = true; $('cleanCount').textContent = ''; $('filesCount').textContent = '';
   await rebuildTree(); renderMap(); updateCrumbs(); renderComposition(); renderInspector(); renderStatus(); filesVL.setCount(0);
   if (S.tab === 'clean') renderClean();
   showDrives();
@@ -1436,6 +1440,49 @@ $('mapState').addEventListener('submit', e => {
   const f = (e.target as HTMLElement).closest('[data-form="folder"]') as HTMLFormElement; if (!f) return;
   e.preventDefault(); const v = (f.elements.namedItem('path') as HTMLInputElement).value.trim(); if (v) analyzeFolder(v);
 });
+// ---------- Volver a escanear una carpeta y actualizar (diario USN) ----------
+// Mientras dura, la app se comporta como durante un escaneo (S.scanning) pero sin tapar el mapa: el progreso va en la cabecera.
+async function partial<R extends { before: number; elapsedMs: number }>(label: (p: ScanProgress) => string,
+  run: (onProgress: (p: ScanProgress) => void) => Promise<R>, done: (r: R) => string, sel: NodeRow | null) {
+  if (!S.root || S.scanning || D.running) return;
+  S.scanning = true; closeMenus(); tip.hidden = true;
+  const btn = $('scanBtn') as HTMLButtonElement; btn.classList.add('cancel'); btn.querySelector('span')!.textContent = t('header.cancel');
+  const hadCmp = !!H.cmp;
+  try {
+    const r = await run(p => { $('scanTxt').textContent = label(p); });
+    resetDups(); if (hadCmp) resetChanges();
+    await refreshAfterChange(sel);
+    toast(done(r) + (hadCmp ? ' · ' + t('update.compareOff') : ''));
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === 'refresh.journalReset') { toast(msgText(e)); S.scanning = false; btn.classList.remove('cancel'); btn.querySelector('span')!.textContent = t('header.scan'); renderScanSummary(); startScan(); return; }
+    toast(code === 'error.cancelled' ? t('update.cancelled') : t('toast.error', { error: msgText(e) }));
+  } finally {
+    if (S.scanning) { S.scanning = false; btn.classList.remove('cancel'); btn.querySelector('span')!.textContent = t('header.scan'); renderScanSummary(); renderStatus(); }
+  }
+}
+/** Vuelve a escanear una carpeta; la raíz se escanea entera. */
+function rescanFolder(r: NodeRow) {
+  if (!r.isDir) return;
+  if (r.parentId < 0) { startScan(); return; }
+  const name = nameOf(r);
+  partial(p => t('update.rescanProgress', { name, count: p.entries }), cb => B.rescan(r.id, cb),
+    res => t('update.rescanDone', { name, delta: signedB(res.row.size - res.before), time: fmtS(res.elapsedMs) }), r);
+}
+/** Lo que haya cambiado desde el escaneo, según el diario USN (escritorio con administrador). */
+function refreshChanges() {
+  partial(p => t('update.refreshProgress', { count: p.entries }), cb => B.refresh(cb),
+    res => t('update.refreshDone', { folders: res.folders, delta: signedB(res.after - res.before), time: fmtS(res.elapsedMs) }), null);
+}
+/** F5: lo más rápido disponible: el diario USN, la carpeta del mapa o un escaneo completo. */
+function quickUpdate() {
+  if (S.scanning || D.running) return;
+  if (!S.root) { startScan(); return; }
+  if (S.scan?.canRefresh) { refreshChanges(); return; }
+  const z = zoomRow(); if (z && z.parentId >= 0) rescanFolder(z); else startScan();
+}
+function renderRefreshBtn() { $('refreshBtn').hidden = !S.scan?.canRefresh; }
+$('refreshBtn').addEventListener('click', () => refreshChanges());
 function renderScanSummary() {
   const res = S.scan; if (!res) return;
   $('enginePill').textContent = t(res.engine === 'mft' ? 'header.engine.mft' : 'header.engine.walk');
@@ -1477,6 +1524,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Backspace' && S.chain.length > 1) { e.preventDefault(); setZoom(S.chain.slice(0, -1)); }
   if (e.key === 'Delete' && S.sel && S.sel.parentId >= 0) { S.confirmTrash = true; renderInspector(); }
 });
+// F5 actualiza en lugar de recargar la página (la portable es una ventana de Edge)
+document.addEventListener('keydown', e => { if (e.key === 'F5' && !e.ctrlKey) { e.preventDefault(); quickUpdate(); } });
 let rzT = 0, rzFrame = 0, dragging = false;
 new ResizeObserver(() => {
   if (dragging) { if (!rzFrame) rzFrame = requestAnimationFrame(() => { rzFrame = 0; renderMap(true); }); return; }

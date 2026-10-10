@@ -1,7 +1,7 @@
 // @tessera/core-bun: motor de TesseraFS sobre Bun (bun:ffi).
 export * from './engine.ts';
 export * from './messages.ts';
-export { Store, NONE, flagsFromAttrs, CMP_MATCHED, CMP_FRESH, type CompareState } from './store.ts';
+export { Store, NONE, DEAD, flagsFromAttrs, CMP_MATCHED, CMP_FRESH, type CompareState } from './store.ts';
 export {
   historyDir, exportDir, fnv1a32, pathHash, historyId, buildSnapshot, parseSnapshot, listHistory, saveHistory, deleteHistory,
   clearHistory, compareHistory, compareSnapshot, validExportName, exportFile, exportedFile,

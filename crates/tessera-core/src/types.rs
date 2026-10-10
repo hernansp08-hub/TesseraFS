@@ -193,6 +193,10 @@ pub struct ScanResult {
     pub elapsed_ms: u64,
     pub volume: Option<VolumeInfo>,
     pub warnings: Vec<EngineMessage>,
+    /// `true` si `refresh` puede actualizar con el diario USN (ver [`crate::rescan`]). El motor Rust
+    /// siempre lo da (`true` o `false`); falta en el JSON sólo si es `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_refresh: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -463,6 +467,38 @@ pub struct CompareResult {
     pub removed: Vec<RemovedRow>,
 }
 
+// ---------- Volver a escanear y actualizar (ver crate::rescan) ----------
+
+/// Resultado de volver a escanear una carpeta: la misma carpeta (mismo id) con su contenido nuevo.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RescanResult {
+    /// La carpeta ya actualizada.
+    pub row: NodeRow,
+    /// Su tamaño antes.
+    pub before: u64,
+    /// Elementos leídos.
+    pub entries: u64,
+    pub elapsed_ms: u64,
+    /// `scan.accessDenied` / `scan.readErrors`, como en el escaneo.
+    pub warnings: Vec<EngineMessage>,
+}
+
+/// Resultado de `refresh`: lo que el diario USN dijo que cambió, ya vuelto a escanear.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshResult {
+    /// Carpetas vueltas a escanear.
+    pub folders: u64,
+    /// Registros del diario leídos.
+    pub records: u64,
+    /// Tamaño de la raíz antes y después.
+    pub before: u64,
+    pub after: u64,
+    pub elapsed_ms: u64,
+    pub warnings: Vec<EngineMessage>,
+}
+
 /// Archivo exportado en Descargas\TesseraFS.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -512,9 +548,15 @@ mod tests {
             elapsed_ms: 0,
             volume: None,
             warnings: vec![msg::mft_orphans(7)],
+            can_refresh: None,
         };
         let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("canRefresh").is_none());
         assert_eq!(v["warnings"][0]["code"], "scan.mftOrphans");
+        let v = serde_json::to_value(ScanResult { can_refresh: Some(false), ..r.clone() }).unwrap();
+        assert_eq!(v["canRefresh"], false);
+        let back: ScanResult = serde_json::from_str(r#"{"rootId":0,"rootPath":"C:\\","engine":"mft","entries":0,"files":0,"dirs":0,"bytes":0,"elapsedMs":0,"volume":null,"warnings":[],"canRefresh":true}"#).unwrap();
+        assert_eq!(back.can_refresh, Some(true));
         assert_eq!(v["warnings"][0]["params"]["count"], 7);
         assert_eq!(serde_json::to_string(&ActionResult::done()).unwrap(), r#"{"ok":true}"#);
         let a = serde_json::to_value(ActionResult::fail(msg::action_failed("Acceso denegado."))).unwrap();
@@ -556,6 +598,25 @@ mod tests {
         assert_eq!(q, DupRequest { root: 3, min_size: 1 << 20, limit: 200 });
         assert_eq!(msg::dup_read_errors(2).message, "2 files couldn't be read and were left out");
         assert_eq!(msg::dup_busy().code, "error.dupBusy");
+    }
+
+    #[test]
+    fn rescan_json() {
+        let r = RescanResult { row: node(None, None), before: 4, entries: 2, elapsed_ms: 3, warnings: vec![msg::access_denied(1, &[])] };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["row"]["id"], 3);
+        assert_eq!((v["before"].clone(), v["entries"].clone(), v["elapsedMs"].clone()), (4.into(), 2.into(), 3.into()));
+        assert_eq!(v["warnings"][0]["code"], "scan.accessDenied");
+        assert_eq!(serde_json::from_value::<RescanResult>(v).unwrap(), r);
+        let f = RefreshResult { folders: 1, records: 2, before: 3, after: 4, elapsed_ms: 5, warnings: vec![] };
+        assert_eq!(
+            serde_json::to_value(&f).unwrap(),
+            serde_json::json!({ "folders": 1, "records": 2, "before": 3, "after": 4, "elapsedMs": 5, "warnings": [] })
+        );
+        assert_eq!(serde_json::to_value(msg::rescan_root()).unwrap(), serde_json::json!({ "code": "rescan.root", "message": "The scan root can't be rescanned on its own: scan it again" }));
+        assert_eq!(msg::refresh_unavailable().code, "refresh.unavailable");
+        assert_eq!(msg::refresh_journal_reset().code, "refresh.journalReset");
+        assert!(msg::refresh_journal_reset().params.is_none());
     }
 
     fn node(prev: Option<u64>, fresh: Option<bool>) -> NodeRow {

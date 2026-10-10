@@ -9,6 +9,7 @@ use crate::msg;
 use crate::sys;
 use crate::tree::Tree;
 use crate::types::{Engine, EngineChoice, EngineMessage, ScanPhase, ScanProgress, ScanResult, VolumeInfo};
+use crate::usn::UsnCursor;
 
 /// Contadores compartidos con los motores; un hilo los publica a ~15 Hz.
 pub struct Progress {
@@ -84,19 +85,53 @@ pub struct ScanOptions {
     pub buf_size: usize,
     /// Intervalo de progreso.
     pub tick: Duration,
+    /// Guarda el FRN de las carpetas aunque no se pueda usar el diario USN (pruebas).
+    pub keep_frn: bool,
 }
 
 impl Default for ScanOptions {
     fn default() -> Self {
-        ScanOptions { threads: 0, buf_size: 1 << 20, tick: Duration::from_millis(66) }
+        ScanOptions { threads: 0, buf_size: 1 << 20, tick: Duration::from_millis(66), keep_frn: false }
     }
 }
 
 pub struct Scan {
     pub tree: Tree,
     pub result: ScanResult,
-    /// Cuándo terminó, en segundos Unix (para el historial).
+    /// Cuándo terminó, en segundos Unix (para el historial). `refresh` lo pone al día.
     pub scanned_at: u64,
+    /// Posición en el diario USN para `refresh` (sólo si `result.can_refresh`).
+    pub usn: Option<UsnCursor>,
+    /// Distinto en cada escaneo del proceso (para saber si el escaneo compartido cambió).
+    pub(crate) serial: u64,
+}
+
+static SERIAL: AtomicU64 = AtomicU64::new(1);
+
+/// Ejecuta `f` mientras otro hilo publica `prog` con `on_progress` cada `tick`.
+pub fn ticking<T>(prog: &Progress, tick: Duration, on_progress: &(dyn Fn(ScanProgress) + Sync), f: impl FnOnce() -> T) -> T {
+    /// Para el hilo del progreso también si `f` termina con pánico.
+    struct Stop<'a>(&'a AtomicBool);
+    impl Drop for Stop<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Relaxed);
+        }
+    }
+    let done = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let mut last = Instant::now();
+            while !done.load(Relaxed) {
+                std::thread::sleep(Duration::from_millis(10));
+                if last.elapsed() >= tick && !done.load(Relaxed) {
+                    last = Instant::now();
+                    on_progress(prog.snapshot());
+                }
+            }
+        });
+        let _stop = Stop(&done);
+        f()
+    })
 }
 
 /// Normaliza a ruta absoluta: "C:" → "C:\\", sin barra final salvo en la raíz.
@@ -151,25 +186,16 @@ pub fn scan(
         EngineChoice::Mft => true,
         EngineChoice::Auto => whole_volume,
     };
-    let done = AtomicBool::new(false);
     let threads = if opts.threads == 0 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) } else { opts.threads };
+    // Diario USN: la posición se toma al empezar, así lo que cambie durante el escaneo también lo verá
+    // el primer `refresh` (volver a escanear de más no estropea nada; perder un cambio, sí)
+    let journal = journal_start(&fs, &vol_root);
+    let want_frn = opts.keep_frn || journal.is_some();
 
-    let outcome = std::thread::scope(|s| {
-        s.spawn(|| {
-            let mut last = Instant::now();
-            while !done.load(Relaxed) {
-                std::thread::sleep(Duration::from_millis(10));
-                if last.elapsed() >= opts.tick && !done.load(Relaxed) {
-                    last = Instant::now();
-                    on_progress(prog.snapshot());
-                }
-            }
-        });
-        let r = run_engines(&root, &vol_root, &fs, whole_volume, want_mft, threads, opts, &prog, cancel, &mut warnings);
-        done.store(true, Relaxed);
-        r
+    let outcome = ticking(&prog, opts.tick, on_progress, || {
+        run_engines(&root, &vol_root, &fs, whole_volume, want_mft, want_frn, threads, opts, &prog, cancel, &mut warnings)
     });
-    let (tree, engine) = match outcome {
+    let (mut tree, engine, frn_complete) = match outcome {
         Ok(x) => x,
         Err(e) => {
             // El error viaja en el Err; `detail` sólo lleva rutas
@@ -180,6 +206,11 @@ pub fn scan(
             return Err(e);
         }
     };
+    // `refresh` sólo si el diario sigue siendo el mismo al terminar y todas las carpetas tienen FRN
+    let usn = journal.filter(|_| frn_complete && tree.has_frn()).and_then(journal_end);
+    if usn.is_none() && !opts.keep_frn {
+        tree.drop_frn();
+    }
     let result = ScanResult {
         root_id: 0,
         root_path: root,
@@ -191,6 +222,7 @@ pub fn scan(
         elapsed_ms: prog.elapsed_ms(),
         volume,
         warnings,
+        can_refresh: Some(usn.is_some()),
     };
     prog.set_phase(ScanPhase::Done);
     on_progress(ScanProgress {
@@ -201,7 +233,34 @@ pub fn scan(
         detail: None,
         fraction: Some(1.0),
     });
-    Ok(Scan { tree, result, scanned_at: crate::query::now_secs() as u64 })
+    Ok(Scan { tree, result, scanned_at: crate::query::now_secs() as u64, usn, serial: SERIAL.fetch_add(1, Relaxed) })
+}
+
+/// Posición del diario USN al empezar: sólo con administrador, en un volumen NTFS local con letra.
+#[cfg(windows)]
+fn journal_start(fs: &str, vol_root: &str) -> Option<(char, crate::usn::JournalInfo)> {
+    let letter = drive_letter(vol_root)?;
+    if fs != "NTFS" || sys::is_network(vol_root) || !sys::elevation().elevated {
+        return None;
+    }
+    crate::usn::query(letter).ok().map(|j| (letter, j))
+}
+
+#[cfg(not(windows))]
+fn journal_start(_fs: &str, _vol_root: &str) -> Option<(char, crate::usn::JournalInfo)> {
+    None
+}
+
+/// El diario funciona al terminar y es el mismo que al empezar: la posición del principio vale.
+#[cfg(windows)]
+fn journal_end((letter, start): (char, crate::usn::JournalInfo)) -> Option<UsnCursor> {
+    let now = crate::usn::query(letter).ok()?;
+    (now.journal_id == start.journal_id).then_some(UsnCursor { letter, journal_id: start.journal_id, next_usn: start.next_usn })
+}
+
+#[cfg(not(windows))]
+fn journal_end(_: (char, crate::usn::JournalInfo)) -> Option<UsnCursor> {
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -211,12 +270,13 @@ fn run_engines(
     fs: &str,
     whole_volume: bool,
     want_mft: bool,
+    want_frn: bool,
     threads: usize,
     opts: &ScanOptions,
     prog: &Progress,
     cancel: &AtomicBool,
     warnings: &mut Vec<EngineMessage>,
-) -> Result<(Tree, Engine), EngineMessage> {
+) -> Result<(Tree, Engine, bool), EngineMessage> {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().map_err(|e| e.to_string())?;
     if want_mft {
         let letter = drive_letter(vol_root);
@@ -245,7 +305,8 @@ fn run_engines(
                         };
                         let display = if whole_volume { vol_root.to_string() } else { root.to_string() };
                         match pool.install(|| build(out.raw, display, &sub)) {
-                            Ok(tree) => return Ok((tree, Engine::Mft)),
+                            // El lector MFT da el FRN de todas las carpetas
+                            Ok(tree) => return Ok((tree, Engine::Mft, true)),
                             Err(e) => warnings.push(msg::mft_failed(&e)),
                         }
                     }
@@ -258,48 +319,58 @@ fn run_engines(
     prog.set_phase(ScanPhase::Walk);
     prog.entries.store(0, Relaxed);
     prog.bytes.store(0, Relaxed);
-    let raw = walk_engine(root, fs, threads, opts, prog, cancel, warnings)?;
+    let (raw, frn_complete) = walk_engine(root, fs, want_frn, threads, opts, prog, cancel, warnings)?;
     prog.set_phase(ScanPhase::Aggregate);
     let tree = pool.install(|| build(raw, root.to_string(), &[]))?;
-    Ok((tree, Engine::Walk))
+    Ok((tree, Engine::Walk, frn_complete))
+}
+
+/// Opciones del recorrido para `root` en un sistema de archivos `fs` (en mayúsculas).
+#[cfg(windows)]
+pub(crate) fn walk_options(root: &str, fs: &str, want_frn: bool, threads: usize, opts: &ScanOptions) -> crate::walk::WalkOptions {
+    let remote = root.starts_with(r"\\");
+    crate::walk::WalkOptions {
+        threads,
+        buf_size: if remote { 64 * 1024 } else { opts.buf_size },
+        dedupe_links: matches!(fs, "NTFS" | "REFS"),
+        frn: want_frn,
+    }
 }
 
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn walk_engine(
     root: &str,
     fs: &str,
+    want_frn: bool,
     threads: usize,
     opts: &ScanOptions,
     prog: &Progress,
     cancel: &AtomicBool,
     warnings: &mut Vec<EngineMessage>,
-) -> Result<RawTree, EngineMessage> {
-    let remote = root.starts_with(r"\\");
-    let wo = crate::walk::WalkOptions {
-        threads,
-        buf_size: if remote { 64 * 1024 } else { opts.buf_size },
-        dedupe_links: matches!(fs, "NTFS" | "REFS"),
-    };
-    let out = crate::walk::walk(root, &wo, prog, cancel)?;
+) -> Result<(RawTree, bool), EngineMessage> {
+    let out = crate::walk::walk(root, &walk_options(root, fs, want_frn, threads, opts), prog, cancel)?;
     if out.denied > 0 {
         warnings.push(msg::access_denied(out.denied, &out.denied_samples));
     }
     if out.errors > 0 {
         warnings.push(msg::read_errors(out.errors, &out.error_samples));
     }
-    Ok(out.raw)
+    Ok((out.raw, out.frn_complete))
 }
 
 #[cfg(not(windows))]
+#[allow(clippy::too_many_arguments)]
 fn walk_engine(
     _root: &str,
     _fs: &str,
+    _want_frn: bool,
     _threads: usize,
     _opts: &ScanOptions,
     _prog: &Progress,
     _cancel: &AtomicBool,
     _warnings: &mut Vec<EngineMessage>,
-) -> Result<RawTree, EngineMessage> {
+) -> Result<(RawTree, bool), EngineMessage> {
     Err(msg::unsupported_platform())
 }
 

@@ -1,13 +1,15 @@
 //! Almacén compacto en arreglos (SoA). Los ids son posiciones en orden por niveles (BFS):
 //! la raíz es 0, cada padre precede a sus hijos y los hijos de una carpeta ocupan ids
 //! contiguos `[first, first + count)` ordenados por tamaño desc (desempate por nombre).
+//! Al volver a escanear una carpeta ([`Tree::graft`]) su contenido nuevo se añade al final, también
+//! por niveles: el orden global deja de ser BFS, pero cada padre sigue precediendo a sus hijos.
 //!
 //! Coste: 50 B por nodo + nombres (WTF-8 en un único bloque).
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use crate::history::Comparison;
 use crate::names;
@@ -40,6 +42,11 @@ pub struct Tree {
     /// Comparación activa con un resumen del historial. Se cambia con el árbol bajo lectura
     /// (sin esperar a una búsqueda de duplicados); un escaneo nuevo trae un árbol sin ella.
     pub(crate) cmp: RwLock<Option<Arc<Comparison>>>,
+    /// FRN de NTFS de las carpetas, (id, FRN) en orden de id; vacío si el escaneo no lo guardó
+    /// (sólo hace falta para actualizar con el diario USN).
+    pub(crate) frn: Vec<(u32, u64)>,
+    /// FRN → id de las carpetas vivas: se crea al primer uso y se descarta al injertar.
+    pub(crate) frn_map: OnceLock<HashMap<u64, u32>>,
 }
 
 /// Hijos directos de una carpeta, ya ordenados por tamaño desc.
@@ -300,6 +307,156 @@ impl Tree {
         Ok(())
     }
 
+    /// Sustituye el contenido de la carpeta `id` por `sub`, la misma carpeta escaneada aparte (con su
+    /// raíz en el 0). Lo que colgaba de ella queda muerto, como tras la papelera, y lo nuevo se añade
+    /// al final con ids nuevos, por niveles (cada padre sigue precediendo a sus hijos). La carpeta
+    /// conserva su id y toma los totales de `sub`; sus antepasados cambian por diferencia y recalculan
+    /// el orden de hijos. `flags`: los de la carpeta según el sistema, si se conocen. Quita la
+    /// comparación activa y el mapa de FRN.
+    pub fn graft(&mut self, id: u32, sub: Tree, flags: Option<u16>) -> Result<(), String> {
+        if id == 0 || !self.live(id) || !self.is_dir(id) {
+            return Err("Invalid node".into());
+        }
+        let (base, n) = (self.len(), sub.len());
+        if n == 0 {
+            return Err("Empty scan".into());
+        }
+        if base + n >= NONE as usize {
+            return Err("Too many entries".into());
+        }
+        let names_base = self.names.len();
+        if names_base + sub.names.len() > u32::MAX as usize {
+            return Err("Too many names for the name store".into());
+        }
+        let i = id as usize;
+        // 1) Lo de antes queda muerto
+        self.removed.extend(self.first[i]..self.first[i] + self.count[i]);
+        self.dirty.remove(&id);
+        // 2) Extensiones de `sub` → las del árbol (0 = "" si la tabla está llena, como al construir)
+        let mut index: HashMap<String, u16> = self.exts.iter().enumerate().map(|(j, e)| (e.clone(), j as u16)).collect();
+        let exts = &mut self.exts;
+        let remap: Vec<u16> = sub
+            .exts
+            .iter()
+            .map(|e| match index.get(e) {
+                Some(&j) => j,
+                None if exts.len() < 0xFFFF => {
+                    let j = exts.len() as u16;
+                    exts.push(e.clone());
+                    index.insert(e.clone(), j);
+                    j
+                }
+                None => 0,
+            })
+            .collect();
+        // 3) Nodos nuevos: el nodo s de `sub` pasa a ser base + s − 1 (su raíz es la carpeta)
+        let b = base as u32;
+        let at = |s: u32| if s == 0 { id } else { b + s - 1 };
+        self.parent.extend(sub.parent[1..].iter().map(|&p| at(p)));
+        self.first.extend(sub.first[1..].iter().map(|&f| b + f - 1));
+        self.count.extend_from_slice(&sub.count[1..]);
+        self.size.extend_from_slice(&sub.size[1..]);
+        self.alloc.extend_from_slice(&sub.alloc[1..]);
+        self.files.extend_from_slice(&sub.files[1..]);
+        self.dirs.extend_from_slice(&sub.dirs[1..]);
+        self.mtime.extend_from_slice(&sub.mtime[1..]);
+        self.ext.extend(sub.ext[1..].iter().map(|&e| remap[e as usize]));
+        self.flags.extend_from_slice(&sub.flags[1..]);
+        self.name_off.extend(sub.name_off[1..].iter().map(|&o| names_base as u32 + o));
+        self.name_len.extend_from_slice(&sub.name_len[1..]);
+        self.names.extend_from_slice(&sub.names);
+        // 4) La carpeta, con los totales de `sub`; los antepasados, por diferencia
+        let ds = sub.size[0] as i128 - self.size[i] as i128;
+        let da = sub.alloc[0] as i128 - self.alloc[i] as i128;
+        let df = sub.files[0] as i64 - self.files[i] as i64;
+        let dd = sub.dirs[0] as i64 - self.dirs[i] as i64;
+        self.first[i] = b + sub.first[0] - 1;
+        self.count[i] = sub.count[0];
+        self.size[i] = sub.size[0];
+        self.alloc[i] = sub.alloc[0];
+        self.files[i] = sub.files[0];
+        self.dirs[i] = sub.dirs[0];
+        if sub.mtime[0] != 0 {
+            self.mtime[i] = sub.mtime[0];
+        }
+        if let Some(f) = flags {
+            self.flags[i] = f | flag::DIR;
+        }
+        let shift64 = |v: u64, d: i128| (v as i128 + d).clamp(0, u64::MAX as i128) as u64;
+        let shift32 = |v: u32, d: i64| (v as i64 + d).clamp(0, u32::MAX as i64) as u32;
+        let mut a = self.parent[i];
+        while a != NONE {
+            let j = a as usize;
+            self.size[j] = shift64(self.size[j], ds);
+            self.alloc[j] = shift64(self.alloc[j], da);
+            self.files[j] = shift32(self.files[j], df);
+            self.dirs[j] = shift32(self.dirs[j], dd);
+            // Con otro tamaño cambia el orden entre hermanos en cada nivel
+            if ds != 0 {
+                self.dirty.insert(a);
+            }
+            a = self.parent[j];
+        }
+        // 5) FRN de lo nuevo (y el de la carpeta, por si se borró y se volvió a crear)
+        if !self.frn.is_empty() {
+            for &(s, f) in &sub.frn {
+                if s != 0 {
+                    self.frn.push((at(s), f));
+                } else {
+                    match self.frn.binary_search_by_key(&id, |e| e.0) {
+                        Ok(k) => self.frn[k].1 = f,
+                        Err(k) => self.frn.insert(k, (id, f)),
+                    }
+                }
+            }
+        }
+        self.frn_map = OnceLock::new();
+        // 6) La comparación activa ya no describe este árbol
+        *self.cmp.get_mut().unwrap_or_else(PoisonError::into_inner) = None;
+        Ok(())
+    }
+
+    // ---------- FRN (diario USN) ----------
+
+    /// El escaneo guardó el FRN de las carpetas.
+    pub fn has_frn(&self) -> bool {
+        !self.frn.is_empty()
+    }
+
+    /// FRN guardado de una carpeta.
+    pub fn frn_of(&self, id: u32) -> Option<u64> {
+        self.frn.binary_search_by_key(&id, |e| e.0).ok().map(|k| self.frn[k].1)
+    }
+
+    /// Carpeta viva con ese FRN. El mapa se crea al primer uso.
+    pub fn dir_by_frn(&self, frn: u64) -> Option<u32> {
+        self.frn_map
+            .get_or_init(|| {
+                let dead = self.dead_mask();
+                self.frn.iter().filter(|e| !dead.get(e.0 as usize).copied().unwrap_or(true)).map(|&(id, f)| (f, id)).collect()
+            })
+            .get(&frn)
+            .copied()
+    }
+
+    /// Olvida los FRN (el escaneo no puede usar el diario USN).
+    pub fn drop_frn(&mut self) {
+        self.frn = Vec::new();
+        self.frn_map = OnceLock::new();
+    }
+
+    /// `true` en lo que no está vivo, en una pasada (cada padre precede a sus hijos).
+    fn dead_mask(&self) -> Vec<bool> {
+        let mut dead = vec![false; self.len()];
+        if !self.removed.is_empty() {
+            for id in 0..self.len() {
+                let p = self.parent[id];
+                dead[id] = self.removed.contains(&(id as u32)) || (p != NONE && dead[p as usize]);
+            }
+        }
+        dead
+    }
+
     /// Bytes del bloque de nombres.
     pub fn names_len(&self) -> usize {
         self.names.len()
@@ -307,6 +464,6 @@ impl Tree {
 
     /// Bytes de memoria del almacén (sin contar la holgura de los Vec).
     pub fn memory_bytes(&self) -> usize {
-        self.len() * 50 + self.names.len() + self.exts.iter().map(|e| e.len() + 24).sum::<usize>()
+        self.len() * 50 + self.names.len() + self.exts.iter().map(|e| e.len() + 24).sum::<usize>() + self.frn.len() * 16
     }
 }

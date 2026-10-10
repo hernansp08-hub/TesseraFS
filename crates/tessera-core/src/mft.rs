@@ -349,6 +349,10 @@ pub fn link(t: &mut FrnTable, outs: Vec<ChunkOut>) -> Result<(RawTree, LinkStats
             let id = raw.push(NONE, name, if dir { 0 } else { t.size[f] }, alloc, t.mtime[f], fl);
             if first {
                 node_of[f] = id;
+                if dir {
+                    // FRN de la carpeta para el diario USN: registro | secuencia << 48
+                    raw.frn.push((id, f as u64 | (t.seq[f] as u64) << 48));
+                }
             }
             parents.push(nm.parent);
         }
@@ -356,6 +360,7 @@ pub fn link(t: &mut FrnTable, outs: Vec<ChunkOut>) -> Result<(RawTree, LinkStats
     let r5 = ROOT_FRN as usize;
     if r5 < n && node_of[r5] == NONE && t.state[r5] & ST_DIR != 0 {
         node_of[r5] = raw.push(NONE, b".", 0, 0, t.mtime[r5], flag::DIR);
+        raw.frn.push((node_of[r5], ROOT_FRN | (t.seq[r5] as u64) << 48));
         parents.push(0);
     }
     let root = node_of.get(r5).copied().unwrap_or(NONE);
@@ -925,6 +930,13 @@ mod tests {
         assert_eq!(t.dirs(0), 1);
         assert_eq!(t.size(0), 10_000 + (1 << 20) + 5_000_000 + 10_000 + 4);
         assert_eq!(t.alloc(0), 16_384 + 65_536 + 5_001_216);
+        // FRN de las carpetas (registro | secuencia << 48) con los ids del árbol; los archivos no llevan
+        let datos = find("X:\\Datos");
+        assert_eq!(t.frn_of(0), Some(fref(5, 5)));
+        assert_eq!(t.frn_of(datos), Some(fref(16, 1)));
+        assert_eq!(t.frn_of(inf), None);
+        assert_eq!(t.dir_by_frn(fref(16, 1)), Some(datos));
+        assert_eq!(t.dir_by_frn(fref(16, 2)), None, "otra secuencia es otra carpeta");
     }
 
     #[test]

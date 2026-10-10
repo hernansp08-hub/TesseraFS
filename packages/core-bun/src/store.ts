@@ -1,5 +1,5 @@
 // Árbol en estructura de arreglos (SoA). Los nombres viven en un único búfer UTF-16, sin decodificar.
-// Invariante: el padre siempre tiene un id menor que sus hijos (lo garantizan walk y mft).
+// Invariante: el padre siempre tiene un id menor que sus hijos (lo garantizan walk, mft y graft).
 import { FLAG, compileQuery, type ExtStat, type NodeRow, type QueryTarget, type SearchResponse, type SearchRow, type SliceSource, type SortKey } from '../../protocol/src/index.ts';
 import { ATTR, REPARSE_TAG_WOF, isCloudTag, isNameSurrogate } from './win32.ts';
 
@@ -31,6 +31,12 @@ function grow<A extends Uint8Array | Uint16Array | Uint32Array | Int32Array | Fl
 export interface CompareState { prev: Float64Array; st: Uint8Array }
 export const CMP_MATCHED = 1, CMP_FRESH = 2;
 
+/**
+ * Bit interno de `fl` (fuera de las banderas del contrato, que son el byte bajo): nodo muerto, porque se envió a la
+ * papelera o porque su carpeta se volvió a escanear. Su id deja de valer; sus columnas siguen ocupando sitio.
+ */
+export const DEAD = 0x8000;
+
 export class Store implements SliceSource {
   n = 0;
   par: Uint32Array; sz: Float64Array; al: Float64Array; nf: Uint32Array; nd: Uint32Array;
@@ -61,19 +67,20 @@ export class Store implements SliceSource {
 
   get cap() { return this.par.length; }
 
-  ensure(extra: number) {
+  /** Capacidad para `extra` nodos más: duplicando (escaneo) o justa (`exact`, injerto en un árbol ya recortado). */
+  ensure(extra: number, exact = false) {
     const need = this.n + extra;
     if (need <= this.cap) return;
-    let c = this.cap; while (c < need) c *= 2;
+    let c = Math.max(1, this.cap); if (exact) c = need; else while (c < need) c *= 2;
     this.par = grow(this.par, c); this.sz = grow(this.sz, c); this.al = grow(this.al, c);
     this.nf = grow(this.nf, c); this.nd = grow(this.nd, c); this.mt = grow(this.mt, c);
     this.ex = grow(this.ex, c); this.fl = grow(this.fl, c); this.nOff = grow(this.nOff, c); this.nLen = grow(this.nLen, c);
     if (this.key) this.key = grow(this.key, c);
   }
-  ensureNames(extra: number) {
+  ensureNames(extra: number, exact = false) {
     const need = this.namesLen + extra;
     if (need <= this.names.length) return;
-    let c = this.names.length; while (c < need) c *= 2;
+    let c = Math.max(1, this.names.length); if (exact) c = need; else while (c < need) c *= 2;
     this.names = grow(this.names, c);
   }
 
@@ -204,7 +211,8 @@ export class Store implements SliceSource {
   flags(id: number) { return this.fl[id] & 0xFF; }
   children(id: number) { const s = this.kidStart[id]; return this.kids.subarray(s, s + this.kidCount[id]); }
 
-  has(id: number) { return Number.isInteger(id) && id >= 0 && id < this.n; }
+  /** El id existe y sigue en el árbol (no está muerto). */
+  has(id: number) { return Number.isInteger(id) && id >= 0 && id < this.n && !(this.fl[id] & DEAD); }
 
   // ---------- consultas ----------
   path(id: number): string {
@@ -355,22 +363,83 @@ export class Store implements SliceSource {
     this.kids.copyWithin(at, at + 1, s + c); this.kidCount[p] = c - 1;
     const dsz = this.sz[id], dal = this.al[id], dir = this.isDir(id);
     const dfiles = dir ? this.nf[id] : 1, ddirs = dir ? this.nd[id] + 1 : 0;
-    for (let a = p; a !== NONE; a = this.par[a]) {
-      this.sz[a] -= dsz; this.al[a] -= dal; this.nf[a] -= dfiles; this.nd[a] -= ddirs;
-      // mantener el orden por tamaño desc entre hermanos
-      const gp = this.par[a];
-      if (gp === NONE) break;
-      const gs = this.kidStart[gp], gc = this.kidCount[gp];
-      let k = -1;
-      for (let j = gs; j < gs + gc; j++) if (this.kids[j] === a) { k = j; break; }
-      while (k >= 0 && k + 1 < gs + gc && this.sz[this.kids[k + 1]] > this.sz[a]) {
-        this.kids[k] = this.kids[k + 1]; this.kids[k + 1] = a; k++;
-      }
-      if (a === this.rootId) break;
-    }
+    this.forEach(id, x => { this.fl[x] |= DEAD; }); // sus ids dejan de valer (como en el motor Rust)
+    this.adjustUp(p, -dsz, -dal, -dfiles, -ddirs);
     this.version++;
     this.extCache.clear(); this.orderCache.clear();
     return true;
+  }
+
+  /** Suma las diferencias a `a` y a sus antepasados y los recoloca entre sus hermanos. */
+  private adjustUp(a: number, dsz: number, dal: number, dfiles: number, ddirs: number) {
+    for (; a !== NONE; a = this.par[a]) {
+      this.sz[a] += dsz; this.al[a] += dal; this.nf[a] += dfiles; this.nd[a] += ddirs;
+      if (a === this.rootId) break;
+      this.reorder(a);
+    }
+  }
+
+  /** Recoloca `a` entre sus hermanos tras cambiar su tamaño: tamaño desc y, a igualdad, id asc (como finalize). */
+  private reorder(a: number) {
+    const p = this.par[a];
+    if (p === NONE) return;
+    const kids = this.kids, sz = this.sz, s = this.kidStart[p], e = s + this.kidCount[p];
+    let k = s;
+    while (k < e && kids[k] !== a) k++;
+    if (k === e) return;
+    const first = (x: number, y: number) => sz[x] > sz[y] || (sz[x] === sz[y] && x < y);
+    while (k > s && first(a, kids[k - 1])) { kids[k] = kids[k - 1]; kids[--k] = a; }
+    while (k + 1 < e && first(kids[k + 1], a)) { kids[k] = kids[k + 1]; kids[++k] = a; }
+  }
+
+  /**
+   * Sustituye el contenido de la carpeta `id` por el de `sub`, un almacén ya cerrado (finalize) cuya raíz es esa
+   * misma carpeta vuelta a recorrer. La carpeta conserva su id; todo lo que colgaba de ella queda muerto; los nodos
+   * nuevos se añaden al final con ids nuevos (así el padre sigue teniendo un id menor que sus hijos). La carpeta y
+   * sus antepasados se corrigen por diferencia; se invalidan las cachés y se quita la comparación (sus columnas
+   * son del tamaño anterior del árbol). Lo muerto no se recupera: sigue ocupando memoria hasta el próximo escaneo.
+   * Devuelve el tamaño que tenía la carpeta.
+   */
+  graft(id: number, sub: Store): number {
+    const before = this.sz[id];
+    // 1) lo antiguo muere
+    const s0 = this.kidStart[id], c0 = this.kidCount[id];
+    for (let k = s0; k < s0 + c0; k++) this.forEach(this.kids[k], x => { this.fl[x] |= DEAD; });
+    // 2) columnas: el nodo j ≥ 1 de `sub` pasa a ser base + j − 1; su raíz (j = 0) es `id`
+    const m = sub.n - 1, base = this.n;
+    const skip = sub.nLen[0]; // el nombre de la raíz de `sub` (su ruta) va primero y no se copia
+    const nNames = sub.namesLen - skip;
+    this.ensure(m, true); this.ensureNames(nNames, true);
+    const nb = this.namesLen - skip;
+    this.names.set(sub.names.subarray(skip, sub.namesLen), this.namesLen); this.namesLen += nNames;
+    const exts = sub.extList.map(e => this.extId(e));
+    for (let j = 1; j <= m; j++) {
+      const i = base + j - 1, p = sub.par[j], e = sub.ex[j];
+      this.par[i] = p === 0 ? id : base + p - 1;
+      this.sz[i] = sub.sz[j]; this.al[i] = sub.al[j]; this.nf[i] = sub.nf[j]; this.nd[i] = sub.nd[j];
+      this.mt[i] = sub.mt[j]; this.fl[i] = sub.fl[j]; this.ex[i] = e === 0xFFFF ? 0xFFFF : exts[e];
+      this.nOff[i] = nb + sub.nOff[j]; this.nLen[i] = sub.nLen[j];
+    }
+    this.n += m;
+    // 3) hijos (CSR): las listas de `sub` (ya ordenadas por tamaño) van al final de `kids`; la carpeta apunta a la
+    // de la raíz de `sub`. Las listas de lo muerto quedan como hueco.
+    const K = this.kids.length, sk = sub.kids;
+    const kids = new Uint32Array(K + sk.length);
+    kids.set(this.kids);
+    for (let k = 0; k < sk.length; k++) kids[K + k] = base + sk[k] - 1;
+    const ks = new Uint32Array(this.n), kc = new Uint32Array(this.n);
+    ks.set(this.kidStart.subarray(0, base)); kc.set(this.kidCount.subarray(0, base));
+    for (let j = 1; j <= m; j++) { ks[base + j - 1] = K + sub.kidStart[j]; kc[base + j - 1] = sub.kidCount[j]; }
+    ks[id] = K + sub.kidStart[0]; kc[id] = sub.kidCount[0];
+    this.kids = kids; this.kidStart = ks; this.kidCount = kc;
+    // 4) la carpeta toma los valores nuevos (también fecha y atributos); sus antepasados, la diferencia
+    const dsz = sub.sz[0] - this.sz[id], dal = sub.al[0] - this.al[id], dfiles = sub.nf[0] - this.nf[id], ddirs = sub.nd[0] - this.nd[id];
+    this.mt[id] = sub.mt[0]; this.fl[id] = (sub.fl[0] & ~DEAD) | FLAG.DIR;
+    this.adjustUp(id, dsz, dal, dfiles, ddirs);
+    // 5) cachés y comparación
+    this.version++;
+    this.extCache.clear(); this.setCompare(null);
+    return before;
   }
 
   /** Decodifica muchos nombres de golpe (pruebas y depuración). */
