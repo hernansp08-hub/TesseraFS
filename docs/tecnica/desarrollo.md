@@ -133,24 +133,29 @@ target/release/tessera-cli scan C:\ --compare
 
 ### Añadir una regla a «Liberar espacio»
 
-Las reglas son filtros con explicación, en `RULES` dentro de `packages/ui/src/app.ts`:
+Las reglas son filtros con explicación, en `RULES` dentro de `packages/ui/src/clean.ts`. Ese módulo no depende de la interfaz, así que se prueba con rutas reales en `packages/ui/test/clean.test.ts`. La misma regla alimenta la tarjeta de la pestaña y el bloque «¿Qué es esto?» del panel de detalle.
 
 ```ts
-{ q: 'type:dir name:.gradle', risk: 'ok', title: 'Caché de Gradle',
-  why: 'Dependencias descargadas que Gradle vuelve a obtener cuando las necesita.',
-  cmd: 'gradle --stop', ok: r => r.name === '.gradle' && !INSTALLED.test(r.path), min: 100 * MB },
+{ id: 'gradleCache', q: 'type:dir name:caches', risk: 'ok',
+  ok: t => /\\\.gradle\\caches$/i.test(t.path), min: 200 * MB },
 ```
 
 | Campo | Para qué |
 |---|---|
-| `q` | Filtro que se ejecuta en el motor |
-| `ok` | Filtro adicional en la interfaz, por ejemplo la ruta exacta |
-| `verify` | Comprobación asíncrona opcional, como `hasChild(r, ['cachedir.tag'])` |
-| `min` | Tamaño mínimo para proponerlo |
-| `group` | Agrupa los resultados por carpeta (útil para archivos sueltos) |
-| `risk` | `ok`, `warn` o `bad` |
+| `id` | Sus textos van en el catálogo: `clean.<id>.title` y `clean.<id>.why` |
+| `q` | Consulta del lenguaje de búsqueda que trae los candidatos (se ejecuta en el motor) |
+| `ok` | Filtro adicional sobre el nombre, la ruta o la extensión; también decide el «¿Qué es esto?» |
+| `needs` | Hijos que confirman el candidato, como `['cachedir.tag']` en un `target` de Rust |
+| `title` | Título que depende del elemento: devuelve una clave y sus parámetros (`['clean.game.title', { name }]`) |
+| `cmd` | Orden que se puede copiar; una función si depende de la ruta |
+| `how` | Ajuste de Windows: `true` usa `clean.<id>.how`; un id usa el de otra regla (`'temp'`) |
+| `min` | Tamaño mínimo para proponerlo en la pestaña |
+| `group` | Agrupa los archivos por carpeta; al marcar, se marcan los archivos y no la carpeta |
+| `risk` | `ok`, `warn` o `bad` (las de `bad` no se pueden marcar desde la tarjeta) |
 
-Si el candidato puede estar dentro de un programa instalado, excluye esas rutas con `INSTALLED`.
+Si el candidato puede estar dentro de un programa instalado, excluye esas rutas con `INSTALLED`. Añade casos positivos y negativos a `clean.test.ts`: la prueba comprueba que la consulta `q` de verdad trae el ejemplo y que `ok` lo acepta. Los textos van en los cinco catálogos; `bun test packages/i18n` avisa si falta alguno.
+
+Para explicar una carpeta que no es candidata a limpieza, añádela a `KNOWN` con su expresión regular y su texto `known.<id>`.
 
 ### Añadir una operación al contrato
 

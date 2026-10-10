@@ -7,13 +7,15 @@ import { layout, raster, type Layout, type Tile } from './render';
 import { AGE_BINS, CATEGORIES, REST_COLOR, ageBin, ageColor, ageName, catName, categoryById, categoryOf, extColor, rgb, setExtRanking, type ColorMode, type RGB } from './colors';
 import { GB, MB, ageText, esc, fmtB, fmtD, fmtN, fmtP, fmtS } from './format';
 import { LOCALES, PSEUDO, html, i18n, msgText, onLocaleChange, preference, setPreference, systemLocale, t, tk, translateDom, type MessageKey } from './i18n';
+import { RULES, cmdOf, howKey, knownId, ruleMatches, titleOf, type Key, type Risk, type Rule } from './clean';
 
 type TRow = { row: NodeRow; depth: number; more?: undefined } | { more: number; remaining: number; depth: number; row?: undefined };
 // Los resaltados guardan datos, no textos: la etiqueta se compone al pintar, en el idioma activo
 type HL = { type: 'cat'; id: string } | { type: 'ext'; ext: string } | { type: 'age'; bin: number }
   | { type: 'search'; ids: Set<number>; query: string; count: number };
-type Risk = 'ok' | 'warn' | 'bad';
-interface CleanCard { row: NodeRow; path: string; rule: Rule; name: string; count?: number; rows?: SearchRow[] }
+interface CleanCard { row: NodeRow; path: string; rule: Rule; title: Key; cmd?: string; count?: number; rows?: SearchRow[] }
+/** «¿Qué es esto?» del panel de detalle: una regla de limpieza que lo describe, o una carpeta conocida. */
+type Known = { rule: Rule; title: Key; cmd?: string } | { id: string };
 /** Elemento de la cesta «Para borrar». `error`: por qué no se pudo mover la última vez. */
 interface Marked { row: NodeRow; path: string; error?: string }
 /** Texto traducido y escapado para insertarlo en HTML. */
@@ -46,6 +48,7 @@ const S = {
   ext: [] as ExtStat[], clean: null as CleanCard[] | null, confirmTrash: false,
   rowCache: new Map<number, NodeRow>(), pathCache: new Map<number, string>(),
   marked: new Map<number, Marked>(), basketConfirm: false, basketBusy: false,
+  known: new Map<number, Known | null>(), knownPending: new Set<number>(),
 };
 const zoomRow = () => S.chain[S.chain.length - 1] || null;
 const remember = (r: NodeRow) => { S.rowCache.set(r.id, r); return r; };
@@ -551,7 +554,36 @@ export function renderInspector() {
     + (r.flags & FLAG.HARDLINK ? `<p class="note">${tx('insp.note.hardlink')}</p>` : '')
     + (r.flags & FLAG.CLOUD ? `<p class="note">${tx('insp.note.cloud')}</p>` : '')
     + (inMarked ? `<p class="note marked-note">${tx('basket.alreadyIn', { name: inMarked.row.name })}</p>` : '')
+    + knownHTML(r, path)
     + acts;
+}
+// Primero una regla de limpieza que lo describa (con su riesgo y su orden), después las carpetas conocidas.
+// Se calcula una vez por elemento: alguna regla pregunta al motor por los hijos (CACHEDIR.TAG de Rust).
+async function knownFor(r: NodeRow, path: string): Promise<Known | null> {
+  const tg = { name: r.name, path, isDir: r.isDir, ext: r.ext };
+  for (const rule of RULES) {
+    if (!ruleMatches(rule, tg)) continue;
+    if (rule.needs && !(await hasChild(r.id, rule.needs).catch(() => false))) continue;
+    return { rule, title: titleOf(rule, tg), cmd: cmdOf(rule, tg) };
+  }
+  const id = knownId(path);
+  return id ? { id } : null;
+}
+function knownHTML(r: NodeRow, path: string | undefined): string {
+  if (!path || r.parentId < 0) return '';
+  if (!S.known.has(r.id)) {
+    if (!S.knownPending.has(r.id)) {
+      S.knownPending.add(r.id);
+      knownFor(r, path).then(k => { S.known.set(r.id, k); S.knownPending.delete(r.id); if ((S.sel || zoomRow())?.id === r.id) renderInspector(); });
+    }
+    return '';
+  }
+  const k = S.known.get(r.id); if (!k) return '';
+  const head = `<div class="known-h"><b>${tx('known.heading')}</b>${'rule' in k ? `<span class="risk ${k.rule.risk}">${esc(riskName(k.rule.risk))}</span>` : ''}</div>`;
+  if (!('rule' in k)) return `<div class="known">${head}<p>${esc(tk('known.' + k.id))}</p></div>`;
+  return `<div class="known">${head}<p class="known-t">${esc(keyText(k.title))}</p><p>${esc(tk(`clean.${k.rule.id}.why`))}</p>`
+    + (k.cmd ? `<div class="cmd"><code>${esc(k.cmd)}</code><button class="icon-btn sm" type="button" data-act="copy-cmd" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div>` : '')
+    + (k.rule.how ? `<p class="how">${esc(tk(howKey(k.rule)))}</p>` : '') + `</div>`;
 }
 async function doAction(kind: ActionKind, r: NodeRow) {
   try {
@@ -561,7 +593,7 @@ async function doAction(kind: ActionKind, r: NodeRow) {
   } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
 }
 async function refreshAfterChange(r: NodeRow | null) {
-  S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null;
+  S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.known.clear();
   S.root = remember(await B.nodeInfo(S.root!.id));
   const chain: NodeRow[] = []; for (const z of S.chain) { try { chain.push(remember(await B.nodeInfo(z.id))); } catch { break; } }
   S.chain = chain.length ? chain : [S.root];
@@ -581,6 +613,7 @@ $('insp').addEventListener('click', e => {
     case 'cancel': S.confirmTrash = false; renderInspector(); break;
     case 'trash-ok': S.confirmTrash = false; renderInspector(); doAction('trash', r); break;
     case 'mark': toggleMark(r); break;
+    case 'copy-cmd': { const k = S.known.get(r.id); if (k && 'rule' in k && k.cmd) copyText(k.cmd, 'toast.commandCopied'); break; }
   }
 });
 
@@ -634,56 +667,28 @@ qHelpBtn.addEventListener('click', e => { e.preventDefault(); qHelp.hidden = !qH
 qHelp.addEventListener('click', e => { const b = (e.target as HTMLElement).closest('[data-q]') as HTMLElement; if (!b) return; q.value = b.dataset.q!; qHelp.hidden = true; runQuery(); });
 
 // ---------- Liberar espacio: reglas explicadas ejecutadas como filtros ----------
-// Cada regla tiene un id: sus textos son clean.<id>.title, clean.<id>.why y, si `how`, clean.<id>.how.
-// `title` sólo cuando el título depende del elemento (el nombre del juego, el archivo de sistema).
-interface Rule {
-  id: string; q: string; risk: Risk; title?: (name: string) => string; cmd?: string; how?: boolean;
-  ok?: (r: SearchRow) => boolean; verify?: (r: SearchRow) => Promise<boolean>; group?: boolean; min?: number;
-}
-// Carpetas que pertenecen a programas instalados: sus dependencias no se regeneran solas
-const INSTALLED = /\\(Program Files( \(x86\))?|AppData|ProgramData|\.cache|\.vscode[^\\]*|\.cursor|Windows)\\|\\resources\\app\\|\\extensions\\/i;
-const hasChild = async (r: SearchRow, names: string[]) => {
-  const res = await B.children({ id: r.id, offset: 0, limit: 200, sort: 'name', desc: false });
+const hasChild = async (id: number, names: string[]) => {
+  const res = await B.children({ id, offset: 0, limit: 200, sort: 'name', desc: false });
   return res.rows.some(c => names.includes(c.name.toLowerCase()));
 };
-const RULES: Rule[] = [
-  { id: 'rustTarget', q: 'type:dir name:target', risk: 'ok', cmd: 'cargo clean',
-    ok: r => r.name.toLowerCase() === 'target' && !INSTALLED.test(r.path), verify: r => hasChild(r, ['cachedir.tag', '.rustc_info.json']), min: 50 * MB },
-  { id: 'nodeModules', q: 'type:dir name:node_modules', risk: 'ok', cmd: 'bun install',
-    ok: r => r.name === 'node_modules' && (r.path.match(/\\node_modules(?=\\|$)/gi) || []).length === 1 && !INSTALLED.test(r.path), min: 20 * MB },
-  { id: 'venv', q: 'type:dir name:.venv', risk: 'ok', cmd: 'uv sync', ok: r => r.name === '.venv' && !INSTALLED.test(r.path), min: 20 * MB },
-  { id: 'temp', q: 'type:dir name:Temp', risk: 'ok', how: true, ok: r => /\\AppData\\Local\\Temp$|^[A-Z]:\\Windows\\Temp$/i.test(r.path), min: 50 * MB },
-  { id: 'windowsUpdate', q: 'type:dir name:SoftwareDistribution', risk: 'ok', how: true, ok: r => /^[A-Z]:\\Windows\\SoftwareDistribution$/i.test(r.path), min: 100 * MB },
-  { id: 'windowsOld', q: 'type:dir name:Windows.old', risk: 'ok', how: true, ok: r => /^[A-Z]:\\Windows\.old$/i.test(r.path) },
-  { id: 'recycleBin', q: 'type:dir name:$Recycle.Bin', risk: 'ok', how: true, ok: r => /^[A-Z]:\\\$Recycle\.Bin$/i.test(r.path), min: 10 * MB },
-  { id: 'aiModels', q: 'ext:gguf,safetensors,ckpt,onnx', risk: 'warn', group: true, min: 500 * MB },
-  { id: 'virtualDisks', q: 'ext:vhdx,vhd', risk: 'warn', cmd: 'wsl --manage <distro> --set-sparse true', min: 500 * MB },
-  { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: name => t('clean.game.title', { name }), ok: r => /\\steamapps\\common\\[^\\]+$/i.test(r.path), min: 1 * GB },
-  { id: 'downloads', q: 'path:Downloads ext:msi,exe,iso,zip,7z size:>100m', risk: 'warn', group: true, min: 200 * MB },
-  { id: 'restorePoints', q: 'type:dir name:"System Volume Information"', risk: 'warn', cmd: 'vssadmin list shadowstorage', ok: r => /^[A-Z]:\\System Volume Information$/i.test(r.path), min: 100 * MB },
-  { id: 'systemFile', q: 'pagefile.sys OR hiberfil.sys OR swapfile.sys', risk: 'bad', ok: r => /^[A-Z]:\\[^\\]+\.sys$/i.test(r.path),
-    title: name => t(name.toLowerCase() === 'hiberfil.sys' ? 'clean.hiberfil.title' : name.toLowerCase() === 'swapfile.sys' ? 'clean.swapfile.title' : 'clean.pagefile.title') },
-  { id: 'winsxs', q: 'type:dir name:WinSxS', risk: 'bad', cmd: 'DISM /Online /Cleanup-Image /StartComponentCleanup', ok: r => /^[A-Z]:\\Windows\\WinSxS$/i.test(r.path) },
-  { id: 'installer', q: 'type:dir name:Installer', risk: 'bad', ok: r => /^[A-Z]:\\Windows\\Installer$/i.test(r.path) },
-];
 const riskName = (r: Risk) => tk('clean.risk.' + r);
-const cardTitle = (c: CleanCard) => c.rule.title ? c.rule.title(c.name) : tk(`clean.${c.rule.id}.title`);
+const keyText = (k: Key) => tk(k[0], k[1]);
 async function loadClean() {
   if (!S.root) return;
   const cards: CleanCard[] = [];
   for (const rule of RULES) {
     const res = await B.search({ query: rule.q, root: S.root.id, limit: 200 }).catch(() => null); if (!res || res.error) continue;
     let rows = res.rows.filter(r => (!rule.ok || rule.ok(r)) && (!rule.min || rule.group || r.size >= rule.min));
-    if (rule.verify) { const keep: SearchRow[] = []; for (const r of rows.slice(0, 40)) if (await rule.verify(r).catch(() => false)) keep.push(r); rows = keep; }
+    if (rule.needs) { const keep: SearchRow[] = []; for (const r of rows.slice(0, 40)) if (await hasChild(r.id, rule.needs).catch(() => false)) keep.push(r); rows = keep; }
     if (rule.group) {
       const by = new Map<string, SearchRow[]>(); for (const r of rows) { const k = parentPath(r.path); by.set(k, [...(by.get(k) || []), r]); }
       for (const [, list] of by) {
         const size = list.reduce((s, r) => s + r.size, 0); if (rule.min && size < rule.min) continue;
         const parent = await rowOf(list[0].parentId).catch(() => null); if (!parent) continue;
         const path = await pathOf(parent.id).catch(() => parentPath(list[0].path));
-        cards.push({ row: { ...parent, size }, path, rule, name: list[0].name, count: list.length, rows: list });
+        cards.push({ row: { ...parent, size }, path, rule, title: titleOf(rule, list[0]), cmd: cmdOf(rule, list[0]), count: list.length, rows: list });
       }
-    } else for (const r of rows) cards.push({ row: r, path: r.path, rule, name: r.name });
+    } else for (const r of rows) cards.push({ row: r, path: r.path, rule, title: titleOf(rule, r), cmd: cmdOf(rule, r) });
   }
   const order = { ok: 0, warn: 1, bad: 2 }; cards.sort((a, b) => order[a.rule.risk] - order[b.rule.risk] || b.row.size - a.row.size);
   S.clean = cards; $('cleanCount').textContent = String(cards.length);
@@ -697,9 +702,9 @@ async function renderClean() {
     + (['ok', 'warn', 'bad'] as Risk[]).map(k => `<div><span class="risk ${k}">${esc(riskName(k))}</span><b>${fmtB(sum(k))}</b><small>${esc(tk('clean.sum.' + k))}</small></div>`).join('')
     + `</div>`
     + (L.length ? '' : `<div class="cl-loading">${tx('clean.none')}</div>`)
-    + L.map((c, i) => `<article class="cl"><div><h3>${esc(cardTitle(c))}</h3><code class="cl-path">${esc(c.path)}</code><p>${esc(tk(`clean.${c.rule.id}.why`))}${c.count ? ' ' + tx('clean.fileCount', { count: c.count }) : ''}</p>`
-      + (c.rule.cmd ? `<div class="cmd"><code>${esc(c.rule.cmd)}</code><button class="icon-btn sm" type="button" data-copy="${i}" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div>` : '')
-      + (c.rule.how ? `<p class="how">${esc(tk(`clean.${c.rule.id}.how`))}</p>` : '')
+    + L.map((c, i) => `<article class="cl"><div><h3>${esc(keyText(c.title))}</h3><code class="cl-path">${esc(c.path)}</code><p>${esc(tk(`clean.${c.rule.id}.why`))}${c.count ? ' ' + tx('clean.fileCount', { count: c.count }) : ''}</p>`
+      + (c.cmd ? `<div class="cmd"><code>${esc(c.cmd)}</code><button class="icon-btn sm" type="button" data-copy="${i}" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div>` : '')
+      + (c.rule.how ? `<p class="how">${esc(tk(howKey(c.rule)))}</p>` : '')
       + `</div><div class="cl-side"><span class="cl-size">${fmtB(c.row.size)}</span><span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span><button class="btn sm" type="button" data-loc="${i}">${tx('clean.locate')}</button>`
       // Lo que gestiona Windows no se marca; en las tarjetas agrupadas se marcan los archivos, no su carpeta
       + (c.rule.risk === 'bad' ? '' : `<button class="btn sm${cardMarked(c) ? ' on' : ''}" type="button" data-mark="${i}" aria-pressed="${cardMarked(c)}">${tx(cardMarked(c) ? 'mark.remove' : c.rows ? 'clean.markFiles' : 'clean.mark')}</button>`)
@@ -707,7 +712,7 @@ async function renderClean() {
 }
 $('cleanBody').addEventListener('click', async e => {
   const t = e.target as HTMLElement, cp = t.closest('[data-copy]') as HTMLElement;
-  if (cp) { copyText(S.clean![+cp.dataset.copy!].rule.cmd!, 'toast.commandCopied'); return; }
+  if (cp) { copyText(S.clean![+cp.dataset.copy!].cmd!, 'toast.commandCopied'); return; }
   const mk = t.closest('[data-mark]') as HTMLElement;
   if (mk) {
     const c = S.clean![+mk.dataset.mark!], rows: NodeRow[] = c.rows || [c.row], on = cardMarked(c);
@@ -981,7 +986,7 @@ export async function startScan() {
   scanCard = null; showProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0 });
   try {
     const res = await B.scan({ path: S.target, engine: 'auto' }, showProgress);
-    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
+    S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.known.clear(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
     S.root = remember(await B.nodeInfo(res.rootId)); S.pathCache.set(res.rootId, res.rootPath);
     S.chain = [S.root]; S.expanded = new Set([S.root.id]); S.slice = null;
     if (res.volume) { S.vol = S.vols.find(v => v.path === res.volume!.path) || res.volume; }

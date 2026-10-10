@@ -362,6 +362,13 @@ body.resizing iframe,body.resizing canvas{pointer-events:none}
 .scan-nums dd{margin:0;font:500 15px var(--f-data);font-variant-numeric:tabular-nums;white-space:nowrap}
 .scan-cancel{margin-top:-4px}
 #scanBtn.cancel{background:var(--raised);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line-2)}
+/* «¿Qué es esto?» */
+.known{display:grid;gap:6px;margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--panel);font-size:12.5px}
+.known-h{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.known-h b{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.known p{margin:0;color:var(--fg);line-height:1.45}
+.known .known-t{font-weight:600}
+.known .how{color:var(--muted)}
 /* Cesta «Para borrar» */
 .row.marked{background:color-mix(in srgb,var(--bad) 13%,transparent)}
 .row.marked .nm{text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--bad) 80%,transparent);text-decoration-thickness:1.5px}

@@ -47,9 +47,17 @@ describe('uso de las claves', () => {
   });
 
   test('cada regla de «Liberar espacio» tiene su explicación', () => {
-    const ids = [...read(join(ROOT, 'packages/ui/src/app.ts')).matchAll(/\{ id: '(\w+)', q:/g)].map(m => m[1]);
-    expect(ids.length).toBeGreaterThan(10);
+    const ids = [...read(join(ROOT, 'packages/ui/src/clean.ts')).matchAll(/\{ id: '(\w+)', q:/g)].map(m => m[1]);
+    expect(ids.length).toBeGreaterThan(20);
     expect(ids.filter(id => !(`clean.${id}.why` in en))).toEqual([]);
+  });
+
+  test('cada carpeta conocida tiene su explicación known.<id>, y no sobra ninguna', () => {
+    const src = read(join(ROOT, 'packages/ui/src/clean.ts'));
+    const ids = [...src.slice(src.indexOf('export const KNOWN')).matchAll(/^\s*\['(\w+)', \//gm)].map(m => m[1]);
+    expect(ids.length).toBeGreaterThan(10);
+    expect(ids.filter(id => !(`known.${id}` in en))).toEqual([]);
+    expect(KEYS.filter(k => k.startsWith('known.') && k !== 'known.heading' && !ids.includes(k.slice(6)))).toEqual([]);
   });
 
   test.each([['Bun', bunCodes], ['Rust', rustCodes], ['búsqueda', queryCodes], ['demo', demoCodes]] as [string, string[]][])(
@@ -62,7 +70,7 @@ describe('uso de las claves', () => {
     const refs = new Set([...used(UI), ...used(PACKAGING)]);
     const codes = new Set([...bunCodes, ...rustCodes, ...queryCodes, ...demoCodes].map(c => 'engine.' + c));
     // Prefijos que se componen en tiempo de ejecución
-    const dynamic = [/^cat\./, /^age\.\d$/, /^phase\./, /^clean\.(risk|sum)\./, /^clean\.\w+\.(title|why|how)$/];
+    const dynamic = [/^cat\./, /^age\.\d$/, /^phase\./, /^clean\.(risk|sum)\./, /^clean\.\w+\.(title|why|how)$/, /^known\.\w+$/];
     const unused = KEYS.filter(k => !refs.has(k) && !codes.has(k) && !dynamic.some(r => r.test(k)));
     expect(unused).toEqual([]);
   });

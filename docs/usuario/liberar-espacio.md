@@ -14,6 +14,15 @@ La pestaña **Liberar espacio** revisa lo escaneado y te propone qué se puede r
 
 El resumen de arriba suma cuántos gigas hay en cada nivel.
 
+Cada tarjeta tiene **Ubicar** (lo despliega en el árbol y lo amplía en el mapa) y, salvo las rojas, **Marcar**, que lo añade a la pestaña [Para borrar](guia.md#borrar-varias-cosas-a-la-vez-para-borrar). En las tarjetas que agrupan archivos (modelos de IA, descargas) se marcan esos archivos, no la carpeta que los contiene.
+
+### «¿Qué es esto?» en el panel de detalle
+
+Al seleccionar cualquier carpeta o archivo, el panel de detalle explica qué es si lo reconoce:
+
+- si coincide con una regla de esta página, muestra su nivel, la explicación y la orden o el ajuste para liberarlo, aunque sea más pequeño que el mínimo de la tarjeta;
+- si es una carpeta conocida de Windows (`Windows`, `System32`, `Program Files`, `ProgramData`, `AppData`, `Packages`, `OneDrive`, `Descargas`, `steamapps`…), explica para qué sirve y cómo liberar espacio sin romper nada.
+
 ## ¿Puedo borrar esto?
 
 ```mermaid
@@ -44,6 +53,11 @@ flowchart TD
 | **Descargas de Windows Update** | `C:\Windows\SoftwareDistribution` | El mismo ajuste, opción «Limpieza de Windows Update» |
 | **Instalación anterior de Windows** | `C:\Windows.old` | El mismo ajuste, opción «Instalaciones anteriores de Windows». Windows la borra solo pasados unos días. |
 | **Papelera de reciclaje** | `$Recycle.Bin` de más de 10 MB | Vacía la papelera |
+| **Cachés de paquetes de desarrollo** | Las de npm, pnpm, Yarn, Bun, pip, uv, NuGet y Go, desde 200 MB | La orden de cada herramienta (`npm cache clean --force`, `pnpm store prune`, `pip cache purge`…), que propone la tarjeta |
+| **Caché del navegador** | `Cache` y `Code Cache` de los perfiles de Chrome, Edge, Brave y Vivaldi, y `cache2` de Firefox, desde 100 MB | En el navegador: Configuración › Privacidad › Borrar datos de navegación › Imágenes y archivos almacenados en caché |
+| **Optimización de distribución** | `DeliveryOptimization` de Windows, desde 100 MB | Configuración › Sistema › Almacenamiento › Archivos temporales |
+| **Volcados de memoria e informes de errores** | `C:\Windows\MEMORY.DMP`, `Minidump`, `LiveKernelReports`, `%LOCALAPPDATA%\CrashDumps` e informes de WER, desde 50 MB | El mismo ajuste de Archivos temporales |
+| **Caché de sombreadores** | `D3DSCache` y las de NVIDIA, AMD, Intel y Steam (`shadercache`), desde 200 MB | Bórrala con los juegos cerrados; la de DirectX está también en Archivos temporales. Los primeros arranques pueden ir a tirones. |
 
 > [!IMPORTANT]
 > TesseraFS **ignora** las carpetas `node_modules`, `target` y `.venv` que están dentro de programas instalados: `Program Files`, `AppData`, `ProgramData`, extensiones de VS Code… Esas no se regeneran solas: borrarlas rompería el programa.
@@ -67,6 +81,8 @@ flowchart TD
 | **Archivo de intercambio** (`swapfile.sys`) | Lo usan las apps de la Tienda | Lo gestiona Windows |
 | **Almacén de componentes** (`C:\Windows\WinSxS`) | Comparte enlaces duros con System32: ocupa menos de lo que aparenta | `DISM /Online /Cleanup-Image /StartComponentCleanup` como administrador |
 | **Caché de Windows Installer** (`C:\Windows\Installer`) | Windows la necesita para reparar y desinstalar programas | No hay forma segura de reducirla a mano |
+| **Caché de paquetes de instalación** (`C:\ProgramData\Package Cache`) | Instaladores de Visual Studio, .NET y otros, necesarios para reparar, modificar y desinstalar | Desinstala los programas o componentes que ya no uses (por ejemplo, desde el Instalador de Visual Studio) |
+| **Almacén de controladores** (`C:\Windows\System32\DriverStore\FileRepository`) | Copia de cada controlador instalado, para reinstalar dispositivos | `pnputil /enum-drivers` lista los controladores; las versiones antiguas se quitan una a una con `pnputil /delete-driver oemNN.inf` |
 
 > [!WARNING]
 > No añadas `/ResetBase` a la orden de DISM si no sabes lo que hace: libera algo más, pero impide desinstalar las actualizaciones ya instaladas.
