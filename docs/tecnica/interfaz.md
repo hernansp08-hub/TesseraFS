@@ -131,7 +131,7 @@ Todos los tonos se generan en **OKLCH con la misma luminosidad** ($L = 0{,}72$, 
 
 | Modo | Paleta |
 |---|---|
-| Categoría | 10 categorías con tono fijo (Vídeo 28°, Imágenes 342°, Audio 305°, Documentos 88°, Código 145°, Compilación 178°, Aplicaciones 252°, Comprimidos 58°, Juegos 205°, Datos y modelos 280°) y gris neutro para «Otros» |
+| Categoría | 10 categorías con tono fijo (Vídeo 28°, Imágenes 342°, Audio 305°, Documentos 88°, Código 145°, Compilación 178°, Aplicaciones 252°, Comprimidos 58°, Juegos 205°, Datos y modelos 280°) y gris neutro para «Otros». Los nombres salen del catálogo (`cat.<id>`) |
 | Extensión | 16 tonos repartidos para las 16 extensiones con más bytes del escaneo; el resto, gris |
 | Antigüedad | 5 tramos de ámbar (reciente) a índigo (más de 3 años) |
 
@@ -180,4 +180,8 @@ flowchart LR
 2. Incrusta las fuentes (`fonts/*.woff2`) como data URI y el CSS en línea.
 3. Escribe `dist/index.html`, el documento completo que usan Tauri y la portable, y `dist-demo/demo.html`, sólo el contenido, para publicar la demo.
 
-La interfaz resultante no hace **ninguna** petición externa.
+La interfaz resultante no hace **ninguna** petición externa. Los catálogos de idiomas van dentro del mismo HTML (≈100 KB sin comprimir los cinco), así que el cambio de idioma es instantáneo y funciona sin conexión.
+
+## Idiomas
+
+Todos los textos, cifras y fechas pasan por `src/i18n.ts` y `@tessera/i18n`: el HTML lleva atributos `data-i18n` y el código usa `t()`. Al cambiar de idioma se vuelve a pintar sin perder el estado. Diseño completo en [Internacionalización](i18n.md).

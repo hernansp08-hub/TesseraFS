@@ -3,6 +3,7 @@ import type {
   ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, ElevationInfo, ExtStat, NodeRow, ScanProgress,
   ScanRequest, ScanResult, SearchRequest, SearchResponse, VolumeInfo,
 } from '@tessera/protocol';
+import { engineFailure, isEngineMessage } from './errors';
 
 declare global {
   interface Window {
@@ -14,7 +15,8 @@ declare global {
 export class TauriBackend implements Backend {
   readonly kind = 'tauri' as const;
   private core = window.__TAURI__!.core;
-  private call<T>(cmd: string, args?: Record<string, unknown>) { return this.core.invoke<T>(cmd, args); }
+  // Los comandos devuelven Err(EngineMessage): la promesa se rechaza con ese objeto y aquí se convierte en Error
+  private call<T>(cmd: string, args?: Record<string, unknown>) { return this.core.invoke<T>(cmd, args).catch(e => { throw engineFailure(e); }); }
   volumes() { return this.call<VolumeInfo[]>('volumes'); }
   scan(req: ScanRequest, onProgress: (p: ScanProgress) => void) {
     const ch = new this.core.Channel<ScanProgress>(); ch.onmessage = onProgress;
@@ -39,7 +41,12 @@ export class HttpBackend implements Backend {
   constructor(private token: string) { }
   private async req(path: string, init: RequestInit = {}) {
     const r = await fetch(path, { ...init, headers: { 'X-Tessera-Token': this.token, 'Content-Type': 'application/json', ...(init.headers || {}) } });
-    if (!r.ok) throw new Error(`${r.status} ${await r.text().catch(() => r.statusText)}`);
+    // Los errores de la API llegan como EngineMessage en JSON; 401/403 y rutas desconocidas, como texto
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      let msg: unknown; try { msg = JSON.parse(body); } catch { }
+      throw isEngineMessage(msg) ? engineFailure(msg) : new Error(`${r.status} ${body || r.statusText}`);
+    }
     return r;
   }
   private get<T>(path: string) { return this.req(path).then(r => r.json() as Promise<T>); }

@@ -1,5 +1,7 @@
 // Color de las teselas: por categoría (por defecto), por extensión o por antigüedad.
 // Todos los tonos comparten luminosidad perceptual (OKLCH) para que el relieve no se confunda con el color.
+// Los nombres visibles salen del catálogo de idiomas: cat.<id> y age.<tramo>.
+import { tk } from './i18n';
 
 export type RGB = [number, number, number];
 export type ColorMode = 'category' | 'ext' | 'age';
@@ -12,25 +14,26 @@ export function oklch(L: number, C: number, h: number): RGB {
 }
 export const rgb = (c: RGB) => `rgb(${c[0]},${c[1]},${c[2]})`;
 
-export interface Category { id: string; name: string; hue: number; color: RGB; exts: string[] }
-const CAT_DEF: [string, string, number, string][] = [
-  ['video', 'Vídeo', 28, 'mp4 mkv avi mov wmv webm m4v mpg mpeg ts3 flv'],
-  ['image', 'Imágenes', 342, 'jpg jpeg png gif bmp webp heic heif raw cr2 nef arw dng psd svg tif tiff ico avif'],
-  ['audio', 'Audio', 305, 'mp3 wav flac aac ogg m4a wma opus bank fsb wem'],
-  ['docs', 'Documentos', 88, 'pdf doc docx xls xlsx ppt pptx odt ods odp txt rtf csv epub md one msg pst ost'],
-  ['code', 'Código', 145, 'js mjs cjs ts tsx jsx py rs go java kt c cc cpp h hpp cs swift rb php lua json xml yml yaml toml ini cfg css scss html htm map abap sql sh ps1 bat cmd pyi vue svelte'],
-  ['build', 'Compilación', 178, 'o obj lib a rlib rmeta pdb pyc pyd class jar wasm node d ilk exp ipdb iobj nupkg'],
-  ['apps', 'Aplicaciones', 252, 'exe dll msi msp msu cab sys mui cat inf appx msix appxbundle ocx drv efi manifest com scr cpl'],
-  ['archive', 'Comprimidos y discos', 58, 'zip 7z rar gz tgz bz2 xz zst tar iso img vhd vhdx vmdk wim esd ppkg pack dmg qcow2'],
-  ['games', 'Juegos', 205, 'pak assets ress resource cok bsa ba2 vpk upk uasset ubulk utoc ucas unity3d bundle forge big'],
-  ['data', 'Datos y modelos', 280, 'gguf safetensors onnx pt pth ckpt npy npz parquet arrow db sqlite sqlite3 ldb mdb accdb bf nnue dat h5 hdf5 feather'],
+export interface Category { id: string; hue: number; color: RGB; exts: string[] }
+const CAT_DEF: [string, number, string][] = [
+  ['video', 28, 'mp4 mkv avi mov wmv webm m4v mpg mpeg ts3 flv'],
+  ['image', 342, 'jpg jpeg png gif bmp webp heic heif raw cr2 nef arw dng psd svg tif tiff ico avif'],
+  ['audio', 305, 'mp3 wav flac aac ogg m4a wma opus bank fsb wem'],
+  ['docs', 88, 'pdf doc docx xls xlsx ppt pptx odt ods odp txt rtf csv epub md one msg pst ost'],
+  ['code', 145, 'js mjs cjs ts tsx jsx py rs go java kt c cc cpp h hpp cs swift rb php lua json xml yml yaml toml ini cfg css scss html htm map abap sql sh ps1 bat cmd pyi vue svelte'],
+  ['build', 178, 'o obj lib a rlib rmeta pdb pyc pyd class jar wasm node d ilk exp ipdb iobj nupkg'],
+  ['apps', 252, 'exe dll msi msp msu cab sys mui cat inf appx msix appxbundle ocx drv efi manifest com scr cpl'],
+  ['archive', 58, 'zip 7z rar gz tgz bz2 xz zst tar iso img vhd vhdx vmdk wim esd ppkg pack dmg qcow2'],
+  ['games', 205, 'pak assets ress resource cok bsa ba2 vpk upk uasset ubulk utoc ucas unity3d bundle forge big'],
+  ['data', 280, 'gguf safetensors onnx pt pth ckpt npy npz parquet arrow db sqlite sqlite3 ldb mdb accdb bf nnue dat h5 hdf5 feather'],
 ];
-export const OTHER: Category = { id: 'other', name: 'Otros', hue: 250, color: oklch(.66, .012, 250), exts: [] };
-export const CATEGORIES: Category[] = CAT_DEF.map(([id, name, hue, exts]) => ({ id, name, hue, color: oklch(.72, .135, hue), exts: exts.split(' ') }));
+export const OTHER: Category = { id: 'other', hue: 250, color: oklch(.66, .012, 250), exts: [] };
+export const CATEGORIES: Category[] = CAT_DEF.map(([id, hue, exts]) => ({ id, hue, color: oklch(.72, .135, hue), exts: exts.split(' ') }));
 const EXT2CAT = new Map<string, Category>();
 for (const c of CATEGORIES) for (const e of c.exts) EXT2CAT.set(e, c);
 export const categoryOf = (ext: string): Category => EXT2CAT.get(ext) || OTHER;
 export const categoryById = (id: string) => CATEGORIES.find(c => c.id === id) || OTHER;
+export const catName = (c: Category) => tk('cat.' + c.id);
 
 // Modo extensión: las 16 extensiones con más bytes reciben tono propio; el resto, gris
 const EXT_HUES = [48, 255, 140, 330, 95, 200, 295, 18, 170, 232, 66, 118, 352, 275, 185, 82];
@@ -40,10 +43,8 @@ export function setExtRanking(exts: string[]) { extColors = new Map(exts.slice(0
 export const extColor = (ext: string): RGB => extColors.get(ext) || OTHER.color;
 
 // Modo antigüedad: de reciente (ámbar) a antiguo (azul), en cinco tramos
-export const AGE_BINS = [
-  { name: 'Último mes', max: 31 * 86400 }, { name: 'Hasta 6 meses', max: 182 * 86400 }, { name: 'Hasta 1 año', max: 365 * 86400 },
-  { name: 'Hasta 3 años', max: 3 * 365 * 86400 }, { name: 'Más de 3 años', max: Infinity },
-];
+export const AGE_BINS = [{ max: 31 * 86400 }, { max: 182 * 86400 }, { max: 365 * 86400 }, { max: 3 * 365 * 86400 }, { max: Infinity }];
+export const ageName = (i: number) => tk('age.' + i);
 const AGE_COL = [oklch(.74, .15, 62), oklch(.72, .12, 120), oklch(.7, .1, 180), oklch(.66, .11, 235), oklch(.6, .1, 270)];
 export const ageBin = (mtime: number, now: number) => { const d = now - mtime; let i = 0; while (d > AGE_BINS[i].max) i++; return i; };
 export const ageColor = (i: number) => AGE_COL[i];

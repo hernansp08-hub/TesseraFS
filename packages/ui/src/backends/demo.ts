@@ -5,6 +5,7 @@ import {
 } from '@tessera/protocol';
 // @ts-ignore módulo JS sin tipos
 import { buildSample } from './sample.js';
+import { fail } from './errors';
 
 interface DNode {
   id: number; name: string; parent: DNode | null; isDir: boolean; size: number; alloc: number; files: number; dirs: number;
@@ -36,7 +37,7 @@ export class DemoBackend implements Backend {
     const a: string[] = []; for (let x: DNode | null = n; x && x.parent; x = x.parent) a.push(x.name);
     return 'C:\\' + a.reverse().join('\\');
   }
-  private node(id: number) { this.ensure(); const n = this.N[id]; if (!n) throw new Error('Elemento no encontrado: ' + id); return n; }
+  private node(id: number) { this.ensure(); const n = this.N[id]; if (!n) throw fail('error.invalidNode', `Unknown node id: ${id}`, { id }); return n; }
 
   async volumes() { return [VOLUME]; }
 
@@ -54,7 +55,7 @@ export class DemoBackend implements Backend {
     const el = performance.now() - t0;
     onProgress({ phase: 'done', entries: total, bytes: this.root.size, elapsedMs: el });
     return { rootId: 0, rootPath: 'C:\\', engine: 'mft', entries: total, files: this.root.files, dirs: this.root.dirs, bytes: this.root.size,
-      elapsedMs: el, volume: VOLUME, warnings: ['Datos de ejemplo: no se ha leído ningún disco.'] };
+      elapsedMs: el, volume: VOLUME, warnings: [{ code: 'scan.demoData', message: 'Sample data: no disk was read.' }] };
   }
 
   async slice(root: number, minBytes: number, maxNodes: number) {
@@ -106,15 +107,17 @@ export class DemoBackend implements Backend {
   async nodePath(id: number) { return this.path(this.node(id)); }
   async nodeInfo(id: number) { return this.row(this.node(id)); }
 
+  // Sin efectos: devuelve el código de lo que haría la app real (engine.demo.* en los catálogos)
   async action(kind: string, id: number) {
     const n = this.node(id);
     const msg: Record<string, string> = {
-      open: `Demo: la app abriría «${n.name}» con su programa predeterminado.`,
-      reveal: 'Demo: la app abriría el Explorador con el elemento seleccionado.',
-      properties: 'Demo: la app abriría el diálogo Propiedades de Windows.',
-      trash: `Demo: no se ha movido nada. La app real enviaría «${n.name}» a la papelera.`,
+      open: `Demo: the app would open "${n.name}" with its default program.`,
+      reveal: 'Demo: the app would open Explorer with the item selected.',
+      properties: 'Demo: the app would open the Windows Properties dialog.',
+      trash: `Demo: nothing was moved. The app would send "${n.name}" to the Recycle Bin.`,
     };
-    return { ok: kind !== 'trash', message: msg[kind] || 'Acción no disponible en la demo.' };
+    if (!msg[kind]) return { ok: false, code: 'demo.unavailable', message: 'Action not available in the demo.' };
+    return { ok: kind !== 'trash', code: 'demo.' + kind, params: { name: n.name }, message: msg[kind] };
   }
   async elevation() { return { elevated: false, canElevate: false }; }
   async relaunchElevated() { }

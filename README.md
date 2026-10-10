@@ -21,6 +21,7 @@ Analizador de espacio en disco para Windows, de código abierto, rápido y local
 - **Filtros potentes:** `ext:gguf size:>1g`, `age:>2y size:>500m`, `path:Downloads ext:msi,exe`…
 - **Liberar espacio con criterio:** propone candidatos como Seguro, Revisar o No borrar a mano, con la orden o el ajuste correcto para cada uno.
 - **Privado y prudente:** nada sale de tu equipo; sólo lee el disco; borra únicamente a la Papelera y siempre con confirmación.
+- **En tu idioma:** English, Español, Português (Brasil), Français y Deutsch, con el idioma de Windows por defecto y cambio al instante ([cómo se traduce](docs/tecnica/i18n.md)).
 
 <table>
 <tr>

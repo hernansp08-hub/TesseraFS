@@ -31,6 +31,7 @@ flowchart LR
 | [Motores de escaneo](tecnica/motores.md) | Lectura de la MFT, recorrido de carpetas, modelo de datos, enlaces duros y rendimiento |
 | [Interfaz y renderizado](tecnica/interfaz.md) | Mapa de teselas (squarified, mosaico, relieve), selección, listas virtuales y color |
 | [Contrato](ARQUITECTURA.md) | Operaciones, formato binario *slice* v1 y lenguaje de búsqueda que cumplen ambos motores |
+| [Internacionalización](tecnica/i18n.md) | Catálogos por idioma, mensajes ICU, códigos de los motores, formatos, pseudolocalización y cómo añadir un idioma |
 | [Guía de desarrollo](tecnica/desarrollo.md) | Preparar el entorno, compilar, probar, depurar y recetas para ampliar la app |
 | [Versiones y commits](VERSIONES.md) | SemVer, Conventional Commits, ramas y cómo publicar una versión |
 

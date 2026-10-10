@@ -4,10 +4,24 @@
     {
       "name": "portable",
       "runtimeExecutable": "bun",
-      "runtimeArgs": ["apps/portable/src/main.ts", "--no-window"],
-      "env": { "TESSERA_PORT": "47800" },
+      "runtimeArgs": [
+        "apps/portable/src/main.ts",
+        "--no-window"
+      ],
+      "env": {
+        "TESSERA_PORT": "47800"
+      },
       "port": 47800,
       "url": "http://127.0.0.1:47800"
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": [
+        "packages/ui/scripts/serve.ts"
+      ],
+      "port": 47801,
+      "url": "http://127.0.0.1:47801"
     }
   ]
 }

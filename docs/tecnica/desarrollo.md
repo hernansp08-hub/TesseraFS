@@ -39,12 +39,14 @@ bun run desktop:dev
 | `cd apps/desktop && bunx tauri build --no-bundle` | `target/release/tesserafs-desktop.exe` sin instalador |
 | `bun run desktop:build` | Igual, más el instalador NSIS |
 | `cargo build --release -p tessera-cli` | Herramienta de línea de comandos |
-| `bun test` | Pruebas de TypeScript (protocolo, interfaz, motor Bun) |
+| `bun test` | Pruebas de TypeScript (protocolo, interfaz, motor Bun, catálogos de idiomas) |
 | `cargo test --workspace` | Pruebas de Rust |
 | `bun run release <tipo>` | Sube la versión, escribe el CHANGELOG, hace el commit y la etiqueta (ver [Versiones](../VERSIONES.md)) |
 | `bun run package` | Compila las dos ediciones y genera los zips, sumas y notas en `dist/release/vX.Y.Z/` |
 | `bun run package --publish` | Además crea (o actualiza) la release en GitHub con `gh`; normalmente lo hace GitHub Actions |
-| `pwsh scripts/capturas.ps1` | Regenera las capturas de la documentación |
+| `bun run i18n:check` | Estado de las traducciones: claves que faltan, que sobran o idénticas al inglés (`--same`, `--strict`) |
+| `bun packages/ui/scripts/serve.ts` | Sirve la interfaz compilada con el motor demo en `http://127.0.0.1:47801` (prueba con `#lang=de` o `#pseudo`) |
+| `pwsh scripts/capturas.ps1 [-Lang es]` | Regenera las capturas de la documentación (en español por defecto) |
 
 > [!IMPORTANT]
 > Tauri y la portable incrustan `packages/ui/dist/index.html` al compilar. Después de cambiar la interfaz, ejecuta `bun run ui:build` **antes** de compilar el escritorio o empaquetar la portable.
@@ -79,7 +81,8 @@ gitGraph
 |---|---|---|
 | `packages/protocol/test` | Lenguaje de búsqueda y codec del slice | `bun test packages/protocol` |
 | `packages/ui/test` | El motor demo cumple el contrato | `bun test packages/ui` |
-| `packages/core-bun/test` | Almacén, parser MFT con registros sintéticos, recorrido real de una carpeta temporal | `bun test packages/core-bun` |
+| `packages/core-bun/test` | Almacén, parser MFT con registros sintéticos, recorrido real de una carpeta temporal, mensajes con código | `bun test packages/core-bun` |
+| `packages/i18n/test` | Catálogos (claves, ICU, argumentos, etiquetas, francés), formatos, negociación y uso de las claves en código y motores | `bun test packages/i18n` |
 | `crates/tessera-core` | Parser MFT, slice, búsqueda, recorrido | `cargo test --workspace` |
 | Prueba cruzada Rust ↔ TS | Mismo slice byte a byte y mismas búsquedas | `bun crates/tessera-cli/tests/crosscheck.ts` (tras generar los archivos con `tessera-cli`) |
 
@@ -160,6 +163,19 @@ flowchart LR
 ```
 
 Mantén los nombres en camelCase en JSON (`serde(rename_all = "camelCase")` en Rust) y los tamaños en bytes como números. Si cambia el formato del slice, sube su número de versión.
+
+### Añadir o cambiar un texto
+
+1. Añade la clave a `packages/i18n/locales/en.json` (y una nota en `_context.json` si puede ser ambigua) y tradúcela en los demás catálogos.
+2. En el HTML: `data-i18n="clave"` (o `-html`, `-title`, `-aria`, `-placeholder`). En el código: `t('clave', { params })`, `html()` si lleva `<b>`/`<code>`, o `tk()` si la clave se compone.
+3. Si el texto sale de un motor, no lo escribas en el motor: añade un código a la tabla de [i18n](i18n.md#mensajes-de-los-motores), su texto de reserva en inglés en `crates/tessera-core/src/msg.rs` y `packages/core-bun/src/messages.ts`, y la clave `engine.<código>`.
+4. `bun run i18n:check` y `bun test packages/i18n`.
+
+Detalles y convenciones en [Internacionalización](i18n.md).
+
+### Añadir un idioma
+
+Ver [Internacionalización › Añadir un idioma](i18n.md#añadir-un-idioma).
 
 ### Añadir una categoría de color
 

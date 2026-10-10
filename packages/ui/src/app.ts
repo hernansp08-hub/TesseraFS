@@ -4,13 +4,18 @@ import {
   type SearchRow, type SliceNode, type SortKey, type VolumeInfo,
 } from '@tessera/protocol';
 import { layout, raster, type Layout, type Tile } from './render';
-import { AGE_BINS, CATEGORIES, OTHER, REST_COLOR, ageBin, ageColor, categoryById, categoryOf, extColor, rgb, setExtRanking, type ColorMode, type RGB } from './colors';
+import { AGE_BINS, CATEGORIES, REST_COLOR, ageBin, ageColor, ageName, catName, categoryById, categoryOf, extColor, rgb, setExtRanking, type ColorMode, type RGB } from './colors';
 import { GB, MB, ageText, esc, fmtB, fmtD, fmtN, fmtP, fmtS } from './format';
+import { LOCALES, PSEUDO, html, i18n, msgText, onLocaleChange, preference, setPreference, systemLocale, t, tk, translateDom, type MessageKey } from './i18n';
 
 type TRow = { row: NodeRow; depth: number; more?: undefined } | { more: number; remaining: number; depth: number; row?: undefined };
-type HL = { type: 'cat'; id: string; label: string } | { type: 'ext'; ext: string; label: string } | { type: 'age'; bin: number; label: string }
-  | { type: 'search'; ids: Set<number>; label: string; count: number };
-interface CleanCard { row: NodeRow; path: string; risk: 'ok' | 'warn' | 'bad'; title: string; why: string; cmd?: string; how?: string; count?: number }
+// Los resaltados guardan datos, no textos: la etiqueta se compone al pintar, en el idioma activo
+type HL = { type: 'cat'; id: string } | { type: 'ext'; ext: string } | { type: 'age'; bin: number }
+  | { type: 'search'; ids: Set<number>; query: string; count: number };
+type Risk = 'ok' | 'warn' | 'bad';
+interface CleanCard { row: NodeRow; path: string; rule: Rule; name: string; count?: number }
+/** Texto traducido y escapado para insertarlo en HTML. */
+const tx = (key: MessageKey, params?: Parameters<typeof t>[1]) => esc(t(key, params));
 
 declare const __TESSERA_VERSION__: string; // la inyecta build.ts desde package.json
 const VERSION = typeof __TESSERA_VERSION__ === 'string' ? __TESSERA_VERSION__ : 'dev';
@@ -61,9 +66,9 @@ export function toast(msg: string) {
   const t = $('toast'); t.textContent = msg; t.hidden = false; requestAnimationFrame(() => t.classList.add('show'));
   clearTimeout(toastT); toastT = window.setTimeout(() => { t.classList.remove('show'); setTimeout(() => { t.hidden = true; }, 200); }, 4200);
 }
-function copyText(t: string, ok = 'Copiado') {
-  const fail = () => toast('No se pudo copiar. Selecciona el texto: ' + t);
-  try { navigator.clipboard.writeText(t).then(() => toast(ok + ': ' + t), fail); } catch { fail(); }
+function copyText(text: string, ok: MessageKey = 'toast.copied') {
+  const fail = () => toast(t('toast.copyFailed', { text }));
+  try { navigator.clipboard.writeText(text).then(() => toast(t(ok, { text })), fail); } catch { fail(); }
 }
 
 // ---------- Lista virtual ----------
@@ -205,16 +210,16 @@ function sliceRow(n: SliceNode): NodeRow {
 }
 function tipHTML(h: { n: SliceNode; rest: boolean; head: boolean }) {
   const base = zoomRow()!.size || 1, n = h.n;
-  if (h.rest) return `<div class="t-name"><i class="sw" style="background:${rgb(REST_COLOR)}"></i><b>${fmtN(n.restCount)} elementos pequeños</b></div>`
-    + `<div class="t-path">${esc(slicePath(n))}</div><div class="t-grid"><span>Tamaño total</span><b>${fmtB(n.restSize)}</b><span>Del mapa</span><b>${fmtP(n.restSize / base)}</b></div>`
-    + `<div class="t-hint">Doble clic para entrar en la carpeta y verlos</div>`;
+  if (h.rest) return `<div class="t-name"><i class="sw" style="background:${rgb(REST_COLOR)}"></i><b>${tx('tip.small', { count: n.restCount })}</b></div>`
+    + `<div class="t-path">${esc(slicePath(n))}</div><div class="t-grid"><span>${tx('tip.totalSize')}</span><b>${fmtB(n.restSize)}</b><span>${tx('tip.ofMap')}</span><b>${fmtP(n.restSize / base)}</b></div>`
+    + `<div class="t-hint">${tx('tip.small.hint')}</div>`;
   const c = n.isDir ? null : categoryOf(n.ext);
   return `<div class="t-name"><i class="sw" style="background:${rgb(nodeColor(n.ext, n.isDir, n.mtime))}"></i><b>${esc(n.name)}${n.isDir ? '\\' : ''}</b></div>`
     + `<div class="t-path">${esc(n.parent ? slicePath(n.parent) : slicePath(n))}</div>`
-    + `<div class="t-grid"><span>Tamaño</span><b>${fmtB(n.size)}</b><span>Del mapa</span><b>${fmtP(n.size / base)}</b>`
-    + (n.isDir ? `<span>Contenido</span><b>${fmtN(n.files)} archivos</b>` : `<span>Tipo</span><b>${esc(c!.name)}${n.ext ? ' · .' + esc(n.ext) : ''}</b>`)
-    + `<span>Modificado</span><b>${ageText(n.mtime)}</b></div>`
-    + `<div class="t-hint">Clic: ubicar en Carpetas · Doble clic: entrar</div>`;
+    + `<div class="t-grid"><span>${tx('tip.size')}</span><b>${fmtB(n.size)}</b><span>${tx('tip.ofMap')}</span><b>${fmtP(n.size / base)}</b>`
+    + (n.isDir ? `<span>${tx('tip.contents')}</span><b>${tx('tip.files', { count: n.files })}</b>` : `<span>${tx('tip.type')}</span><b>${esc(catName(c!))}${n.ext ? ' · .' + esc(n.ext) : ''}</b>`)
+    + `<span>${tx('tip.modified')}</span><b>${esc(ageText(n.mtime))}</b></div>`
+    + `<div class="t-hint">${tx('tip.hint')}</div>`;
 }
 function hitAt(e: MouseEvent): number | null {
   if (!M || !IDS) return null; const rc = ovC.getBoundingClientRect();
@@ -307,37 +312,38 @@ async function loadComposition() {
   S.ext = await B.extStats(z.id); if (zoomRow() === z) renderComposition();
 }
 function compRow(key: string, name: string, sub: string, color: RGB, size: number, total: number, max: number, count: number, on: boolean, extra = '') {
-  return `<button class="ext${on ? ' on' : ''}" type="button" data-k="${esc(key)}" aria-pressed="${on}" title="${fmtN(count)} archivos">`
+  return `<button class="ext${on ? ' on' : ''}" type="button" data-k="${esc(key)}" aria-pressed="${on}" title="${tx('comp.files', { count })}">`
     + `<i class="sw" style="background:${rgb(color)}"></i><span class="ext-n"><b>${esc(name)}</b><span>${esc(sub)}</span></span>`
     + `<span class="num ext-p">${fmtP(size / total)}</span><span class="num">${fmtB(size)}</span>`
     + `<span class="ext-bar"><b style="width:${(size / (max || 1) * 100).toFixed(1)}%;background:${rgb(color)}"></b></span></button>${extra}`;
 }
 export function renderComposition() {
   const z = zoomRow(); if (!z) { $('extList').innerHTML = ''; return; }
-  const total = z.size || 1, list = $('extList'); $('extScope').textContent = 'en ' + nameOf(z);
+  const total = z.size || 1, list = $('extList'); $('extScope').textContent = t('comp.scope', { name: nameOf(z) });
+  const extName = (e: ExtStat) => e.ext ? '.' + e.ext : t('comp.noExtLong');
   if (S.color === 'category') {
-    $('compTitle').textContent = 'Composición';
+    $('compTitle').textContent = t('comp.title.category');
     const groups = new Map<string, { size: number; count: number; exts: ExtStat[] }>();
     for (const e of S.ext) { const c = categoryOf(e.ext); let g = groups.get(c.id); if (!g) groups.set(c.id, g = { size: 0, count: 0, exts: [] }); g.size += e.size; g.count += e.count; g.exts.push(e); }
     const gs = [...groups.entries()].sort((a, b) => b[1].size - a[1].size), max = gs[0]?.[1].size || 1;
     list.innerHTML = gs.map(([id, g]) => {
       const c = categoryById(id), on = S.hl?.type === 'cat' && S.hl.id === id;
-      const sub = g.exts.slice(0, 3).map(e => e.ext ? '.' + e.ext : 'sin ext.').join(' ');
-      const open = S.compOpen === id ? `<div class="comp-sub">${g.exts.slice(0, 8).map(e => compRow('e:' + e.ext, e.ext ? '.' + e.ext : '(sin ext.)', fmtN(e.count) + ' archivos', c.color, e.size, total, g.size, e.count, S.hl?.type === 'ext' && S.hl.ext === e.ext)).join('')}</div>` : '';
-      return compRow('c:' + id, c.name, sub, c.color, g.size, total, max, g.count, on, open);
+      const sub = g.exts.slice(0, 3).map(e => e.ext ? '.' + e.ext : t('comp.noExt')).join(' ');
+      const open = S.compOpen === id ? `<div class="comp-sub">${g.exts.slice(0, 8).map(e => compRow('e:' + e.ext, extName(e), t('comp.files', { count: e.count }), c.color, e.size, total, g.size, e.count, S.hl?.type === 'ext' && S.hl.ext === e.ext)).join('')}</div>` : '';
+      return compRow('c:' + id, catName(c), sub, c.color, g.size, total, max, g.count, on, open);
     }).join('');
   } else if (S.color === 'ext') {
-    $('compTitle').textContent = 'Extensiones';
+    $('compTitle').textContent = t('comp.title.ext');
     const top = S.ext.slice(0, 18), max = top[0]?.size || 1, rest = S.ext.slice(18);
-    list.innerHTML = top.map(e => compRow('e:' + e.ext, e.ext ? '.' + e.ext : '(sin ext.)', categoryOf(e.ext).name, extColor(e.ext), e.size, total, max, e.count, S.hl?.type === 'ext' && S.hl.ext === e.ext)).join('')
-      + (rest.length ? `<div class="ext-more">y ${fmtN(rest.length)} extensiones más · ${fmtB(rest.reduce((s, e) => s + e.size, 0))}</div>` : '');
+    list.innerHTML = top.map(e => compRow('e:' + e.ext, extName(e), catName(categoryOf(e.ext)), extColor(e.ext), e.size, total, max, e.count, S.hl?.type === 'ext' && S.hl.ext === e.ext)).join('')
+      + (rest.length ? `<div class="ext-more">${tx('comp.moreExts', { count: rest.length, bytes: fmtB(rest.reduce((s, e) => s + e.size, 0)) })}</div>` : '');
   } else {
-    $('compTitle').textContent = 'Antigüedad';
+    $('compTitle').textContent = t('comp.title.age');
     const bins = AGE_BINS.map(() => ({ size: 0, count: 0 })), now = Date.now() / 1000;
     for (const t of S.L?.tiles || []) if (!t.rest && !t.n.isDir) { const b = bins[ageBin(t.n.mtime, now)]; b.size += t.n.size; b.count++; }
     const max = Math.max(...bins.map(b => b.size), 1), sum = bins.reduce((s, b) => s + b.size, 0) || 1;
-    list.innerHTML = bins.map((b, i) => compRow('a:' + i, AGE_BINS[i].name, 'por fecha de modificación', ageColor(i), b.size, sum, max, b.count, S.hl?.type === 'age' && S.hl.bin === i)).join('')
-      + '<div class="legend-note">Calculado sobre las teselas visibles del mapa.</div>';
+    list.innerHTML = bins.map((b, i) => compRow('a:' + i, ageName(i), t('comp.byModified'), ageColor(i), b.size, sum, max, b.count, S.hl?.type === 'age' && S.hl.bin === i)).join('')
+      + `<div class="legend-note">${tx('comp.ageNote')}</div>`;
   }
 }
 $('extList').addEventListener('click', e => {
@@ -345,17 +351,22 @@ $('extList').addEventListener('click', e => {
   const k = b.dataset.k!, kind = k[0], v = k.slice(2);
   if (kind === 'c') {
     const same = S.hl?.type === 'cat' && S.hl.id === v;
-    S.compOpen = same ? null : v; setHL(same ? null : { type: 'cat', id: v, label: categoryById(v).name });
+    S.compOpen = same ? null : v; setHL(same ? null : { type: 'cat', id: v });
   } else if (kind === 'e') {
-    const same = S.hl?.type === 'ext' && S.hl.ext === v; setHL(same ? null : { type: 'ext', ext: v, label: v ? '.' + v : 'sin extensión' });
-  } else { const bin = +v, same = S.hl?.type === 'age' && S.hl.bin === bin; setHL(same ? null : { type: 'age', bin, label: AGE_BINS[bin].name }); }
+    const same = S.hl?.type === 'ext' && S.hl.ext === v; setHL(same ? null : { type: 'ext', ext: v });
+  } else { const bin = +v, same = S.hl?.type === 'age' && S.hl.bin === bin; setHL(same ? null : { type: 'age', bin }); }
 });
+function hlText(h: HL) {
+  if (h.type === 'search') return t('map.results', { count: h.count });
+  const label = h.type === 'cat' ? catName(categoryById(h.id)) : h.type === 'ext' ? (h.ext ? '.' + h.ext : t('hl.noExtension')) : ageName(h.bin);
+  return t('map.highlight', { label });
+}
 export function setHL(h: HL | null) {
   const dropSearch = S.hl?.type === 'search' && (!h || h.type !== 'search');
   if (dropSearch) { ($('q') as HTMLInputElement).value = ''; S.query = ''; }
   S.hl = h; $('hlChip').hidden = !h;
   if (dropSearch && S.tab === 'files') loadFiles();
-  if (h) $('hlTxt').textContent = h.type === 'search' ? `${fmtN(h.count)} resultados` : 'Resaltando ' + h.label;
+  if (h) $('hlTxt').textContent = hlText(h);
   renderMap(); renderComposition();
 }
 $('hlClear').addEventListener('click', () => { setHL(null); if (S.tab === 'files') loadFiles(); });
@@ -400,17 +411,17 @@ function fitTexts(layer: HTMLElement) {
   }
 }
 function rowHTML(i: number) {
-  const t = S.rows[i];
-  if (t.more) return `<div class="row more-row" role="row" data-i="${i}"><span class="c-name" style="--ind:${indent(t.depth)}px"><span class="tw none"></span>Mostrar ${fmtN(Math.min(PAGE, t.remaining))} más · quedan ${fmtN(t.remaining)}</span></div>`;
-  const r = t.row!, ps = parentSize(r), pct = ps > 0 ? r.size / ps : 0, open = r.isDir && S.expanded.has(r.id), sel = S.sel?.id === r.id;
+  const tr = S.rows[i];
+  if (tr.more) return `<div class="row more-row" role="row" data-i="${i}"><span class="c-name" style="--ind:${indent(tr.depth)}px"><span class="tw none"></span>${tx('tree.more', { count: Math.min(PAGE, tr.remaining), remaining: tr.remaining })}</span></div>`;
+  const r = tr.row!, ps = parentSize(r), pct = ps > 0 ? r.size / ps : 0, open = r.isDir && S.expanded.has(r.id), sel = S.sel?.id === r.id;
   const cls = 'row' + (sel ? ' sel' : '') + (r.isDir ? ' dir' : '') + (r.flags & FLAG.HIDDEN ? ' hid' : '') + (r.flags & FLAG.HARDLINK ? ' hl' : '');
   const tw = r.isDir && r.childCount ? `<span class="tw${open ? ' open' : ''}" data-tw="1"></span>` : '<span class="tw none"></span>';
   const icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(rowColor(r))}"></i>`;
-  const items = r.isDir ? fmtN(r.files + r.dirs) : '', ind = indent(t.depth);
-  return `<div class="${cls}" role="row" data-i="${i}" aria-level="${t.depth + 1}"${r.isDir ? ` aria-expanded="${open}"` : ''} aria-selected="${sel}">`
-    + (t.depth ? `<span class="share" style="left:${10 + ind}px;width:calc((100% - ${18 + ind}px) * ${pct.toFixed(4)})"></span>` : '')
+  const items = r.isDir ? fmtN(r.files + r.dirs) : '', ind = indent(tr.depth);
+  return `<div class="${cls}" role="row" data-i="${i}" aria-level="${tr.depth + 1}"${r.isDir ? ` aria-expanded="${open}"` : ''} aria-selected="${sel}">`
+    + (tr.depth ? `<span class="share" style="left:${10 + ind}px;width:calc((100% - ${18 + ind}px) * ${pct.toFixed(4)})"></span>` : '')
     + `<span class="c-name" style="--ind:${ind}px">${tw}${icon}<span class="nm" data-fit="name" title="${esc(r.name)}">${esc(nameOf(r))}</span></span>`
-    + `<span class="c-size num">${fmtB(r.size)}</span><span class="c-pct num">${t.depth ? fmtP(pct) : ''}</span><span class="c-alloc num">${fmtB(r.alloc)}</span>`
+    + `<span class="c-size num">${fmtB(r.size)}</span><span class="c-pct num">${tr.depth ? fmtP(pct) : ''}</span><span class="c-alloc num">${fmtB(r.alloc)}</span>`
     + `<span class="c-items num">${items}</span><span class="c-mod num">${fmtD(r.mtime)}</span></div>`;
 }
 const treeVL = new VList(treeBody, 26, rowHTML, fitTexts);
@@ -491,38 +502,38 @@ export function select(r: NodeRow) {
   pathOf(r.id).then(() => { if (S.sel?.id === r.id) renderInspector(); }).catch(() => { });
 }
 function attrs(f: number) {
-  const a = [f & FLAG.HIDDEN && 'Oculto', f & FLAG.SYSTEM && 'Sistema', f & FLAG.COMPRESSED && 'Comprimido', f & FLAG.SPARSE && 'Disperso',
-    f & FLAG.HARDLINK && 'Enlace duro', f & FLAG.REPARSE && 'Punto de reanálisis', f & FLAG.CLOUD && 'En la nube'].filter(Boolean);
-  return a.length ? a.join(' · ') : 'Normal';
+  const a = ([f & FLAG.HIDDEN && 'attr.hidden', f & FLAG.SYSTEM && 'attr.system', f & FLAG.COMPRESSED && 'attr.compressed', f & FLAG.SPARSE && 'attr.sparse',
+    f & FLAG.HARDLINK && 'attr.hardlink', f & FLAG.REPARSE && 'attr.reparse', f & FLAG.CLOUD && 'attr.cloud'].filter(Boolean) as MessageKey[]).map(k => t(k));
+  return a.length ? a.join(' · ') : t('attr.normal');
 }
 const ICON_COPY = '<svg class="i" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>';
 export function renderInspector() {
   const el = $('insp'), r = S.sel || zoomRow();
-  if (!r) { el.innerHTML = '<p class="note">Escanea una unidad para ver aquí el detalle de lo que selecciones.</p>'; return; }
+  if (!r) { el.innerHTML = `<p class="note">${tx('insp.empty')}</p>`; return; }
   const ps = parentSize(r), path = S.pathCache.get(r.id), c = r.isDir ? null : categoryOf(r.ext);
-  const kind = r.isDir ? (r.parentId < 0 ? 'Raíz del escaneo' : 'Carpeta') : c!.name + (r.ext ? ' · .' + r.ext : '');
+  const kind = r.isDir ? t(r.parentId < 0 ? 'insp.kind.root' : 'insp.kind.folder') : catName(c!) + (r.ext ? ' · .' + r.ext : '');
   const canZoom = r.id !== zoomRow()?.id;
   const acts = S.confirmTrash
-    ? `<div class="confirm"><p>¿Mover «${esc(r.name)}» (${fmtB(r.size)}) a la papelera?</p><div><button class="btn sm" type="button" data-act="cancel">Cancelar</button><button class="btn sm danger solid" type="button" data-act="trash-ok">Mover a la papelera</button></div></div>`
-    : `<div class="actions"><button class="btn sm" type="button" data-act="reveal">Mostrar en el Explorador</button><button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>Entrar en el mapa</button><button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>Papelera…</button></div>`;
+    ? `<div class="confirm"><p>${tx('insp.confirmTrash', { name: r.name, size: fmtB(r.size) })}</p><div><button class="btn sm" type="button" data-act="cancel">${tx('insp.cancel')}</button><button class="btn sm danger solid" type="button" data-act="trash-ok">${tx('insp.trashConfirm')}</button></div></div>`
+    : `<div class="actions"><button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button><button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button><button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button></div>`;
   el.innerHTML = `<div class="insp-top"><span class="sw lg" style="background:${rgb(rowColor(r))}"></span><div class="insp-id"><div class="insp-kind">${esc(kind)}</div><h2 class="insp-name" title="${esc(r.name)}">${esc(nameOf(r))}</h2></div></div>`
-    + `<div class="insp-size"><span class="big">${fmtB(r.size)}</span><span class="sub">${S.root ? fmtP(r.size / (S.root.size || 1)) + ' de lo escaneado' : ''}</span></div>`
-    + `<div class="insp-path"><code>${path ? esc(path).replace(/\\/g, '\\<wbr>') : '…'}</code><button class="icon-btn sm" type="button" data-act="copy" title="Copiar ruta">${ICON_COPY}</button></div>`
-    + `<dl class="kv"><div><dt title="Espacio que ocupa realmente en el disco (clústeres asignados)">En disco</dt><dd>${fmtB(r.alloc)}</dd></div>`
-    + `<div><dt>De su carpeta</dt><dd>${r.parentId >= 0 ? fmtP(r.size / (ps || 1)) : '—'}</dd></div>`
-    + (r.isDir ? `<div><dt>Archivos</dt><dd>${fmtN(r.files)}</dd></div><div><dt>Carpetas</dt><dd>${fmtN(r.dirs)}</dd></div>`
-      : `<div><dt>Atributos</dt><dd>${attrs(r.flags)}</dd></div><div><dt>Antigüedad</dt><dd>${ageText(r.mtime)}</dd></div>`)
-    + `<div><dt>Modificado</dt><dd>${fmtD(r.mtime)}</dd></div></dl>`
-    + (r.flags & FLAG.HARDLINK ? '<p class="note">Enlace duro: el mismo archivo aparece en otra carpeta y su espacio sólo cuenta una vez.</p>' : '')
-    + (r.flags & FLAG.CLOUD ? '<p class="note">Archivo en la nube: puede no ocupar espacio local hasta que lo abras.</p>' : '')
+    + `<div class="insp-size"><span class="big">${fmtB(r.size)}</span><span class="sub">${S.root ? tx('insp.ofScanned', { value: fmtP(r.size / (S.root.size || 1)) }) : ''}</span></div>`
+    + `<div class="insp-path"><code>${path ? esc(path).replace(/\\/g, '\\<wbr>') : '…'}</code><button class="icon-btn sm" type="button" data-act="copy" title="${tx('insp.copyPath')}">${ICON_COPY}</button></div>`
+    + `<dl class="kv"><div><dt title="${tx('insp.onDisk.title')}">${tx('insp.onDisk')}</dt><dd>${fmtB(r.alloc)}</dd></div>`
+    + `<div><dt>${tx('insp.ofFolder')}</dt><dd>${r.parentId >= 0 ? fmtP(r.size / (ps || 1)) : '—'}</dd></div>`
+    + (r.isDir ? `<div><dt>${tx('insp.files')}</dt><dd>${fmtN(r.files)}</dd></div><div><dt>${tx('insp.folders')}</dt><dd>${fmtN(r.dirs)}</dd></div>`
+      : `<div><dt>${tx('insp.attributes')}</dt><dd>${esc(attrs(r.flags))}</dd></div><div><dt>${tx('insp.age')}</dt><dd>${esc(ageText(r.mtime))}</dd></div>`)
+    + `<div><dt>${tx('insp.modified')}</dt><dd>${fmtD(r.mtime)}</dd></div></dl>`
+    + (r.flags & FLAG.HARDLINK ? `<p class="note">${tx('insp.note.hardlink')}</p>` : '')
+    + (r.flags & FLAG.CLOUD ? `<p class="note">${tx('insp.note.cloud')}</p>` : '')
     + acts;
 }
 async function doAction(kind: ActionKind, r: NodeRow) {
   try {
     const res = await B.action(kind, r.id);
-    toast(res.message || (res.ok ? 'Hecho' : 'No se pudo completar la acción'));
+    toast(res.code ? msgText(res) : res.message || t(res.ok ? 'toast.done' : 'toast.actionFailed'));
     if (kind === 'trash' && res.ok) await refreshAfterChange(r);
-  } catch (e) { toast('Error: ' + (e as Error).message); }
+  } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
 }
 async function refreshAfterChange(r: NodeRow) {
   S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null;
@@ -535,7 +546,7 @@ async function refreshAfterChange(r: NodeRow) {
 $('insp').addEventListener('click', e => {
   const b = (e.target as HTMLElement).closest('[data-act]') as HTMLElement; if (!b) return; const r = S.sel || zoomRow(); if (!r) return;
   switch (b.dataset.act) {
-    case 'copy': pathOf(r.id).then(p => copyText(p, 'Ruta copiada')); break;
+    case 'copy': pathOf(r.id).then(p => copyText(p, 'toast.pathCopied')); break;
     case 'reveal': doAction('reveal', r); break;
     case 'zoom': zoomToRow(r); break;
     case 'trash': S.confirmTrash = true; renderInspector(); ($('insp').querySelector('[data-act="trash-ok"]') as HTMLElement).focus(); break;
@@ -557,12 +568,12 @@ async function loadFiles() {
   const z = zoomRow(); if (!z || !S.root) return;
   const searching = !!S.query, root = searching ? S.root.id : z.id;
   const res = await B.search({ query: S.query, root, limit: 2000 });
-  if (res.error) { $('filesMeta').innerHTML = `<b>Filtro no válido:</b> ${esc(res.error)}`; S.files = []; filesVL.setCount(0); return; }
+  if (res.error) { $('filesMeta').innerHTML = html('files.invalidFilter', { error: msgText(res.error) }); S.files = []; filesVL.setCount(0); return; }
   for (const r of res.rows) { remember(r); S.pathCache.set(r.id, r.path); }
   S.files = res.rows; S.filesTotal = res.total; S.filesBytes = res.totalBytes;
-  $('filesMeta').innerHTML = (searching ? `<b>${fmtN(res.total)}</b> coincidencias con <code>${esc(S.query)}</code> · ${fmtB(res.totalBytes)}`
-    : `Los archivos más grandes en <b>${esc(nameOf(z))}</b> · ${fmtN(res.total)} archivos · ${fmtB(res.totalBytes)}`)
-    + (res.total > res.rows.length ? ` · se muestran ${fmtN(res.rows.length)}` : '');
+  $('filesMeta').innerHTML = (searching ? html('files.matches', { count: res.total, query: S.query, bytes: fmtB(res.totalBytes) })
+    : html('files.largest', { folder: nameOf(z), count: res.total, bytes: fmtB(res.totalBytes) }))
+    + (res.total > res.rows.length ? ' · ' + tx('files.shown', { count: res.rows.length }) : '');
   $('filesCount').textContent = searching ? fmtN(res.total) : '';
   filesVL.setCount(S.files.length);
 }
@@ -574,7 +585,7 @@ async function runQuery() {
   S.query = q.value.trim();
   if (!S.query) { if (S.hl?.type === 'search') setHL(null); if (S.tab === 'files') loadFiles(); return; }
   setTab('files'); await loadFiles();
-  if (S.query) setHL({ type: 'search', ids: new Set(S.files.map(r => r.id)), label: S.query, count: S.filesTotal });
+  if (S.query) setHL({ type: 'search', ids: new Set(S.files.map(r => r.id)), query: S.query, count: S.filesTotal });
 }
 q.addEventListener('input', () => { clearTimeout(qT); qT = window.setTimeout(runQuery, 220); });
 const qHelp = $('qHelp'), qHelpBtn = $('qHelpBtn');
@@ -582,8 +593,10 @@ qHelpBtn.addEventListener('click', e => { e.preventDefault(); qHelp.hidden = !qH
 qHelp.addEventListener('click', e => { const b = (e.target as HTMLElement).closest('[data-q]') as HTMLElement; if (!b) return; q.value = b.dataset.q!; qHelp.hidden = true; runQuery(); });
 
 // ---------- Liberar espacio: reglas explicadas ejecutadas como filtros ----------
+// Cada regla tiene un id: sus textos son clean.<id>.title, clean.<id>.why y, si `how`, clean.<id>.how.
+// `title` sólo cuando el título depende del elemento (el nombre del juego, el archivo de sistema).
 interface Rule {
-  q: string; risk: CleanCard['risk']; title: string | ((r: SearchRow) => string); why: string; cmd?: string; how?: string;
+  id: string; q: string; risk: Risk; title?: (name: string) => string; cmd?: string; how?: boolean;
   ok?: (r: SearchRow) => boolean; verify?: (r: SearchRow) => Promise<boolean>; group?: boolean; min?: number;
 }
 // Carpetas que pertenecen a programas instalados: sus dependencias no se regeneran solas
@@ -593,25 +606,27 @@ const hasChild = async (r: SearchRow, names: string[]) => {
   return res.rows.some(c => names.includes(c.name.toLowerCase()));
 };
 const RULES: Rule[] = [
-  { q: 'type:dir name:target', risk: 'ok', title: 'Compilaciones de Rust', why: 'Artefactos que Cargo vuelve a generar al compilar. Borrarlos sólo cuesta el tiempo de la próxima compilación.', cmd: 'cargo clean',
+  { id: 'rustTarget', q: 'type:dir name:target', risk: 'ok', cmd: 'cargo clean',
     ok: r => r.name.toLowerCase() === 'target' && !INSTALLED.test(r.path), verify: r => hasChild(r, ['cachedir.tag', '.rustc_info.json']), min: 50 * MB },
-  { q: 'type:dir name:node_modules', risk: 'ok', title: 'Dependencias de Node', why: 'Se reinstalan desde package.json y el lockfile del proyecto.', cmd: 'bun install',
+  { id: 'nodeModules', q: 'type:dir name:node_modules', risk: 'ok', cmd: 'bun install',
     ok: r => r.name === 'node_modules' && (r.path.match(/\\node_modules(?=\\|$)/gi) || []).length === 1 && !INSTALLED.test(r.path), min: 20 * MB },
-  { q: 'type:dir name:.venv', risk: 'ok', title: 'Entorno virtual de Python', why: 'Se recrea a partir de pyproject.toml o requirements.txt.', cmd: 'uv sync', ok: r => r.name === '.venv' && !INSTALLED.test(r.path), min: 20 * MB },
-  { q: 'type:dir name:Temp', risk: 'ok', title: 'Archivos temporales', why: 'Restos que dejan Windows y las aplicaciones. Lo que esté en uso no se dejará borrar.', how: 'Configuración › Sistema › Almacenamiento › Archivos temporales', ok: r => /\\AppData\\Local\\Temp$|^[A-Z]:\\Windows\\Temp$/i.test(r.path), min: 50 * MB },
-  { q: 'type:dir name:SoftwareDistribution', risk: 'ok', title: 'Descargas de Windows Update', why: 'Actualizaciones ya instaladas que Windows puede volver a descargar si las necesita.', how: 'Configuración › Sistema › Almacenamiento › Archivos temporales › Limpieza de Windows Update', ok: r => /^[A-Z]:\\Windows\\SoftwareDistribution$/i.test(r.path), min: 100 * MB },
-  { q: 'type:dir name:Windows.old', risk: 'ok', title: 'Instalación anterior de Windows', why: 'Copia de la versión previa para poder volver atrás. Windows la borra sola pasado un tiempo.', how: 'Configuración › Sistema › Almacenamiento › Archivos temporales › Instalaciones anteriores de Windows', ok: r => /^[A-Z]:\\Windows\.old$/i.test(r.path) },
-  { q: 'type:dir name:$Recycle.Bin', risk: 'ok', title: 'Papelera de reciclaje', why: 'Archivos que ya borraste y siguen ocupando espacio.', how: 'Vacía la papelera desde el Escritorio', ok: r => /^[A-Z]:\\\$Recycle\.Bin$/i.test(r.path), min: 10 * MB },
-  { q: 'ext:gguf,safetensors,ckpt,onnx', risk: 'warn', title: 'Modelos de IA locales', why: 'Modelos descargados por LM Studio, Ollama u otras herramientas. Bórralos desde la propia herramienta para que su catálogo siga coherente.', group: true, min: 500 * MB },
-  { q: 'ext:vhdx,vhd', risk: 'warn', title: 'Discos virtuales', why: 'Discos de WSL, Docker o Hyper-V. Crecen pero no se encogen solos: limpia dentro y compáctalos.', cmd: 'wsl --manage <distro> --set-sparse true', min: 500 * MB },
-  { q: 'type:dir path:steamapps', risk: 'warn', title: r => 'Juego instalado: ' + r.name, why: 'Desinstálalo desde su tienda, o muévelo a otra unidad, para no romper la biblioteca.', ok: r => /\\steamapps\\common\\[^\\]+$/i.test(r.path), min: 1 * GB },
-  { q: 'path:Downloads ext:msi,exe,iso,zip,7z size:>100m', risk: 'warn', title: 'Instaladores y archivos descargados', why: 'Instaladores y comprimidos que suelen quedarse olvidados en Descargas.', group: true, min: 200 * MB },
-  { q: 'type:dir name:"System Volume Information"', risk: 'warn', title: 'Puntos de restauración', why: 'Instantáneas de Protección del sistema. Puedes limitar su tamaño o borrar las antiguas.', cmd: 'vssadmin list shadowstorage', ok: r => /^[A-Z]:\\System Volume Information$/i.test(r.path), min: 100 * MB },
-  { q: 'pagefile.sys OR hiberfil.sys OR swapfile.sys', risk: 'bad', title: r => r.name === 'hiberfil.sys' ? 'Archivo de hibernación' : r.name === 'swapfile.sys' ? 'Archivo de intercambio de apps' : 'Archivo de paginación', why: 'Memoria virtual de Windows. Su tamaño se ajusta desde Rendimiento › Opciones avanzadas o, para la hibernación, con powercfg.', ok: r => /^[A-Z]:\\[^\\]+\.sys$/i.test(r.path) },
-  { q: 'type:dir name:WinSxS', risk: 'bad', title: 'Almacén de componentes', why: 'Comparte enlaces duros con System32, así que ocupa menos de lo que aparenta. No borres nada a mano.', cmd: 'DISM /Online /Cleanup-Image /StartComponentCleanup', ok: r => /^[A-Z]:\\Windows\\WinSxS$/i.test(r.path) },
-  { q: 'type:dir name:Installer', risk: 'bad', title: 'Caché de Windows Installer', why: 'Windows la necesita para reparar y desinstalar programas.', ok: r => /^[A-Z]:\\Windows\\Installer$/i.test(r.path) },
+  { id: 'venv', q: 'type:dir name:.venv', risk: 'ok', cmd: 'uv sync', ok: r => r.name === '.venv' && !INSTALLED.test(r.path), min: 20 * MB },
+  { id: 'temp', q: 'type:dir name:Temp', risk: 'ok', how: true, ok: r => /\\AppData\\Local\\Temp$|^[A-Z]:\\Windows\\Temp$/i.test(r.path), min: 50 * MB },
+  { id: 'windowsUpdate', q: 'type:dir name:SoftwareDistribution', risk: 'ok', how: true, ok: r => /^[A-Z]:\\Windows\\SoftwareDistribution$/i.test(r.path), min: 100 * MB },
+  { id: 'windowsOld', q: 'type:dir name:Windows.old', risk: 'ok', how: true, ok: r => /^[A-Z]:\\Windows\.old$/i.test(r.path) },
+  { id: 'recycleBin', q: 'type:dir name:$Recycle.Bin', risk: 'ok', how: true, ok: r => /^[A-Z]:\\\$Recycle\.Bin$/i.test(r.path), min: 10 * MB },
+  { id: 'aiModels', q: 'ext:gguf,safetensors,ckpt,onnx', risk: 'warn', group: true, min: 500 * MB },
+  { id: 'virtualDisks', q: 'ext:vhdx,vhd', risk: 'warn', cmd: 'wsl --manage <distro> --set-sparse true', min: 500 * MB },
+  { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: name => t('clean.game.title', { name }), ok: r => /\\steamapps\\common\\[^\\]+$/i.test(r.path), min: 1 * GB },
+  { id: 'downloads', q: 'path:Downloads ext:msi,exe,iso,zip,7z size:>100m', risk: 'warn', group: true, min: 200 * MB },
+  { id: 'restorePoints', q: 'type:dir name:"System Volume Information"', risk: 'warn', cmd: 'vssadmin list shadowstorage', ok: r => /^[A-Z]:\\System Volume Information$/i.test(r.path), min: 100 * MB },
+  { id: 'systemFile', q: 'pagefile.sys OR hiberfil.sys OR swapfile.sys', risk: 'bad', ok: r => /^[A-Z]:\\[^\\]+\.sys$/i.test(r.path),
+    title: name => t(name.toLowerCase() === 'hiberfil.sys' ? 'clean.hiberfil.title' : name.toLowerCase() === 'swapfile.sys' ? 'clean.swapfile.title' : 'clean.pagefile.title') },
+  { id: 'winsxs', q: 'type:dir name:WinSxS', risk: 'bad', cmd: 'DISM /Online /Cleanup-Image /StartComponentCleanup', ok: r => /^[A-Z]:\\Windows\\WinSxS$/i.test(r.path) },
+  { id: 'installer', q: 'type:dir name:Installer', risk: 'bad', ok: r => /^[A-Z]:\\Windows\\Installer$/i.test(r.path) },
 ];
-const RISK = { ok: 'Seguro', warn: 'Revisar', bad: 'No borrar a mano' };
+const riskName = (r: Risk) => tk('clean.risk.' + r);
+const cardTitle = (c: CleanCard) => c.rule.title ? c.rule.title(c.name) : tk(`clean.${c.rule.id}.title`);
 async function loadClean() {
   if (!S.root) return;
   const cards: CleanCard[] = [];
@@ -625,31 +640,30 @@ async function loadClean() {
         const size = list.reduce((s, r) => s + r.size, 0); if (rule.min && size < rule.min) continue;
         const parent = await rowOf(list[0].parentId).catch(() => null); if (!parent) continue;
         const path = await pathOf(parent.id).catch(() => parentPath(list[0].path));
-        cards.push({ row: { ...parent, size }, path, risk: rule.risk, title: typeof rule.title === 'string' ? rule.title : rule.title(list[0]), why: rule.why, cmd: rule.cmd, how: rule.how, count: list.length });
+        cards.push({ row: { ...parent, size }, path, rule, name: list[0].name, count: list.length });
       }
-    } else for (const r of rows) cards.push({ row: r, path: r.path, risk: rule.risk, title: typeof rule.title === 'string' ? rule.title : rule.title(r), why: rule.why, cmd: rule.cmd, how: rule.how });
+    } else for (const r of rows) cards.push({ row: r, path: r.path, rule, name: r.name });
   }
-  const order = { ok: 0, warn: 1, bad: 2 }; cards.sort((a, b) => order[a.risk] - order[b.risk] || b.row.size - a.row.size);
+  const order = { ok: 0, warn: 1, bad: 2 }; cards.sort((a, b) => order[a.rule.risk] - order[b.rule.risk] || b.row.size - a.row.size);
   S.clean = cards; $('cleanCount').textContent = String(cards.length);
 }
 async function renderClean() {
   const el = $('cleanBody');
-  if (!S.root) { el.innerHTML = '<div class="cl-loading">Escanea una unidad para buscar espacio recuperable.</div>'; return; }
-  if (!S.clean) { el.innerHTML = '<div class="cl-loading">Buscando candidatos…</div>'; await loadClean(); }
-  const L = S.clean!, sum = (k: string) => L.filter(c => c.risk === k).reduce((s, c) => s + c.row.size, 0);
+  if (!S.root) { el.innerHTML = `<div class="cl-loading">${tx('clean.noScan')}</div>`; return; }
+  if (!S.clean) { el.innerHTML = `<div class="cl-loading">${tx('clean.searching')}</div>`; await loadClean(); }
+  const L = S.clean!, sum = (k: Risk) => L.filter(c => c.rule.risk === k).reduce((s, c) => s + c.row.size, 0);
   el.innerHTML = `<div class="clean-sum">`
-    + `<div><span class="risk ok">${RISK.ok}</span><b>${fmtB(sum('ok'))}</b><small>se regenera solo o es temporal</small></div>`
-    + `<div><span class="risk warn">${RISK.warn}</span><b>${fmtB(sum('warn'))}</b><small>es tuyo: decide tú</small></div>`
-    + `<div><span class="risk bad">${RISK.bad}</span><b>${fmtB(sum('bad'))}</b><small>lo gestiona Windows</small></div></div>`
-    + (L.length ? '' : '<div class="cl-loading">No hay candidatos evidentes en lo escaneado.</div>')
-    + L.map((c, i) => `<article class="cl"><div><h3>${esc(c.title)}</h3><code class="cl-path">${esc(c.path)}</code><p>${esc(c.why)}${c.count ? ` (${fmtN(c.count)} archivos)` : ''}</p>`
-      + (c.cmd ? `<div class="cmd"><code>${esc(c.cmd)}</code><button class="icon-btn sm" type="button" data-copy="${i}" title="Copiar orden">${ICON_COPY}</button></div>` : '')
-      + (c.how ? `<p class="how">${esc(c.how)}</p>` : '')
-      + `</div><div class="cl-side"><span class="cl-size">${fmtB(c.row.size)}</span><span class="risk ${c.risk}">${RISK[c.risk]}</span><button class="btn sm" type="button" data-loc="${i}">Ubicar</button></div></article>`).join('');
+    + (['ok', 'warn', 'bad'] as Risk[]).map(k => `<div><span class="risk ${k}">${esc(riskName(k))}</span><b>${fmtB(sum(k))}</b><small>${esc(tk('clean.sum.' + k))}</small></div>`).join('')
+    + `</div>`
+    + (L.length ? '' : `<div class="cl-loading">${tx('clean.none')}</div>`)
+    + L.map((c, i) => `<article class="cl"><div><h3>${esc(cardTitle(c))}</h3><code class="cl-path">${esc(c.path)}</code><p>${esc(tk(`clean.${c.rule.id}.why`))}${c.count ? ' ' + tx('clean.fileCount', { count: c.count }) : ''}</p>`
+      + (c.rule.cmd ? `<div class="cmd"><code>${esc(c.rule.cmd)}</code><button class="icon-btn sm" type="button" data-copy="${i}" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div>` : '')
+      + (c.rule.how ? `<p class="how">${esc(tk(`clean.${c.rule.id}.how`))}</p>` : '')
+      + `</div><div class="cl-side"><span class="cl-size">${fmtB(c.row.size)}</span><span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span><button class="btn sm" type="button" data-loc="${i}">${tx('clean.locate')}</button></div></article>`).join('');
 }
 $('cleanBody').addEventListener('click', async e => {
   const t = e.target as HTMLElement, cp = t.closest('[data-copy]') as HTMLElement;
-  if (cp) { copyText(S.clean![+cp.dataset.copy!].cmd!, 'Orden copiada'); return; }
+  if (cp) { copyText(S.clean![+cp.dataset.copy!].rule.cmd!, 'toast.commandCopied'); return; }
   const lb = t.closest('[data-loc]') as HTMLElement; if (!lb) return;
   const r = S.clean![+lb.dataset.loc!].row; setTab('tree'); await locate(r); zoomToRow(r);
 });
@@ -675,20 +689,20 @@ function openMenu(html: string, x: number, y: number, kind: string, id = -1) {
 }
 function nodeMenu(r: NodeRow, x: number, y: number) {
   openMenu(`<div class="menu-h">${esc(S.pathCache.get(r.id) || r.name)}</div>`
-    + `<button type="button" role="menuitem" data-m="open">${r.isDir ? 'Abrir carpeta' : 'Abrir'}</button>`
-    + `<button type="button" role="menuitem" data-m="reveal">Mostrar en el Explorador</button>`
-    + `<button type="button" role="menuitem" data-m="copy">Copiar ruta</button>`
-    + `<button type="button" role="menuitem" data-m="zoom">Entrar en el mapa</button>`
-    + `<button type="button" role="menuitem" data-m="tree">Ubicar en Carpetas</button><hr>`
-    + `<button type="button" role="menuitem" data-m="properties">Propiedades</button>`
-    + `<button type="button" role="menuitem" data-m="trash" class="danger">Mover a la papelera…<span>Supr</span></button>`, x, y, 'node', r.id);
+    + `<button type="button" role="menuitem" data-m="open">${tx(r.isDir ? 'menu.openFolder' : 'menu.open')}</button>`
+    + `<button type="button" role="menuitem" data-m="reveal">${tx('menu.reveal')}</button>`
+    + `<button type="button" role="menuitem" data-m="copy">${tx('menu.copyPath')}</button>`
+    + `<button type="button" role="menuitem" data-m="zoom">${tx('menu.zoom')}</button>`
+    + `<button type="button" role="menuitem" data-m="tree">${tx('menu.locate')}</button><hr>`
+    + `<button type="button" role="menuitem" data-m="properties">${tx('menu.properties')}</button>`
+    + `<button type="button" role="menuitem" data-m="trash" class="danger">${tx('menu.trash')}<span>${tx('key.delete')}</span></button>`, x, y, 'node', r.id);
 }
-function volLabel(v: VolumeInfo) { return `${v.path.replace(/\\$/, '')} ${v.label || 'Unidad local'}`; }
+function volLabel(v: VolumeInfo) { return `${v.path.replace(/\\$/, '')} ${v.label || t('header.drive.local')}`; }
 $('volBtn').addEventListener('click', e => {
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  openMenu(`<div class="menu-h">Unidades</div>`
+  openMenu(`<div class="menu-h">${tx('menu.drives')}</div>`
     + S.vols.map((v, i) => `<button type="button" role="menuitem" data-m="vol" data-v="${i}"${S.vol === v ? ' class="on"' : ''}>${esc(volLabel(v))}<span>${esc(v.fs)} · ${fmtB(v.total)}</span></button>`).join('')
-    + `<hr><div class="menu-h">Analizar una carpeta</div><form id="folderForm"><input id="folderIn" placeholder="C:\\Users\\…" value="${esc(S.target)}" aria-label="Ruta de la carpeta"><button class="btn sm" type="submit">Analizar</button></form>`,
+    + `<hr><div class="menu-h">${tx('menu.analyzeFolder')}</div><form id="folderForm"><input id="folderIn" placeholder="C:\\Users\\…" value="${esc(S.target)}" aria-label="${tx('menu.folderPath')}"><button class="btn sm" type="submit">${tx('menu.analyze')}</button></form>`,
     r.left, r.bottom + 6, 'vol');
 });
 menu.addEventListener('submit', e => {
@@ -699,10 +713,11 @@ menu.addEventListener('click', e => {
   const b = (e.target as HTMLElement).closest('button[data-m]') as HTMLElement; if (!b) return;
   const m = b.dataset.m!, kind = menu.dataset.kind; closeMenus();
   if (kind === 'vol') { if (m === 'vol') { S.vol = S.vols[+b.dataset.v!]; S.target = S.vol.path; renderVolume(); startScan(); } return; }
+  if (kind === 'lang') { setPreference(b.dataset.v!); return; }
   rowOf(+menu.dataset.id!).then(r => {
     switch (m) {
       case 'open': case 'reveal': case 'properties': doAction(m, r); break;
-      case 'copy': pathOf(r.id).then(p => copyText(p, 'Ruta copiada')); break;
+      case 'copy': pathOf(r.id).then(p => copyText(p, 'toast.pathCopied')); break;
       case 'zoom': zoomToRow(r); break;
       case 'tree': setTab('tree'); locate(r); break;
       case 'trash': select(r); S.confirmTrash = true; renderInspector(); break;
@@ -722,7 +737,7 @@ document.addEventListener('pointerdown', e => {
   if (!menu.hidden && !menu.contains(t)) menu.hidden = true;
   if (!qHelp.hidden && !qHelp.contains(t) && !qHelpBtn.contains(t)) { qHelp.hidden = true; qHelpBtn.setAttribute('aria-expanded', 'false'); }
 });
-const THEMES = ['system', 'dark', 'light'] as const, THEME_N = { system: 'sistema', dark: 'oscuro', light: 'claro' };
+const THEMES = ['system', 'dark', 'light'] as const;
 const THEME_ICON = {
   system: '<svg class="i" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="8.5" rx="1"/><path d="M6 14h4"/></svg>',
   dark: '<svg class="i" viewBox="0 0 16 16"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/></svg>',
@@ -730,9 +745,9 @@ const THEME_ICON = {
 };
 let themeIdx = -1; try { const t = localStorage.getItem('tesserafs-theme'); if (t) themeIdx = THEMES.indexOf(t as never); } catch { }
 function applyTheme() {
-  const t = THEMES[Math.max(0, themeIdx)];
-  if (themeIdx >= 0) { if (t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t); }
-  $('themeBtn').innerHTML = THEME_ICON[t]; $('themeBtn').title = 'Tema: ' + THEME_N[t];
+  const th = THEMES[Math.max(0, themeIdx)];
+  if (themeIdx >= 0) { if (th === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', th); }
+  $('themeBtn').innerHTML = THEME_ICON[th]; $('themeBtn').title = t('header.theme', { mode: th });
 }
 $('themeBtn').addEventListener('click', () => {
   themeIdx = (Math.max(0, themeIdx) + 1) % 3; applyTheme();
@@ -740,26 +755,40 @@ $('themeBtn').addEventListener('click', () => {
   renderMap();
 });
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => renderMap());
+// Idioma: automático (el del sistema) o uno fijo. Los nombres van siempre en su propio idioma y con su atributo lang.
+$('langBtn').addEventListener('click', e => {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect(), cur = preference();
+  const sys = LOCALES.find(l => l.code === systemLocale())!;
+  const item = (code: string, label: string, lang?: string) =>
+    `<button type="button" role="menuitemradio" aria-checked="${cur === code}" data-m="lang" data-v="${code}"${cur === code ? ' class="on"' : ''}${lang ? ` lang="${lang}"` : ''}>${esc(label)}</button>`;
+  openMenu(`<div class="menu-h">${tx('language.heading')}</div>`
+    + item('auto', t('language.auto', { name: sys.name }))
+    + LOCALES.map(l => item(l.code, l.name, l.code)).join('')
+    + (cur === PSEUDO ? item(PSEUDO, t('language.pseudo')) : ''),
+    r.left, r.bottom + 6, 'lang');
+});
 new MutationObserver(() => renderMap()).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 // ---------- Unidad, escaneo y barra de estado ----------
 function renderVolume() {
   const v = S.vol, folder = !v || S.target.replace(/\\$/, '').toUpperCase() !== v.path.replace(/\\$/, '').toUpperCase();
   $('volLetter').textContent = v ? v.path.slice(0, 2) : '—';
-  $('volName').textContent = folder ? S.target.split('\\').filter(Boolean).pop() || S.target : (v!.label || 'Unidad local');
+  $('volName').textContent = folder ? S.target.split('\\').filter(Boolean).pop() || S.target : (v!.label || t('header.drive.local'));
   if (v && v.total) {
     const used = (v.total - v.free) / v.total;
-    $('volPct').textContent = ' ' + fmtP(used).replace(',0', ''); ($('volMeter') as HTMLElement).style.width = (used * 100).toFixed(1) + '%';
-    $('volSub').textContent = `${fmtB(v.free)} libres de ${fmtB(v.total)}`;
+    $('volPct').textContent = ' ' + i18n.percent(used, 0); ($('volMeter') as HTMLElement).style.width = (used * 100).toFixed(1) + '%';
+    $('volSub').textContent = t('header.drive.free', { free: fmtB(v.free), total: fmtB(v.total) });
     ($('volMeter') as HTMLElement).style.background = used > .85 ? 'var(--warn)' : 'var(--accent)';
   } else { $('volPct').textContent = ''; $('volSub').textContent = S.target; }
 }
-function mapState(html: string | null) {
-  const el = $('mapState'); scanCard = null; el.classList.remove('fade'); el.hidden = !html;
-  if (html) el.innerHTML = `<div class="box">${html}</div>`;
+// Los avisos sobre el mapa se guardan como función para volver a componerlos si cambia el idioma
+let mapStateFn: (() => string) | null = null;
+function mapState(render: (() => string) | null) {
+  const el = $('mapState'); scanCard = null; mapStateFn = render; el.classList.remove('fade'); el.hidden = !render;
+  if (render) el.innerHTML = `<div class="box">${render()}</div>`;
 }
-function fadeMapState() { const el = $('mapState'); scanCard = null; el.classList.add('fade'); setTimeout(() => { el.hidden = true; el.classList.remove('fade'); }, 260); }
-const PHASE: Record<string, string> = { starting: 'Preparando', 'mft-read': 'Leyendo la MFT', walk: 'Recorriendo carpetas', link: 'Enlazando el árbol', aggregate: 'Sumando tamaños', done: 'Listo', error: 'Error' };
+function fadeMapState() { const el = $('mapState'); scanCard = null; mapStateFn = null; el.classList.add('fade'); setTimeout(() => { el.hidden = true; el.classList.remove('fade'); }, 260); }
+const phaseKey = (p: string) => i18n.has('phase.' + p) ? 'phase.' + p : '';
 
 // Tarjeta de progreso: se construye una vez y sólo cambian sus textos, así nada se mueve de sitio.
 // Con una unidad completa el progreso es real (bytes leídos frente al espacio usado) y el mosaico se llena en orden disperso.
@@ -773,12 +802,13 @@ function expectedBytes() {
 function openScanCard() {
   const el = $('mapState'), cols = CATEGORIES.map(c => rgb(c.color)), expected = expectedBytes();
   let tiles = ''; for (let i = 0; i < MOSAIC; i++) tiles += `<i style="--c:${cols[(i * 7 + (i >> 4) * 3) % cols.length]};--i:${i}"></i>`;
-  el.classList.remove('fade'); el.hidden = false;
+  el.classList.remove('fade'); el.hidden = false; mapStateFn = null;
+  // data-i18n en los rótulos: si cambia el idioma durante el escaneo, translateDom los actualiza sin rehacer la tarjeta
   el.innerHTML = `<div class="scan-card${expected ? '' : ' indet'}" role="status">`
     + `<div class="scan-mosaic" aria-hidden="true">${tiles}</div>`
-    + `<div class="scan-title"><h2>Preparando</h2><span class="scan-pct"></span></div>`
+    + `<div class="scan-title"><h2 data-i18n="phase.starting">${tx('phase.starting')}</h2><span class="scan-pct"></span></div>`
     + `<div class="scan-track"><i></i></div>`
-    + `<dl class="scan-nums"><div><dt>Elementos</dt><dd>0</dd></div><div><dt>Leído</dt><dd>0 B</dd></div><div><dt>Tiempo</dt><dd>0,0 s</dd></div></dl>`
+    + `<dl class="scan-nums"><div><dt data-i18n="scan.items">${tx('scan.items')}</dt><dd>${fmtN(0)}</dd></div><div><dt data-i18n="scan.read">${tx('scan.read')}</dt><dd>${fmtB(0)}</dd></div><div><dt data-i18n="scan.time">${tx('scan.time')}</dt><dd>${fmtS(0)}</dd></div></dl>`
     + `<p class="scan-path">${esc(S.target)}</p></div>`;
   const q1 = (s: string) => el.querySelector(s) as HTMLElement, dd = el.querySelectorAll('.scan-nums dd');
   scanCard = { phase: q1('.scan-title h2'), pct: q1('.scan-pct'), bar: q1('.scan-track i'), entries: dd[0] as HTMLElement, bytes: dd[1] as HTMLElement,
@@ -791,20 +821,21 @@ function showProgress(p: ScanProgress) {
   // El motor manda `fraction` cuando conoce el total (MFT); si no, se estima con los bytes frente al espacio usado
   if (p.fraction != null && !c.expected) { c.expected = 1; $('mapState').querySelector('.scan-card')?.classList.remove('indet'); $('scanBar').hidden = false; }
   const frac = p.fraction != null ? Math.min(1, p.fraction) : c.expected ? (late ? 1 : Math.min(.99, p.bytes / c.expected)) : 0;
-  c.phase.textContent = PHASE[p.phase] || p.phase;
+  const pk = phaseKey(p.phase);
+  if (pk) { c.phase.dataset.i18n = pk; c.phase.textContent = tk(pk); } else { delete c.phase.dataset.i18n; c.phase.textContent = p.phase; }
   c.entries.textContent = fmtN(p.entries); c.bytes.textContent = fmtB(p.bytes); c.time.textContent = fmtS(p.elapsedMs);
   if (p.detail) c.path.textContent = shortPath(p.detail);
   if (c.expected) {
-    const pct = Math.floor(frac * 100) + ' %';
+    const pct = i18n.percent(Math.floor(frac * 100) / 100, 0);
     c.pct.textContent = pct; c.bar.style.transform = `scaleX(${frac})`;
     ($('scanBar').firstElementChild as HTMLElement).style.transform = `scaleX(${frac})`;
     const lit = Math.round(frac * MOSAIC); for (let i = c.lit; i < lit; i++) c.tiles[MOSAIC_ORDER[i]].classList.add('on'); c.lit = Math.max(c.lit, lit);
-    $('scanTxt').textContent = 'Escaneando · ' + pct;
-  } else $('scanTxt').textContent = 'Escaneando · ' + fmtN(p.entries);
+    $('scanTxt').textContent = t('header.scanProgress', { value: pct });
+  } else $('scanTxt').textContent = t('header.scanProgress', { value: fmtN(p.entries) });
 }
 export async function startScan() {
   if (S.scanning) return; S.scanning = true; closeMenus(); tip.hidden = true;
-  const btn = $('scanBtn') as HTMLButtonElement; btn.disabled = true; btn.querySelector('span')!.textContent = 'Escaneando…';
+  const btn = $('scanBtn') as HTMLButtonElement; btn.disabled = true; btn.querySelector('span')!.textContent = t('header.scanning');
   $('scanBar').hidden = !expectedBytes(); ($('scanBar').firstElementChild as HTMLElement).style.transform = 'scaleX(0)';
   scanCard = null; showProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0 });
   try {
@@ -814,37 +845,43 @@ export async function startScan() {
     S.chain = [S.root]; S.expanded = new Set([S.root.id]); S.slice = null;
     if (res.volume) { S.vol = S.vols.find(v => v.path === res.volume!.path) || res.volume; }
     const ext = await B.extStats(S.root.id); setExtRanking(ext.map(e => e.ext)); S.ext = ext;
-    $('enginePill').hidden = false; $('enginePill').textContent = res.engine === 'mft' ? 'MFT' : 'Recorrido';
-    $('scanTxt').textContent = `${fmtS(res.elapsedMs)} · ${fmtN(res.entries)} elementos`;
+    $('enginePill').hidden = false; renderScanSummary();
     renderVolume(); updateCrumbs(); renderComposition();
     await rebuildTree(); await loadSlice(true);
     fadeMapState(); wrap.classList.remove('reveal'); void wrap.offsetWidth; wrap.classList.add('reveal');
     const big = await B.search({ query: '', root: S.root.id, limit: 1 });
     if (big.rows[0]) { S.pathCache.set(big.rows[0].id, big.rows[0].path); await locate(remember(big.rows[0])); } else select(S.root);
     $('cleanCount').textContent = ''; if (S.tab === 'clean') renderClean(); if (S.tab === 'files') loadFiles();
-    if (res.warnings.length && B.kind !== 'demo') toast(res.warnings[0]);
+    if (res.warnings.length && B.kind !== 'demo') toast(res.warnings.map(msgText).join(' · '));
     applyHash();
   } catch (e) {
-    mapState(`<h2>No se pudo escanear</h2><p>${esc((e as Error).message)}</p>`);
+    mapState(() => `<h2>${tx('state.error.title')}</h2><p>${esc(msgText(e))}</p>`);
   } finally {
-    S.scanning = false; btn.disabled = false; btn.querySelector('span')!.textContent = 'Escanear'; $('scanBar').hidden = true; renderStatus();
+    S.scanning = false; btn.disabled = false; btn.querySelector('span')!.textContent = t('header.scan'); $('scanBar').hidden = true; renderStatus();
   }
 }
+function renderScanSummary() {
+  const res = S.scan; if (!res) return;
+  $('enginePill').textContent = t(res.engine === 'mft' ? 'header.engine.mft' : 'header.engine.walk');
+  $('scanTxt').textContent = t('header.scanDone', { time: fmtS(res.elapsedMs), count: res.entries });
+}
 $('scanBtn').addEventListener('click', () => startScan());
-// Enlaces directos a una vista: #archivos, #limpieza, #extension, #antiguedad, #relieve, #guia
+// Enlaces directos a una vista, en inglés o en español: #files, #clean, #extension, #age, #relief, #guide
+// (#archivos, #limpieza, #antiguedad, #relieve, #guia). #pseudo activa la pseudolocalización.
 function applyHash() {
-  const h = location.hash.slice(1).toLowerCase().split(/[,+]/);
-  if (h.includes('archivos')) setTab('files');
-  if (h.includes('limpieza')) setTab('clean');
-  if (h.includes('extension')) setColorMode('ext');
-  if (h.includes('antiguedad')) setColorMode('age');
-  if (h.includes('relieve')) ($('styleSeg').querySelector('[data-style="relief"]') as HTMLElement).click();
-  if (h.includes('guia')) $('notesBtn').click();
+  const h = location.hash.slice(1).toLowerCase().split(/[,+]/), has = (...k: string[]) => k.some(x => h.includes(x));
+  if (has('files', 'archivos')) setTab('files');
+  if (has('clean', 'limpieza')) setTab('clean');
+  if (has('extension')) setColorMode('ext');
+  if (has('age', 'antiguedad')) setColorMode('age');
+  if (has('relief', 'relieve')) ($('styleSeg').querySelector('[data-style="relief"]') as HTMLElement).click();
+  if (has('guide', 'guia')) $('notesBtn').click();
 }
 export function renderStatus() {
   const r = S.sel || zoomRow(), z = zoomRow();
-  $('st1').innerHTML = r ? `Seleccionado: <b>${esc(nameOf(r))}</b> · ${fmtB(r.size)}${r.isDir ? ' · ' + fmtN(r.files) + ' archivos' : ''}` : '';
-  $('st2').innerHTML = z ? `Mapa: <b>${esc(S.pathCache.get(z.id) || nameOf(z))}</b> · ${fmtB(z.size)}` : '';
+  $('st1').innerHTML = !r ? '' : r.isDir ? html('status.selectedFolder', { name: nameOf(r), size: fmtB(r.size), count: r.files })
+    : html('status.selected', { name: nameOf(r), size: fmtB(r.size) });
+  $('st2').innerHTML = z ? html('status.map', { path: S.pathCache.get(z.id) || nameOf(z), size: fmtB(z.size) }) : '';
 }
 
 // ---------- Teclado y tamaño ----------
@@ -898,22 +935,39 @@ splitter('split2', '--w-rail', 'x', -1, () => box2('.rail').width, (r, e) => r.r
 splitter('split3', '--h-rail', 'y', -1, () => box2('.rail').height, (r, e) => r.bottom - e.clientY - 5, r => [140, r.height - 10 - 240]);
 
 // ---------- Arranque ----------
+const EDITION: Record<Backend['kind'], [MessageKey, MessageKey]> = {
+  demo: ['app.edition.demo', 'app.footer.demo'], tauri: ['app.edition.desktop', 'app.footer.local'], http: ['app.edition.portable', 'app.footer.local'],
+};
+function renderEdition() {
+  const [tag, foot] = EDITION[B.kind];
+  $('editionTag').textContent = t(tag); $('editionTag').title = B.kind === 'demo' ? t('app.edition.title') : '';
+  $('st3').textContent = `${t(foot)} · v${VERSION}`;
+}
+/** Vuelve a pintar todo lo que tiene texto o cifras al cambiar de idioma; el estado (selección, zoom, filtros) se conserva. */
+function relocalize() {
+  menu.hidden = true; tip.hidden = true; tipKey = '';
+  applyTheme(); renderEdition(); renderVolume(); if (!S.scanning) renderScanSummary(); updateCrumbs(); renderComposition(); renderInspector(); renderStatus();
+  if (S.hl) $('hlTxt').textContent = hlText(S.hl);
+  if (S.scanning) $('scanBtn').querySelector('span')!.textContent = t('header.scanning');
+  if (mapStateFn) $('mapState').innerHTML = `<div class="box">${mapStateFn()}</div>`;
+  treeVL.paint(); filesVL.paint(); renderMap();
+  if (S.tab === 'files') loadFiles();
+  if (S.tab === 'clean') renderClean();
+}
 export async function startApp(backend: Backend) {
   B = backend;
-  const ed: Record<string, [string, string]> = {
-    demo: ['Demo', 'Datos de ejemplo · nada toca tu disco'],
-    tauri: ['Escritorio', 'Nada sale de tu equipo'],
-    http: ['Portable', 'Nada sale de tu equipo'],
-  };
-  $('editionTag').textContent = ed[B.kind][0]; $('st3').textContent = `${ed[B.kind][1]} · v${VERSION}`;
-  applyTheme(); updateSortHead(); renderInspector(); renderComposition();
-  try { S.vols = await B.volumes(); } catch (e) { toast('No se pudieron leer las unidades: ' + (e as Error).message); }
+  translateDom(); onLocaleChange(relocalize);
+  renderEdition(); applyTheme(); updateSortHead(); renderInspector(); renderComposition();
+  try { S.vols = await B.volumes(); } catch (e) { toast(t('toast.volumesFailed', { error: msgText(e) })); }
   S.vol = S.vols.find(v => /^C:/i.test(v.path)) || S.vols[0] || null; if (S.vol) S.target = S.vol.path;
   renderVolume();
   B.elevation().then(el => {
     const btn = $('elevBtn'); btn.hidden = el.elevated || !el.canElevate;
-    btn.onclick = async () => { mapState('<h2>Reiniciando como administrador…</h2><p>Acepta el aviso de Windows. Se abrirá una ventana nueva.</p>'); try { await B.relaunchElevated(); } catch (e) { mapState(null); toast((e as Error).message); } };
+    btn.onclick = async () => {
+      mapState(() => `<h2>${tx('state.elevating.title')}</h2><p>${tx('state.elevating.body')}</p>`);
+      try { await B.relaunchElevated(); } catch (e) { mapState(null); toast(msgText(e)); }
+    };
   }).catch(() => { });
   if (B.kind === 'demo') startScan();
-  else mapState(`<h2>Elige qué analizar</h2><p>Pulsa <b>Escanear</b> para analizar ${esc(S.target)}, o elige otra unidad o carpeta en el selector.</p>`);
+  else mapState(() => `<h2>${tx('state.choose.title')}</h2><p>${html('state.choose.body', { target: S.target })}</p>`);
 }
