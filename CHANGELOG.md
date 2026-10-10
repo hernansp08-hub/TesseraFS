@@ -4,6 +4,11 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.5.0] - 2026-10-10
+
+### Añadido
+- **dups:** búsqueda de archivos duplicados en los dos motores y pestaña Duplicados
+
 ## [0.4.0] - 2026-10-10
 
 ### Añadido
@@ -67,7 +72,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.4.0...HEAD
+[Sin publicar]: ../../compare/v0.5.0...HEAD
+[0.5.0]: ../../compare/v0.4.0...v0.5.0
 [0.4.0]: ../../compare/v0.3.0...v0.4.0
 [0.3.0]: ../../compare/v0.2.0...v0.3.0
 [0.2.0]: ../../compare/v0.1.1...v0.2.0
