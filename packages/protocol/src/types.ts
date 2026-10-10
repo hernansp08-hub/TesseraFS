@@ -89,6 +89,8 @@ export interface Backend {
   readonly kind: 'demo' | 'tauri' | 'http';
   volumes(): Promise<VolumeInfo[]>;
   scan(req: ScanRequest, onProgress: (p: ScanProgress) => void): Promise<ScanResult>;
+  /** Pide parar el escaneo en curso: `scan` se rechaza con `error.cancelled`. Devuelve false si no había ninguno. */
+  cancelScan(): Promise<boolean>;
   slice(root: number, minBytes: number, maxNodes: number): Promise<ArrayBuffer>;
   children(req: ChildrenRequest): Promise<ChildrenResponse>;
   search(req: SearchRequest): Promise<SearchResponse>;

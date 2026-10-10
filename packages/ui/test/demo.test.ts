@@ -28,3 +28,12 @@ test('demo: cumple el contrato (slice, hijos, búsqueda, extensiones)', async ()
   const ext = await b.extStats(root.id);
   expect(ext[0].ext).toBe('cok');
 });
+
+test('demo: cancelar el escaneo lo rechaza con error.cancelled', async () => {
+  const b = new DemoBackend();
+  expect(await b.cancelScan()).toBe(false);
+  const p = b.scan({ path: 'C:\\', engine: 'auto' }, () => { });
+  expect(await b.cancelScan()).toBe(true);
+  await expect(p).rejects.toMatchObject({ code: 'error.cancelled' });
+  expect(await b.cancelScan()).toBe(false);
+});

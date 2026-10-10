@@ -707,7 +707,7 @@ $('volBtn').addEventListener('click', e => {
 });
 menu.addEventListener('submit', e => {
   e.preventDefault(); const v = ($('folderIn') as HTMLInputElement).value.trim(); if (!v) return;
-  closeMenus(); S.target = v; S.vol = S.vols.find(x => v.toUpperCase().startsWith(x.path.toUpperCase())) || null; renderVolume(); startScan();
+  closeMenus(); analyzeFolder(v);
 });
 menu.addEventListener('click', e => {
   const b = (e.target as HTMLElement).closest('button[data-m]') as HTMLElement; if (!b) return;
@@ -784,7 +784,7 @@ function renderVolume() {
 // Los avisos sobre el mapa se guardan como función para volver a componerlos si cambia el idioma
 let mapStateFn: (() => string) | null = null;
 function mapState(render: (() => string) | null) {
-  const el = $('mapState'); scanCard = null; mapStateFn = render; el.classList.remove('fade'); el.hidden = !render;
+  const el = $('mapState'); scanCard = null; mapStateFn = render; el.classList.remove('fade', 'drives'); el.hidden = !render;
   if (render) el.innerHTML = `<div class="box">${render()}</div>`;
 }
 function fadeMapState() { const el = $('mapState'); scanCard = null; mapStateFn = null; el.classList.add('fade'); setTimeout(() => { el.hidden = true; el.classList.remove('fade'); }, 260); }
@@ -802,14 +802,15 @@ function expectedBytes() {
 function openScanCard() {
   const el = $('mapState'), cols = CATEGORIES.map(c => rgb(c.color)), expected = expectedBytes();
   let tiles = ''; for (let i = 0; i < MOSAIC; i++) tiles += `<i style="--c:${cols[(i * 7 + (i >> 4) * 3) % cols.length]};--i:${i}"></i>`;
-  el.classList.remove('fade'); el.hidden = false; mapStateFn = null;
+  el.classList.remove('fade', 'drives'); el.hidden = false; mapStateFn = null;
   // data-i18n en los rótulos: si cambia el idioma durante el escaneo, translateDom los actualiza sin rehacer la tarjeta
   el.innerHTML = `<div class="scan-card${expected ? '' : ' indet'}" role="status">`
     + `<div class="scan-mosaic" aria-hidden="true">${tiles}</div>`
     + `<div class="scan-title"><h2 data-i18n="phase.starting">${tx('phase.starting')}</h2><span class="scan-pct"></span></div>`
     + `<div class="scan-track"><i></i></div>`
     + `<dl class="scan-nums"><div><dt data-i18n="scan.items">${tx('scan.items')}</dt><dd>${fmtN(0)}</dd></div><div><dt data-i18n="scan.read">${tx('scan.read')}</dt><dd>${fmtB(0)}</dd></div><div><dt data-i18n="scan.time">${tx('scan.time')}</dt><dd>${fmtS(0)}</dd></div></dl>`
-    + `<p class="scan-path">${esc(S.target)}</p></div>`;
+    + `<p class="scan-path">${esc(S.target)}</p>`
+    + `<button class="btn sm ghost scan-cancel" type="button" data-i18n="header.cancel" data-i18n-title="scan.cancel.title" title="${tx('scan.cancel.title')}">${tx('header.cancel')}</button></div>`;
   const q1 = (s: string) => el.querySelector(s) as HTMLElement, dd = el.querySelectorAll('.scan-nums dd');
   scanCard = { phase: q1('.scan-title h2'), pct: q1('.scan-pct'), bar: q1('.scan-track i'), entries: dd[0] as HTMLElement, bytes: dd[1] as HTMLElement,
     time: dd[2] as HTMLElement, path: q1('.scan-path'), tiles: [...el.querySelectorAll('.scan-mosaic i')] as HTMLElement[], lit: 0, expected };
@@ -835,7 +836,8 @@ function showProgress(p: ScanProgress) {
 }
 export async function startScan() {
   if (S.scanning) return; S.scanning = true; closeMenus(); tip.hidden = true;
-  const btn = $('scanBtn') as HTMLButtonElement; btn.disabled = true; btn.querySelector('span')!.textContent = t('header.scanning');
+  // Durante el escaneo el botón principal pasa a Cancelar
+  const btn = $('scanBtn') as HTMLButtonElement; btn.disabled = false; btn.classList.add('cancel'); btn.querySelector('span')!.textContent = t('header.cancel');
   $('scanBar').hidden = !expectedBytes(); ($('scanBar').firstElementChild as HTMLElement).style.transform = 'scaleX(0)';
   scanCard = null; showProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0 });
   try {
@@ -855,17 +857,62 @@ export async function startScan() {
     if (res.warnings.length && B.kind !== 'demo') toast(res.warnings.map(msgText).join(' · '));
     applyHash();
   } catch (e) {
-    mapState(() => `<h2>${tx('state.error.title')}</h2><p>${esc(msgText(e))}</p>`);
+    if ((e as { code?: string }).code === 'error.cancelled') await afterCancel();
+    else mapState(() => `<h2>${tx('state.error.title')}</h2><p>${esc(msgText(e))}</p>`);
   } finally {
-    S.scanning = false; btn.disabled = false; btn.querySelector('span')!.textContent = t('header.scan'); $('scanBar').hidden = true; renderStatus();
+    S.scanning = false; btn.disabled = false; btn.classList.remove('cancel'); btn.querySelector('span')!.textContent = t('header.scan'); $('scanBar').hidden = true; renderStatus();
   }
 }
+async function cancelScan() {
+  if (!S.scanning) return;
+  const btn = $('scanBtn') as HTMLButtonElement; btn.disabled = true;
+  try { await B.cancelScan(); } catch (e) { btn.disabled = false; toast(msgText(e)); }
+}
+/** Tras cancelar: si el motor conserva el escaneo anterior se vuelve a él; si no, a la pantalla de unidades. */
+async function afterCancel() {
+  const kept = S.root ? await B.nodeInfo(S.root.id).then(() => true, () => false) : false;
+  if (kept) { fadeMapState(); renderScanSummary(); toast(t('toast.scanCancelled')); return; }
+  S.scan = null; S.root = null; S.chain = []; S.slice = null; S.sel = null; S.hl = null; S.clean = null; S.files = []; S.ext = [];
+  S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.expanded.clear();
+  $('enginePill').hidden = true; $('scanTxt').textContent = ''; $('hlChip').hidden = true; $('cleanCount').textContent = ''; $('filesCount').textContent = '';
+  await rebuildTree(); renderMap(); updateCrumbs(); renderComposition(); renderInspector(); renderStatus(); filesVL.setCount(0);
+  if (S.tab === 'clean') renderClean();
+  showDrives();
+}
+// Pantalla inicial: todas las unidades con su uso, y una carpeta concreta
+function drivesHTML() {
+  const cards = S.vols.map((v, i) => {
+    const used = v.total ? (v.total - v.free) / v.total : 0;
+    return `<button class="drive-card${S.vol === v ? ' on' : ''}" type="button" data-vol="${i}">`
+      + `<span class="dc-letter">${esc(v.path.replace(/\\$/, ''))}</span>`
+      + `<span class="dc-body"><span class="dc-name"><b>${esc(v.label || t('header.drive.local'))}</b><small>${esc(v.fs)}${v.total ? ' · ' + esc(i18n.percent(used, 0)) : ''}</small></span>`
+      + `<span class="meter"><i class="used" style="width:${(used * 100).toFixed(1)}%;background:${used > .85 ? 'var(--warn)' : 'var(--accent)'}"></i></span>`
+      + (v.total ? `<small>${tx('header.drive.free', { free: fmtB(v.free), total: fmtB(v.total) })}</small>` : '') + `</span></button>`;
+  }).join('');
+  return `<h2>${tx('state.choose.title')}</h2><p>${tx('state.choose.body')}</p>`
+    + (cards ? `<div class="drive-grid">${cards}</div>` : `<p class="note">${tx('drives.empty')}</p>`)
+    + `<form class="drive-folder" data-form="folder"><input name="path" placeholder="C:\\Users\\…" value="${esc(S.target)}" aria-label="${tx('menu.folderPath')}" spellcheck="false"><button class="btn sm" type="submit">${tx('menu.analyze')}</button></form>`;
+}
+function showDrives() { mapState(drivesHTML); $('mapState').classList.add('drives'); }
+function analyzeFolder(v: string) {
+  S.target = v; S.vol = S.vols.find(x => v.toUpperCase().startsWith(x.path.toUpperCase())) || null; renderVolume(); startScan();
+}
+$('mapState').addEventListener('click', e => {
+  const t = e.target as HTMLElement;
+  if (t.closest('.scan-cancel')) { cancelScan(); return; }
+  const card = t.closest('[data-vol]') as HTMLElement;
+  if (card) { S.vol = S.vols[+card.dataset.vol!]; S.target = S.vol.path; renderVolume(); startScan(); }
+});
+$('mapState').addEventListener('submit', e => {
+  const f = (e.target as HTMLElement).closest('[data-form="folder"]') as HTMLFormElement; if (!f) return;
+  e.preventDefault(); const v = (f.elements.namedItem('path') as HTMLInputElement).value.trim(); if (v) analyzeFolder(v);
+});
 function renderScanSummary() {
   const res = S.scan; if (!res) return;
   $('enginePill').textContent = t(res.engine === 'mft' ? 'header.engine.mft' : 'header.engine.walk');
   $('scanTxt').textContent = t('header.scanDone', { time: fmtS(res.elapsedMs), count: res.entries });
 }
-$('scanBtn').addEventListener('click', () => startScan());
+$('scanBtn').addEventListener('click', () => S.scanning ? cancelScan() : startScan());
 // Enlaces directos a una vista, en inglés o en español: #files, #clean, #extension, #age, #relief, #guide
 // (#archivos, #limpieza, #antiguedad, #relieve, #guia). #pseudo activa la pseudolocalización.
 function applyHash() {
@@ -889,6 +936,7 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'f')) { e.preventDefault(); q.focus(); q.select(); return; }
   if (e.key === 'Escape') {
     if (!menu.hidden || !qHelp.hidden || !notes.hidden) { closeMenus(); return; }
+    if (S.scanning) { cancelScan(); return; }
     if (S.confirmTrash) { S.confirmTrash = false; renderInspector(); return; }
     if (S.hl) { setHL(null); if (S.tab === 'files') loadFiles(); return; }
   }
@@ -948,7 +996,7 @@ function relocalize() {
   menu.hidden = true; tip.hidden = true; tipKey = '';
   applyTheme(); renderEdition(); renderVolume(); if (!S.scanning) renderScanSummary(); updateCrumbs(); renderComposition(); renderInspector(); renderStatus();
   if (S.hl) $('hlTxt').textContent = hlText(S.hl);
-  if (S.scanning) $('scanBtn').querySelector('span')!.textContent = t('header.scanning');
+  if (S.scanning) $('scanBtn').querySelector('span')!.textContent = t('header.cancel');
   if (mapStateFn) $('mapState').innerHTML = `<div class="box">${mapStateFn()}</div>`;
   treeVL.paint(); filesVL.paint(); renderMap();
   if (S.tab === 'files') loadFiles();
@@ -969,5 +1017,5 @@ export async function startApp(backend: Backend) {
     };
   }).catch(() => { });
   if (B.kind === 'demo') startScan();
-  else mapState(() => `<h2>${tx('state.choose.title')}</h2><p>${html('state.choose.body', { target: S.target })}</p>`);
+  else showDrives();
 }

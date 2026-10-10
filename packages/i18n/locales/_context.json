@@ -10,7 +10,7 @@
   "key.delete": "Key name as printed on keyboards in your language, usually abbreviated (Spanish: Supr, German: Entf).",
 
   "header.scan": "Verb on the main button. Keep it short: it sits next to the drive selector.",
-  "header.scanning": "Button label while scanning. Short.",
+  "header.cancel": "The main button turns into this while scanning: it stops the scan. Short.",
   "header.scanDone": "Shown after a scan. {time} is a formatted duration such as “2.8 sec”.",
   "header.engine.mft": "Name of the fast engine. MFT is the NTFS Master File Table: usually left as is.",
   "header.engine.walk": "Name of the slower engine that walks folders one by one. One short word on a small pill.",

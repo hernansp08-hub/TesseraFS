@@ -170,6 +170,16 @@ test('engine: errores con código (ruta no válida, no es carpeta, no existe, si
   expect(e.nodeInfo(ok.rootId).size).toBe(ok.bytes);
 });
 
+test('engine: cancelar → error.cancelled, y se puede volver a escanear', async () => {
+  const e = new TesseraEngine({ threads: 0 });
+  expect(e.cancel()).toBe(false); // sin escaneo en curso
+  const p = e.scan({ path: R, engine: 'walk' });
+  expect(e.cancel()).toBe(true);
+  expect((await rejected(p)).msg).toEqual({ code: 'error.cancelled', message: 'Scan cancelled' });
+  expect(e.scanning).toBe(false);
+  expect((await e.scan({ path: R, engine: 'walk' })).entries).toBeGreaterThan(0);
+});
+
 test('http: un error del motor viaja como EngineMessage JSON con su estado', async () => {
   const e = new TesseraEngine({ threads: 0 });
   await e.scan({ path: R, engine: 'walk' });

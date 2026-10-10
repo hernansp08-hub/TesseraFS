@@ -141,6 +141,7 @@ async function main() {
           return fail(e); // EngineError → 400/409; cualquier otro → 500 error.internal
         } finally { if (sampler) clearInterval(sampler); }
       }
+      case 'POST /api/cancel': return json(engine.cancel());
       case 'GET /api/slice': {
         const bytes = engine.slice(num(q.get('root'), -1), num(q.get('min'), 0), num(q.get('max'), 20000));
         return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' } });

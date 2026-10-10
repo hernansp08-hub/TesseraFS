@@ -22,6 +22,7 @@ export class TauriBackend implements Backend {
     const ch = new this.core.Channel<ScanProgress>(); ch.onmessage = onProgress;
     return this.call<ScanResult>('scan', { path: req.path, engine: req.engine, onProgress: ch });
   }
+  cancelScan() { return this.call<boolean>('cancel_scan'); }
   async slice(root: number, minBytes: number, maxNodes: number) {
     const r = await this.call<ArrayBuffer | number[]>('slice', { root, minBytes, maxNodes });
     return r instanceof ArrayBuffer ? r : new Uint8Array(r).buffer;
@@ -71,6 +72,7 @@ export class HttpBackend implements Backend {
     }).catch(() => { });
     try { return await this.post<ScanResult>('/api/scan', req); } finally { setTimeout(() => ctrl.abort(), 300); }
   }
+  cancelScan() { return this.post<boolean>('/api/cancel', {}); }
   async slice(root: number, minBytes: number, maxNodes: number) {
     return (await this.req('/api/slice?' + this.qs({ root, min: minBytes, max: maxNodes }))).arrayBuffer();
   }

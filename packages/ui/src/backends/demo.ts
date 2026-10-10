@@ -20,6 +20,8 @@ export class DemoBackend implements Backend {
   private N: DNode[] = [];
   private root!: DNode;
   private ready = false;
+  private scanning = false;
+  private cancelled = false;
 
   private ensure() {
     if (this.ready) return;
@@ -42,21 +44,28 @@ export class DemoBackend implements Backend {
   async volumes() { return [VOLUME]; }
 
   async scan(_req: ScanRequest, onProgress: (p: ScanProgress) => void): Promise<ScanResult> {
+    if (this.scanning) throw fail('error.scanBusy', 'A scan is already in progress');
     const t0 = performance.now(); this.ensure();
     const total = this.N.length, dur = 2600;
-    await new Promise<void>(res => {
-      const step = () => {
-        const el = performance.now() - t0, p = Math.min(1, el / dur);
-        onProgress({ phase: p < .72 ? 'mft-read' : p < .9 ? 'link' : 'aggregate', entries: Math.round(Math.min(1, p / .72) * total), bytes: this.root.size * p, elapsedMs: el });
-        if (p < 1) setTimeout(step, 60); else res();
-      };
-      step();
-    });
+    this.scanning = true; this.cancelled = false;
+    try {
+      await new Promise<void>((res, rej) => {
+        const step = () => {
+          if (this.cancelled) { rej(fail('error.cancelled', 'Scan cancelled')); return; }
+          const el = performance.now() - t0, p = Math.min(1, el / dur);
+          onProgress({ phase: p < .72 ? 'mft-read' : p < .9 ? 'link' : 'aggregate', entries: Math.round(Math.min(1, p / .72) * total), bytes: this.root.size * p, elapsedMs: el });
+          if (p < 1) setTimeout(step, 60); else res();
+        };
+        step();
+      });
+    } finally { this.scanning = false; }
     const el = performance.now() - t0;
     onProgress({ phase: 'done', entries: total, bytes: this.root.size, elapsedMs: el });
     return { rootId: 0, rootPath: 'C:\\', engine: 'mft', entries: total, files: this.root.files, dirs: this.root.dirs, bytes: this.root.size,
       elapsedMs: el, volume: VOLUME, warnings: [{ code: 'scan.demoData', message: 'Sample data: no disk was read.' }] };
   }
+
+  async cancelScan() { if (!this.scanning) return false; this.cancelled = true; return true; }
 
   async slice(root: number, minBytes: number, maxNodes: number) {
     const N = this.N; this.node(root);

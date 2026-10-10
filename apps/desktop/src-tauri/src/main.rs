@@ -65,9 +65,10 @@ async fn scan(st: St<'_>, path: String, engine: Option<EngineChoice>, on_progres
     if st.busy.swap(true, SeqCst) {
         return Err(msg::scan_busy());
     }
+    // Se limpia antes de lanzar el trabajo: una cancelación que llegue justo después no se pierde
+    st.cancel.store(false, SeqCst);
     let job = st.clone();
     let r = tauri::async_runtime::spawn_blocking(move || {
-        job.cancel.store(false, SeqCst);
         let cb = move |p: ScanProgress| {
             let _ = on_progress.send(p);
         };
@@ -81,6 +82,17 @@ async fn scan(st: St<'_>, path: String, engine: Option<EngineChoice>, on_progres
     .map_err(join_error);
     st.busy.store(false, SeqCst);
     r?
+}
+
+/// Pide parar el escaneo en curso; el comando `scan` pendiente termina con `error.cancelled`.
+/// El escaneo anterior, si lo había, sigue cargado.
+#[tauri::command]
+fn cancel_scan(st: St<'_>) -> bool {
+    let busy = st.busy.load(SeqCst);
+    if busy {
+        st.cancel.store(true, SeqCst);
+    }
+    busy
 }
 
 #[tauri::command]
@@ -193,6 +205,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             volumes,
             scan,
+            cancel_scan,
             slice,
             children,
             search,

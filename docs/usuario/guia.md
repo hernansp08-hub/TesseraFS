@@ -86,12 +86,15 @@ Cada versión se publica en la página **Releases** del repositorio con dos zips
 
 ## 2. Primer escaneo
 
-1. Elige la unidad en el selector de la izquierda de la cabecera. Muestra el nombre, el porcentaje usado y el espacio libre; la barra se vuelve ámbar por encima del 85 %.
-2. Pulsa **Escanear**.
+Al abrir la app, la pantalla de inicio muestra **todas las unidades** con su uso y su espacio libre; la barra se vuelve ámbar por encima del 85 %. Pulsa una para escanearla, o escribe abajo la ruta de una carpeta y pulsa **Analizar**.
+
+También puedes elegir la unidad en el selector de la cabecera y pulsar **Escanear**.
 
 ![Tarjeta de progreso durante un escaneo](../img/escaneo.png)
 
 Mientras escanea, la tarjeta central muestra la fase, el porcentaje, los elementos encontrados, los datos leídos y el tiempo. El mosaico se llena con el **progreso real**.
+
+**Cancelar:** durante el escaneo, el botón Escanear pasa a **Cancelar** (también vale **Esc** o el botón de la tarjeta). Si ya tenías un escaneo anterior y el motor lo conserva, se vuelve a él; si no, vuelves a la pantalla de unidades.
 
 ### Modo rápido (con administrador) y modo normal
 

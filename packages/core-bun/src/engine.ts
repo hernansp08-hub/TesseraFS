@@ -145,6 +145,7 @@ export class TesseraEngine {
   store: Store | null = null;
   result: ScanResult | null = null;
   scanning = false;
+  private cancelled = false;
   readonly elevated = isElevated();
   private opts: EngineOptions;
 
@@ -160,7 +161,8 @@ export class TesseraEngine {
     // que así sigue sirviendo a la interfaz
     const path = normalizePath(req.path);
     checkRoot(path);
-    this.scanning = true;
+    this.scanning = true; this.cancelled = false;
+    const isCancelled = () => this.cancelled;
     // el árbol anterior se suelta ya: sus ids dejan de valer al terminar y así no conviven dos árboles en memoria
     this.store = null; this.result = null;
     Bun.gc(true);
@@ -185,7 +187,7 @@ export class TesseraEngine {
         else if (!this.elevated) warnings.push(msg('scan.mftNeedsAdmin'));
         else {
           try {
-            const r = await mftScan(path, p => prog({ phase: p.phase, entries: p.entries, bytes: p.bytes, elapsedMs: ms(), detail: p.detail, fraction: p.fraction }));
+            const r = await mftScan(path, p => prog({ phase: p.phase, entries: p.entries, bytes: p.bytes, elapsedMs: ms(), detail: p.detail, fraction: p.fraction }), isCancelled);
             store = r.store; engine = 'mft'; warnings.push(...r.warnings);
           } catch (e) {
             if (e instanceof EngineError && e.code === 'error.cancelled') throw e;
@@ -196,7 +198,7 @@ export class TesseraEngine {
       }
       if (!store) {
         const w = await walkScan(path, {
-          threads: this.opts.threads ?? defaultThreads(), workerUrl: this.opts.workerUrl, trackKeys: isNtfs,
+          threads: this.opts.threads ?? defaultThreads(), workerUrl: this.opts.workerUrl, trackKeys: isNtfs, isCancelled,
           onProgress: p => prog({ phase: 'walk', entries: p.entries, bytes: p.bytes, elapsedMs: ms(), detail: p.detail }),
         });
         store = w.store;
@@ -204,6 +206,7 @@ export class TesseraEngine {
         warnings.push(...walkWarnings(w));
         if (isNtfs) store.dedupHardlinks();
       }
+      if (this.cancelled) throw engineError('error.cancelled');
       onProgress({ phase: 'aggregate', entries: store.n - 1, bytes: lastBytes, elapsedMs: ms() });
       await new Promise(r => setImmediate(r));
       store.finalize();
@@ -223,6 +226,13 @@ export class TesseraEngine {
     } finally {
       this.scanning = false;
     }
+  }
+
+  /** Pide parar el escaneo en curso; `scan` se rechaza con error.cancelled. False si no había ninguno. */
+  cancel(): boolean {
+    if (!this.scanning) return false;
+    this.cancelled = true;
+    return true;
   }
 
   private need(id: number): Store {

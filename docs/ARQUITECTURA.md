@@ -49,6 +49,7 @@ Tipos en [`packages/protocol/src/types.ts`](../packages/protocol/src/types.ts). 
 | Ruta | `node_path {id}` | `GET /api/path?id=` | `string` |
 | Nodo | `node_info {id}` | `GET /api/node?id=` | `NodeRow` |
 | Acción | `action {kind, id}` | `POST /api/action` `{kind,id}` | `ActionResult` |
+| Cancelar escaneo | `cancel_scan` | `POST /api/cancel` | `boolean` (había un escaneo en curso); el `scan` pendiente se rechaza con `error.cancelled` |
 | Elevación | `elevation` / `relaunch_elevated` | `GET /api/elevation` / `POST /api/relaunch-elevated` | `ElevationInfo` |
 
 Progreso: `ScanProgress.fraction` (0–1) es opcional; los motores lo envían cuando conocen el total de trabajo (lectura de la MFT). Sin él, la interfaz estima el avance con `bytes` frente al espacio usado de la unidad, y en carpetas sueltas lo muestra como indeterminado.
