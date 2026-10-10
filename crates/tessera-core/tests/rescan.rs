@@ -82,8 +82,11 @@ fn rescan_grafts_the_folder() {
     let (old_dir, del) = (find(t, &d.path("work/old")), find(t, &d.path("work/del.log")));
     let other = find(t, &d.path("other"));
     assert_eq!((t.size(work), t.files(work), t.dirs(work)), (6300, 3, 1));
-    assert_eq!(s.result.can_refresh, Some(false), "sin administrador no hay diario");
-    assert!(!t.has_frn(), "sin refresh no se guardan los FRN");
+    // Sin administrador no hay diario ni FRN. Elevado (los runners de GitHub Actions lo están) puede haberlos.
+    if !tessera_core::sys::elevation().elevated {
+        assert_eq!(s.result.can_refresh, Some(false), "sin administrador no hay diario");
+        assert!(!t.has_frn(), "sin refresh no se guardan los FRN");
+    }
     let ext_before = ops::ext_stats(t, 0).unwrap();
     // Comparación activa con un resumen del mismo escaneo
     let h = History::at(&hist.0);
@@ -246,9 +249,14 @@ fn folder_frns_and_refresh_plumbing() {
     }
     assert_eq!(t.frn_of(find(t, &d.path("keep.txt"))), None, "los archivos no llevan");
     let (work_frn, old_frn, other_frn, root_frn) = (t.frn_of(work).unwrap(), t.frn_of(old).unwrap(), t.frn_of(find(t, &d.path("other"))).unwrap(), t.frn_of(0).unwrap());
-    // Sin posición del diario no hay refresh
+    // Sin administrador no hay posición del diario y refresh no está disponible; elevado, funciona sin cambios
     let cancel = AtomicBool::new(false);
-    assert_eq!(refresh(&mut s, &ScanOptions::default(), &|_| {}, &cancel).unwrap_err().code, "refresh.unavailable");
+    if tessera_core::sys::elevation().elevated {
+        let r = refresh(&mut s, &ScanOptions::default(), &|_| {}, &cancel).unwrap();
+        assert_eq!(r.before, r.after);
+    } else {
+        assert_eq!(refresh(&mut s, &ScanOptions::default(), &|_| {}, &cancel).unwrap_err().code, "refresh.unavailable");
+    }
 
     // Cambios: carpeta nueva work/old/n1/n2 con un archivo (padres desconocidos), un archivo en other
     // y un registro de fuera de la raíz

@@ -59,6 +59,12 @@ jobs:
       - name: Pruebas de Rust
         run: cargo test --workspace --release
 
+      # Los runners de Windows tienen permisos de administrador: es el único sitio donde se lee el diario USN de
+      # verdad. Informativa: si falla, se ve en el registro pero no bloquea la publicación.
+      - name: Diario USN con administrador (informativa)
+        continue-on-error: true
+        run: cargo test -p tessera-core --release --test rescan -- --ignored usn_refresh_elevated --nocapture
+
       - name: Empaquetar y publicar la release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
