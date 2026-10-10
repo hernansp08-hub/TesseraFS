@@ -4,11 +4,19 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.8.0] - 2026-10-10
+
 ### Nube y compresión
 - **Liberar espacio de OneDrive sin borrar nada:** tarjeta en Liberar espacio, botón en el panel de detalle y en el menú del clic derecho. Deja los archivos descargados sólo en línea, como el Explorador.
 - La tarjeta de cada juego propone comprimirlo con `compact /exe:lzx` si aún no está comprimido.
 - El panel de detalle distingue los archivos de la nube descargados de los que están sólo en línea, y muestra cuánto ahorra la compresión.
 - Filtro `attr:` (`atrib:`) por atributos: nube, oculto, sistema, comprimido, enlace duro, disperso y punto de reanálisis.
+
+### Añadido
+- **cloud:** liberar espacio de OneDrive sin borrar, compresión y filtro attr:
+
+### Corregido
+- **tests:** las pruebas de rescan aceptan ejecutarse con administrador
 
 ## [0.7.0] - 2026-10-10
 
@@ -93,7 +101,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.7.0...HEAD
+[Sin publicar]: ../../compare/v0.8.0...HEAD
+[0.8.0]: ../../compare/v0.7.0...v0.8.0
 [0.7.0]: ../../compare/v0.6.0...v0.7.0
 [0.6.0]: ../../compare/v0.5.0...v0.6.0
 [0.5.0]: ../../compare/v0.4.0...v0.5.0
