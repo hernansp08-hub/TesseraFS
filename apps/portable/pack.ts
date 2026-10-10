@@ -43,11 +43,30 @@ const version: string = JSON.parse(readFileSync(join(here, '..', '..', 'package.
 writeFileSync(join(out, 'README.txt'), readmeText('portable', version));
 
 // 4) firma de bun.exe
-const ps = Bun.spawnSync(['powershell.exe', '-NoProfile', '-Command',
-  `$s = Get-AuthenticodeSignature -LiteralPath '${join(out, 'bun.exe').replace(/'/g, "''")}'; "$($s.Status)|$($s.SignerCertificate.Subject)"`]);
-const [status, subject] = ps.stdout.toString().trim().split('|');
-console.log(`bun.exe: firma ${status} (${subject ?? '?'})`);
-if (status !== 'Valid') { console.error('ERROR: bun.exe no tiene una firma válida'); process.exit(1); }
+// powershell.exe (5.1) lanzado desde pwsh 7, como en GitHub Actions, hereda su PSModulePath y no carga
+// Get-AuthenticodeSignature: se le quita para que use sus rutas por defecto. Si aun así no responde, se prueba pwsh.
+function signature(file: string): { status: string; subject: string; errors: string[] } {
+  const clean: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(clean)) if (k.toLowerCase() === 'psmodulepath') delete clean[k];
+  const cmd = `$s = Get-AuthenticodeSignature -LiteralPath '${file.replace(/'/g, "''")}'; "$($s.Status)|$($s.SignerCertificate.Subject)"`;
+  const errors: string[] = [];
+  for (const [exe, env] of [['powershell.exe', clean], ['pwsh', process.env]] as const) {
+    try {
+      const r = Bun.spawnSync([exe, '-NoProfile', '-NonInteractive', '-Command', cmd], { env });
+      const [status = '', subject = ''] = r.stdout.toString().trim().split('|');
+      if (status) return { status, subject, errors };
+      errors.push(`${exe}: ${r.stderr.toString().trim() || 'sin respuesta'}`);
+    } catch (e) { errors.push(`${exe}: ${(e as Error).message}`); }
+  }
+  return { status: '', subject: '', errors };
+}
+const sig = signature(join(out, 'bun.exe'));
+console.log(`bun.exe: firma ${sig.status || '?'} (${sig.subject || '?'})`);
+if (sig.status !== 'Valid') {
+  console.error('ERROR: bun.exe no tiene una firma válida');
+  for (const e of sig.errors) console.error('  ' + e);
+  process.exit(1);
+}
 
 // 5) contenido y tamaño
 let total = 0;
