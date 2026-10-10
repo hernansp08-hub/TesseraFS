@@ -73,7 +73,7 @@ if (!dry && git('status', '--porcelain').out) die('Hay cambios sin confirmar: ha
 
 // ---------- Manifiestos ----------
 const MANIFESTS = [
-  'package.json', 'packages/protocol/package.json', 'packages/ui/package.json', 'packages/core-bun/package.json',
+  'package.json', 'packages/protocol/package.json', 'packages/ui/package.json', 'packages/core-bun/package.json', 'packages/i18n/package.json',
   'apps/portable/package.json', 'apps/desktop/package.json', 'apps/desktop/src-tauri/tauri.conf.json',
 ];
 const edits: [string, string][] = [];

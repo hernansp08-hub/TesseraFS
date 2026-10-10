@@ -98,8 +98,8 @@ Sigue el progreso en la pestaña **Actions** del repositorio o con `gh run watch
 
 | Archivo | Contenido |
 |---|---|
-| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` | `tesserafs-desktop.exe`, `LEEME.txt`, `LICENCIAS-TERCEROS.txt` (crates de Rust incluidos) y `licencias/` |
-| `TesseraFS-X.Y.Z-portable-win-x64.zip` | `bun.exe` (firmado, sin modificar), `tesserafs.js`, lanzadores, `LEEME.txt`, avisos de Bun y `licencias/` |
+| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` | `tesserafs-desktop.exe`, `README.txt` (en los cinco idiomas), `LICENCIAS-TERCEROS.txt` (crates de Rust incluidos) y `licencias/` |
+| `TesseraFS-X.Y.Z-portable-win-x64.zip` | `bun.exe` (firmado, sin modificar), `tesserafs.js`, lanzadores, `README.txt` (en los cinco idiomas), avisos de Bun y `licencias/` |
 | `SHA256SUMS.txt` | Sumas para comprobar las descargas (`Get-FileHash archivo.zip`) |
 
 Las versiones con sufijo (`-beta.1`) se publican como *prerelease*.

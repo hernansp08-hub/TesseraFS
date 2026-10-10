@@ -4,6 +4,16 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+### Distribución
+- Un único `README.txt` en los cinco idiomas dentro de cada zip, en lugar de `LEEME.txt`.
+
+### Documentación
+- Diseño de la internacionalización ([docs/tecnica/i18n.md](docs/tecnica/i18n.md)): catálogos, mensajes de los motores, formatos por idioma, pseudolocalización, flujo para traductores y cómo añadir un idioma.
+
+### Corregido
+- **core-bun:** una ruta inexistente o que no es una carpeta ya no descarta el escaneo anterior.
+- **core:** en una unidad FAT32 o de red, el aviso dice que la MFT no está disponible ahí, en lugar de pedir administrador.
+
 ## [0.2.0] - 2026-10-08
 
 ### Documentación

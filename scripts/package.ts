@@ -1,5 +1,5 @@
 // Empaqueta la versión actual en zips listos para publicar y, con --publish, crea la release en GitHub.
-//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-escritorio-win-x64.zip   tesserafs-desktop.exe + LEEME + licencias
+//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-escritorio-win-x64.zip   tesserafs-desktop.exe + README multilingüe + licencias
 //   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-portable-win-x64.zip     carpeta portable (bun.exe firmado + tesserafs.js) + licencias
 //   dist/release/vX.Y.Z/SHA256SUMS.txt                            sumas de comprobación
 //   dist/release/vX.Y.Z/NOTAS.md                                  notas de la release (del CHANGELOG)
@@ -7,6 +7,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { readmeText } from '../packages/i18n/src/readme';
 
 const ROOT = join(import.meta.dir, '..');
 const args = process.argv.slice(2);
@@ -72,17 +73,8 @@ const stage = join(OUT, 'stage'); mkdirSync(stage);
 
 const deskName = `TesseraFS-${version}-escritorio`, deskDir = join(stage, deskName);
 mkdirSync(deskDir); cpSync(exe, join(deskDir, 'tesserafs-desktop.exe'));
-writeFileSync(join(deskDir, 'LEEME.txt'), [
-  `TesseraFS ${version} · edición de escritorio`, '',
-  'Analizador de espacio en disco para Windows 10/11 x64. No necesita instalación.', '',
-  'Abrir: doble clic en tesserafs-desktop.exe.',
-  'Si Windows muestra "Windows protegió su PC", pulsa Más información > Ejecutar de todas formas:',
-  'el ejecutable todavía no está firmado digitalmente.', '',
-  'Modo rápido: el botón "Modo rápido" reinicia la app como administrador para leer la MFT de NTFS',
-  '(sólo lectura). Sin administrador, la app recorre las carpetas.', '',
-  'Requiere WebView2, incluido en Windows 11 y en Windows 10 actualizado.',
-  'Nada sale de tu equipo. Guía completa: docs/usuario/guia.md en el repositorio.', '',
-].join('\r\n'));
+// README.txt en todos los idiomas de la interfaz (claves readme.* de packages/i18n)
+writeFileSync(join(deskDir, 'README.txt'), readmeText('desktop', version));
 addLicenses(deskDir, rustNotices());
 
 const portName = `TesseraFS-${version}-portable`, portDir = join(stage, portName);
