@@ -55,6 +55,16 @@ pub fn check_folder(path: &str) -> Result<(), EngineMessage> {
     }
 }
 
+/// Carpeta de datos de TesseraFS (historial, escaneo programado): `TESSERA_DATA_DIR` si está definida
+/// (pruebas); si no, `%LOCALAPPDATA%\TesseraFS` en Windows y `$XDG_DATA_HOME/TesseraFS` (o
+/// `~/.local/share/TesseraFS`) en Linux.
+pub fn data_dir() -> Result<std::path::PathBuf, EngineMessage> {
+    match std::env::var_os("TESSERA_DATA_DIR").filter(|d| !d.is_empty()) {
+        Some(d) => Ok(d.into()),
+        None => local_app_data().map(|d| d.join("TesseraFS")).ok_or_else(|| msg::internal("Local application data folder not found")),
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use super::*;

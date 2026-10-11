@@ -226,6 +226,91 @@ fn save_compare_and_clear() {
     assert_eq!(h.clear().unwrap(), 0);
 }
 
+/// Resumen sintético: `<id>.json` + `<id>.snap.gz` con `nodes` tal cual (formato de docs/ARQUITECTURA.md).
+fn put_snapshot(dir: &Path, id: &str, path: &str, scanned_at: u64, nodes: serde_json::Value) {
+    use std::io::Write;
+    let snap = serde_json::json!({ "v": 1, "path": path, "scannedAt": scanned_at, "nodes": nodes });
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&serde_json::to_vec(&snap).unwrap()).unwrap();
+    std::fs::write(dir.join(format!("{id}.snap.gz")), gz.finish().unwrap()).unwrap();
+    let entry = serde_json::json!({ "id": id, "path": path, "scannedAt": scanned_at, "engine": "walk", "bytes": 0, "files": 0, "dirs": 0, "nodes": 0, "fileBytes": 0 });
+    std::fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(&entry).unwrap()).unwrap();
+}
+
+#[test]
+fn trend_of_a_node() {
+    let env = env();
+    let h = History::open().unwrap();
+    let d = TempDir::new("trend");
+    d.file("docs/report.pdf", 3 * MIB);
+    d.file("only-now.txt", 10);
+    let mut s = run(&d.0);
+    s.scanned_at = 1_000_000;
+    let t = &s.tree;
+    let root = t.root_path().to_string();
+    let report = find(t, &d.0.join("docs/report.pdf"));
+    let docs = find(t, &d.0.join("docs"));
+    let only_now = find(t, &d.0.join("only-now.txt"));
+    let dir = &env.history.0;
+    let snap = |root_size: u64, docs_name: &str, docs_size: u64, file_name: &str, file_dir: u8, file_size: u64| {
+        serde_json::json!([
+            [-1, root, 1, root_size, 0, 0, 0, 0],
+            [0, "otra", 1, 1, 0, 0, 0, 0],
+            [1, file_name, file_dir, 999, 0, 0, 0, 0],
+            [0, docs_name, 1, docs_size, 0, 0, 0, 0],
+            [3, "z.bin", 0, 4 * MIB, 0, 0, 0, 0],
+            [3, file_name, file_dir, file_size, 0, 0, 0, 0],
+        ])
+    };
+    // Del más antiguo al más reciente: A (igual), B (raíz y nombres en mayúsculas), C (sólo los nombres),
+    // D (report.pdf es una carpeta: no es él); ni el dañado, ni el de otra raíz, ni el del escaneo actual
+    // En Linux la raíz en mayúsculas es otra carpeta
+    let upper_root = root.to_uppercase();
+    put_snapshot(dir, "20260101T000000Z-0000000a", &root, 100, snap(10, "docs", 7, "report.pdf", 0, 5));
+    put_snapshot(dir, "20260101T000000Z-0000000b", &upper_root, 200, snap(20, "DOCS", 15, "Report.PDF", 0, 12));
+    put_snapshot(dir, "20260101T000000Z-0000000c", &root, 300, snap(30, "Docs", 16, "report.pdf", 0, 13));
+    put_snapshot(dir, "20260101T000000Z-0000000d", &root, 400, snap(40, "docs", 17, "report.pdf", 1, 14));
+    put_snapshot(dir, "20260101T000000Z-0000000e", &root, 150, serde_json::json!([[-1, root, 1, 1, 0, 0, 0, 0]]));
+    std::fs::write(dir.join("20260101T000000Z-0000000e.snap.gz"), b"not gzip").unwrap();
+    // Nodo con un padre imposible antes del buscado: tampoco cuenta (salvo para la raíz, que va antes)
+    put_snapshot(dir, "20260101T000000Z-00000011", &root, 160, serde_json::json!([[-1, root, 1, 1, 0, 0, 0, 0], [5, "x", 1, 1, 0, 0, 0, 0]]));
+    put_snapshot(dir, "20260101T000000Z-0000000f", &format!("{root}-otra"), 250, snap(50, "docs", 1, "report.pdf", 0, 1));
+    put_snapshot(dir, "20260101T000000Z-00000010", &root, s.scanned_at, snap(60, "docs", 1, "report.pdf", 0, 1));
+    let points = |id: u32| h.node_trend(&s, id).unwrap().into_iter().map(|p| (p.scanned_at, p.size)).collect::<Vec<_>>();
+    let mib = |n: u64| Some(n);
+    if cfg!(windows) {
+        // Windows: sin distinguir mayúsculas (en la raíz y en los nombres)
+        assert_eq!(points(report), [(100, mib(5)), (200, mib(12)), (300, mib(13)), (400, None)]);
+        assert_eq!(points(docs), [(100, mib(7)), (200, mib(15)), (300, mib(16)), (400, mib(17))]);
+        assert_eq!(points(0), [(100, mib(10)), (160, mib(1)), (200, mib(20)), (300, mib(30)), (400, mib(40))]);
+        assert_eq!(points(only_now), [(100, None), (200, None), (300, None), (400, None)]);
+    } else {
+        // Linux: B es de otra raíz y en C la carpeta se llama de otra forma
+        assert_eq!(points(report), [(100, mib(5)), (300, None), (400, None)]);
+        assert_eq!(points(docs), [(100, mib(7)), (300, None), (400, mib(17))]);
+        assert_eq!(points(0), [(100, mib(10)), (160, mib(1)), (300, mib(30)), (400, mib(40))]);
+    }
+    let j = serde_json::to_value(h.node_trend(&s, report).unwrap()).unwrap();
+    assert_eq!(j[0], serde_json::json!({ "id": "20260101T000000Z-0000000a", "scannedAt": 100, "size": 5 }));
+    assert_eq!(j[3 - usize::from(!cfg!(windows))]["size"], serde_json::Value::Null);
+    assert_eq!(h.node_trend(&s, 999).unwrap_err().code, "error.invalidNode");
+    // Lo enviado a la papelera ya no es un nodo válido
+    let mut s = s;
+    s.tree.remove(report).unwrap();
+    assert_eq!(h.node_trend(&s, report).unwrap_err().code, "error.invalidNode");
+    // Con resúmenes reales: el guardado del escaneo actual no cuenta; otro escaneo, sí
+    let _ = h.clear().unwrap();
+    let s1 = run(&d.0);
+    h.save(&s1).unwrap();
+    assert!(h.node_trend(&s1, 0).unwrap().is_empty());
+    d.file("docs/report.pdf", 5 * MIB);
+    let mut s2 = run(&d.0);
+    s2.scanned_at = s1.scanned_at + 1;
+    let r2 = find(&s2.tree, &d.0.join("docs/report.pdf"));
+    let p = h.node_trend(&s2, r2).unwrap();
+    assert_eq!(p.iter().map(|p| (p.scanned_at, p.size)).collect::<Vec<_>>(), [(s1.scanned_at, Some(3 * MIB as u64))]);
+}
+
 #[test]
 fn retention_keeps_twenty_per_path() {
     let env = env();

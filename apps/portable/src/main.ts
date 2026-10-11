@@ -9,7 +9,9 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ActionKind, DupProgress, EngineChoice, ScanProgress, SortKey } from '../../../packages/protocol/src/index.ts';
-import { TesseraEngine, defaultThreads, errorResponse, launchPath, msg, quoteArg, runElevated, setWalkWorkerUrl, win32 } from '../../../packages/core-bun/src/index.ts';
+import {
+  TESSERA_MAX_FILE, TesseraEngine, defaultThreads, errorResponse, launchPath, msg, quoteArg, runElevated, setWalkWorkerUrl, win32,
+} from '../../../packages/core-bun/src/index.ts';
 import { embeddedUi } from './ui-macro.ts' with { type: 'macro' };
 
 // en un objeto para que el minificador no copie la cadena en cada uso
@@ -31,6 +33,11 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 // errores de la API: estado 4xx/5xx con un EngineMessage como cuerpo JSON (ver docs/ARQUITECTURA.md)
 const fail = errorResponse;
 const num = (v: string | null, def: number) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? n : def; };
+// cuerpos: hasta 64 MiB (exportación: un informe HTML con una imagen incrustada ocupa varios MB); un escaneo guardado
+// (POST /api/scan/open), hasta 1 GiB. Bun corta lo que pase de maxRequestBodySize con un 413 vacío: el margen deja
+// que la ruta responda antes con un scan.openFailed que la interfaz sabe traducir.
+const MAX_BODY = 64 * 2 ** 20;
+const OPEN_ROUTE = '/api/scan/open';
 const SORTS: SortKey[] = ['size', 'alloc', 'name', 'files', 'mtime', 'delta'];
 const ACTIONS: ActionKind[] = ['open', 'reveal', 'properties', 'trash', 'freeUp'];
 const ENGINES: EngineChoice[] = ['auto', 'mft', 'walk'];
@@ -195,6 +202,31 @@ async function main() {
         return json(engine.historyDelete(b.id));
       }
       case 'POST /api/history/clear': return json(engine.historyClear());
+      // evolución de un nodo en los resúmenes de su raíz: error.noScan (409), scan.offline (409), error.invalidNode (404)
+      case 'GET /api/history/trend': return json(engine.historyTrend(num(q.get('id'), -1)));
+      // escaneo guardado (.tessera): guardar → ExportResult; abrir (cuerpo binario) → ScanResult «sin conexión»
+      case 'POST /api/scan/save': {
+        server.timeout(req, 0); // un árbol grande tarda unos segundos en comprimirse
+        const t0 = performance.now();
+        const r = engine.saveScan();
+        log(`scan saved: ${r.path} in ${Math.round(performance.now() - t0)} ms`);
+        return json(r);
+      }
+      case `POST ${OPEN_ROUTE}`: {
+        server.timeout(req, 0); // cuerpo de hasta 1 GiB
+        const tooLarge = () => fail(msg('scan.openFailed', { error: `the file is too large (more than ${TESSERA_MAX_FILE} bytes)` }), 413);
+        if (Number(req.headers.get('content-length')) > TESSERA_MAX_FILE) return tooLarge();
+        const data = new Uint8Array(await req.arrayBuffer());
+        if (data.byteLength > TESSERA_MAX_FILE) return tooLarge();
+        try {
+          const r = engine.openScan(data);
+          log(`scan opened: ${r.rootPath} (${r.entries} entries, ${data.byteLength} bytes) in ${r.elapsedMs} ms`);
+          return json(r);
+        } catch (e) {
+          log('open scan failed:', e instanceof Error ? e.message : e);
+          return fail(e);
+        }
+      }
       case 'POST /api/compare': {
         const b = await req.json().catch(() => null) as { id?: unknown; limit?: unknown } | null;
         if (!b || typeof b.id !== 'string') return fail(msg('history.notFound', { id: String(b?.id ?? '') }));
@@ -247,6 +279,9 @@ async function main() {
       }
       case 'GET /api/elevation': return json(engine.elevation());
       // La portable sólo existe para Windows
+      // Los escaneos programados son de la edición de escritorio: la portable no deja nada instalado en el sistema
+      case 'GET /api/schedule': return json({ supported: false, schedule: null });
+      case 'POST /api/schedule': return fail(msg('schedule.unsupported'), 409);
       case 'GET /api/system': return json({ os: 'windows', sep: '\\', actions: ['open', 'reveal', 'properties', 'trash', 'freeUp'], ...(launch ? { launchPath: launch } : {}) });
       case 'POST /api/relaunch-elevated': {
         if (engine.elevated) return fail(msg('elevation.failed', { error: 'already running as administrator' }), 409);
@@ -267,7 +302,7 @@ async function main() {
     hostname: '127.0.0.1',
     port: Number(process.env.TESSERA_PORT) || 0,
     idleTimeout: 60,
-    maxRequestBodySize: 64 * 2 ** 20, // exportación: un informe HTML con una imagen incrustada ocupa varios MB
+    maxRequestBodySize: TESSERA_MAX_FILE + 2 ** 20, // ver MAX_BODY
     development: false,
     async fetch(req) {
       const url = new URL(req.url);
@@ -276,6 +311,7 @@ async function main() {
       if (host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return new Response('Host not allowed', { status: 403 });
       if (url.pathname.startsWith('/api/')) {
         if (!okToken(req.headers.get('x-tessera-token'))) return new Response('Missing or invalid token', { status: 401 });
+        if (url.pathname !== OPEN_ROUTE && Number(req.headers.get('content-length')) > MAX_BODY) return new Response('Payload too large', { status: 413 });
         // EngineError → su estado (400/404/409); cualquier otro fallo → 500 error.internal
         try { return await api(req, url); } catch (e) { return fail(e); }
       }

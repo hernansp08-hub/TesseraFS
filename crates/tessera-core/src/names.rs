@@ -45,7 +45,7 @@ fn push_cp(out: &mut Vec<u8>, cp: u32) {
 }
 
 /// Recorre los puntos de código de un WTF-8 bien formado (lo produce `push_utf16`).
-fn code_points(b: &[u8]) -> impl Iterator<Item = u32> + '_ {
+pub(crate) fn code_points(b: &[u8]) -> impl Iterator<Item = u32> + '_ {
     let mut i = 0;
     std::iter::from_fn(move || {
         if i >= b.len() {

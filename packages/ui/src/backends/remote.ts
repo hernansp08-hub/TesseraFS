@@ -2,7 +2,7 @@
 import type {
   ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, CompareResult, DupProgress, DupRequest, DupResult, ElevationInfo,
   ExportResult, ExtStat, HistoryEntry, NodeRow, RefreshResult, RescanResult, ScanProgress, ScanRequest, ScanResult, SearchRequest,
-  SearchResponse, SystemInfo, VolumeInfo,
+  ScheduleConfig, ScheduleInfo, SearchResponse, SystemInfo, TrendPoint, VolumeInfo,
 } from '@tessera/protocol';
 import { engineFailure, isEngineMessage } from './errors';
 
@@ -59,6 +59,15 @@ export class TauriBackend implements Backend {
   relaunchElevated() { return this.call<void>('relaunch_elevated'); }
   system() { return this.call<SystemInfo>('system'); }
   brokenLinks(root: number, limit: number) { return this.call<SearchResponse>('broken_links', { root, limit }); }
+  historyTrend(id: number) { return this.call<TrendPoint[]>('history_trend', { id }); }
+  scheduleGet() { return this.call<ScheduleInfo>('schedule_get'); }
+  scheduleSet(cfg: ScheduleConfig | null) { return this.call<ScheduleInfo>('schedule_set', { cfg }); }
+  saveScan() { return this.call<ExportResult>('save_scan'); }
+  // El archivo va como cuerpo binario de la llamada (InvokeBody::Raw en Rust), sin pasar por JSON
+  openScan(data: ArrayBuffer) {
+    const invoke = this.core.invoke as unknown as (cmd: string, body: Uint8Array) => Promise<ScanResult>;
+    return invoke('open_scan', new Uint8Array(data)).catch(e => { throw engineFailure(e); });
+  }
 }
 
 export class HttpBackend implements Backend {
@@ -135,4 +144,11 @@ export class HttpBackend implements Backend {
   async relaunchElevated() { await this.post('/api/relaunch-elevated', {}); }
   system() { return this.get<SystemInfo>('/api/system'); }
   brokenLinks(root: number, limit: number) { return this.post<SearchResponse>('/api/broken-links', { root, limit }); }
+  historyTrend(id: number) { return this.get<TrendPoint[]>('/api/history/trend?' + this.qs({ id })); }
+  scheduleGet() { return this.get<ScheduleInfo>('/api/schedule'); }
+  scheduleSet(cfg: ScheduleConfig | null) { return this.post<ScheduleInfo>('/api/schedule', { cfg }); }
+  saveScan() { return this.post<ExportResult>('/api/scan/save', {}); }
+  openScan(data: ArrayBuffer) {
+    return this.req('/api/scan/open', { method: 'POST', body: data, headers: { 'Content-Type': 'application/octet-stream' } }).then(r => r.json() as Promise<ScanResult>);
+  }
 }

@@ -1,6 +1,7 @@
 //! tessera-cli: escanea una ruta e imprime el resumen; lista los archivos y carpetas más grandes
 //! (tabla, CSV o JSON); comprueba el espacio libre de un volumen sin escanear; gestiona el
-//! historial y, para pruebas cruzadas, escribe un slice binario o un volcado JSON.
+//! historial; guarda el escaneo completo en un `.tessera` (y abre uno en vez de escanear) y, para
+//! pruebas cruzadas, escribe un slice binario o un volcado JSON.
 
 mod cmds;
 
@@ -8,7 +9,7 @@ use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use tessera_core::{ops, slice, ChangeRow, DupProgress, EngineChoice, History, ScanOptions, ScanPhase, ScanProgress, SortKey, Tree};
+use tessera_core::{msg, ops, saved, slice, sys, ChangeRow, DupProgress, EngineChoice, History, ScanOptions, ScanPhase, ScanProgress, SortKey, Tree};
 
 const USO: &str = "tessera-cli: línea de comandos de TesseraFS (analizador de espacio en disco)
 
@@ -18,6 +19,10 @@ Uso:
   tessera-cli check <ruta> --min-free <umbral>      Comprueba el espacio libre del volumen, sin escanear
   tessera-cli history [list | delete <id> | clear]  Historial (JSON; respeta TESSERA_HISTORY_DIR)
   tessera-cli --help                                Esta ayuda (también `help` o `<orden> --help`)
+
+Escaneo guardado: si <ruta> es un archivo .tessera (de `scan --save` o de «Guardar escaneo» en la app),
+se abre en vez de escanear, para analizar en este equipo lo escaneado en otro (un servidor, un NAS…).
+check usa entonces el volumen guardado. Un escaneo abierto no toca el disco: sin duplicados ni historial.
 
 top <ruta>  (escanea y muestra lo más grande):
   --files N                Los N archivos más grandes, a cualquier profundidad
@@ -58,6 +63,8 @@ Opciones de scan:
   --history-compare ID     Compara con un resumen del historial (--limit filas por lista)
   --compare-out f.json     Escribe el CompareResult en JSON
   --history-save           Guarda el escaneo en el historial (después de comparar) e imprime el HistoryEntry
+  --history-trend RUTA     Tamaño de RUTA (absoluta o relativa a la raíz) en cada resumen del historial
+  --save f.tessera         Guarda el escaneo completo (se abre en la app, o aquí con scan, top o check)
   --flags                  Estadísticas de flags (enlaces duros, comprimidos, nube…)
   --children               Lista los hijos de la raíz con sus totales (con --history-compare, por delta)
   --progress               Muestra el progreso
@@ -179,6 +186,7 @@ fn main() {
     let mut show_flags = false;
     let mut compare = false;
     let (mut history_save, mut history_compare, mut compare_out) = (false, None, None);
+    let (mut save_out, mut history_trend) = (None, None);
     let mut i = 2;
     while i < args.len() {
         let next = |i: usize| -> String {
@@ -213,6 +221,8 @@ fn main() {
             "--repeat" => repeat = num(next(i)).max(1.0) as usize,
             "--history-compare" => history_compare = Some(next(i)),
             "--compare-out" => compare_out = Some(next(i)),
+            "--history-trend" => history_trend = Some(next(i)),
+            "--save" => save_out = Some(next(i)),
             "--history-save" => {
                 history_save = true;
                 i += 1;
@@ -266,7 +276,9 @@ fn main() {
     let mut scan = None;
     for r in 0..repeat {
         let t0 = Instant::now();
-        let s = match tessera_core::scan(&path, engine, &opts, &cb, &cancel) {
+        // Un .tessera se abre en vez de escanear
+        let s = if saved::is_saved_scan(&path) { cmds::open_saved(&path) } else { tessera_core::scan(&path, engine, &opts, &cb, &cancel) };
+        let s = match s {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error: [{}] {}", e.code, e.message);
@@ -282,6 +294,9 @@ fn main() {
     let (t, res) = (&scan.tree, &scan.result);
     println!("Ruta:      {}", res.root_path);
     println!("Motor:     {:?}", res.engine);
+    if let Some(o) = &res.offline {
+        println!("Origen:    .tessera escaneado {} en {} con TesseraFS {} (sin conexión)", cmds::iso(o.scanned_at), o.host.as_deref().unwrap_or("?"), o.app.as_deref().unwrap_or("?"));
+    }
     if let Some(v) = &res.volume {
         println!("Volumen:   {} «{}» {} · {} libres de {} · clúster {} B", v.path, v.label, v.fs, human(v.free), human(v.total), v.cluster_size);
     }
@@ -299,6 +314,24 @@ fn main() {
     }
     for w in &res.warnings {
         println!("Aviso:     [{}] {}", w.code, w.message);
+    }
+    if let Some(f) = &save_out {
+        let t0 = Instant::now();
+        let written = std::fs::File::create(f).and_then(|mut file| saved::write_scan(&mut file, &scan));
+        let n = written.unwrap_or_else(|e| fail(msg::export_failed(&sys::io_error_text(&e))));
+        let size = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+        println!("Guardado:  {f} · {} nodos · {} · {:.1} ms", sep(n), human(size), t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    if let Some(p) = &history_trend {
+        let h = History::open().unwrap_or_else(|e| fail(e));
+        let id = cmds::find_node(t, p).unwrap_or_else(|| fail(msg::invalid_path(p)));
+        let t0 = Instant::now();
+        let points = h.node_trend(&scan, id).unwrap_or_else(|e| fail(e));
+        println!("\nEvolución de {}{} ({} resúmenes, {:.1} ms):", t.path(id), dir_mark(t.is_dir(id), t.root_path()), points.len(), t0.elapsed().as_secs_f64() * 1000.0);
+        for x in &points {
+            println!("  {}  {}  {}", cmds::iso(x.scanned_at), x.id, x.size.map_or_else(|| "—".to_string(), human));
+        }
+        println!("  {}  (ahora)  {}", cmds::iso(scan.scanned_at), human(t.size(id)));
     }
     if history_compare.is_some() || history_save {
         let h = History::open().unwrap_or_else(|e| fail(e));
@@ -411,7 +444,8 @@ Búsqueda «{q}»: {} resultados, {} ({ms:.1} ms)", sep(r.total), human(r.total_
                 eprintln!("  [{:>6} ms] {:?}: {}/{} archivos, {}/{}", p.elapsed_ms, p.phase, sep(p.files), sep(p.total_files), human(p.bytes), human(p.total_bytes));
             }
         };
-        match tessera_core::duplicates(t, 0, min, limit, &dcb, &cancel) {
+        // Un escaneo abierto desde archivo no lee el disco
+        match scan.check_online().and_then(|()| tessera_core::duplicates(t, 0, min, limit, &dcb, &cancel)) {
             Ok(r) => {
                 println!(
                     "\nDuplicados (≥ {}): {} grupos, {} recuperables · {} candidatos · {} leídos · {} enlaces duros y {} en la nube fuera · {:.2} s",

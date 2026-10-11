@@ -3,17 +3,19 @@
 // `EngineMessage` (código + parámetros + texto en inglés) que la interfaz traduce.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod notify;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use tauri::ipc::{Channel, Response};
+use tauri::ipc::{Channel, InvokeBody, Request, Response};
 #[cfg(windows)]
 use tauri::Manager;
 use tauri::{AppHandle, State, WebviewWindowBuilder};
 use tessera_core::{
-    export, launch, links, msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult, ElevationInfo, EngineChoice,
-    EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, RefreshResult, RescanResult, Scan, ScanOptions, ScanProgress, ScanResult,
-    SearchResponse, SortKey, SystemInfo, VolumeInfo,
+    export, launch, links, msg, ops, saved, schedule, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult,
+    ElevationInfo, EngineChoice, EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, RefreshResult, RescanResult, Scan, ScanOptions,
+    ScanProgress, ScanResult, ScheduleInfo, SearchResponse, SortKey, SystemInfo, TrendPoint, TrendQuery, VolumeInfo,
 };
 
 type Res<T> = Result<T, EngineMessage>;
@@ -151,6 +153,46 @@ async fn refresh(st: St<'_>, on_progress: Channel<ScanProgress>) -> Res<RefreshR
     .await
 }
 
+/// Contenido de un `.tessera` que llega a `open_scan`: el cuerpo binario de `invoke('open_scan', bytes)`
+/// o, si el WebView tuvo que usar `postMessage` en vez del protocolo `ipc:`, el mismo contenido como
+/// arreglo JSON de bytes.
+fn saved_bytes(body: &InvokeBody) -> Res<Vec<u8>> {
+    let bad = || msg::scan_open_failed("Expected the contents of a .tessera file as binary data");
+    match body {
+        InvokeBody::Raw(b) => Ok(b.clone()),
+        InvokeBody::Json(serde_json::Value::Array(v)) => v.iter().map(|x| x.as_u64().and_then(|n| u8::try_from(n).ok())).collect::<Option<Vec<u8>>>().ok_or_else(bad),
+        InvokeBody::Json(_) => Err(bad()),
+    }
+}
+
+/// Abre un escaneo guardado (`.tessera`) y lo deja cargado en lugar del actual, «sin conexión»
+/// (`ScanResult.offline`): como un escaneo nuevo, con ids nuevos y sin comparación. Respeta los cerrojos
+/// de un escaneo (`error.scanBusy`, `error.dupBusy`); `scan.openFailed` si el archivo no sirve (el
+/// escaneo anterior sigue cargado). La interfaz llama `invoke('open_scan', bytes)` con un `Uint8Array`.
+#[tauri::command]
+async fn open_scan(st: St<'_>, request: Request<'_>) -> Res<ScanResult> {
+    let data = saved_bytes(request.body())?;
+    tree_job(&st, move |job| {
+        let s = saved::open_scan(&data)?;
+        drop(data);
+        let res = s.result.clone();
+        *job.scan.write().map_err(poisoned)? = Some(s);
+        job.generation.fetch_add(1, SeqCst);
+        Ok(res)
+    })
+    .await
+}
+
+/// Guarda el escaneo cargado completo en Descargas\TesseraFS como `<raíz> <fecha>.tessera` (ver
+/// [`saved::save_scan`]). No durante un escaneo, rescan o refresh (`error.scanBusy`), como `history_save`.
+#[tauri::command]
+async fn save_scan(st: St<'_>) -> Res<ExportResult> {
+    if st.busy.load(SeqCst) {
+        return Err(msg::scan_busy());
+    }
+    with_scan(&st, saved::save_scan).await
+}
+
 /// Pide parar el escaneo (o el rescan / refresh) en curso; el comando pendiente termina con
 /// `error.cancelled`. El escaneo anterior, si lo había, sigue cargado y sin cambios.
 #[tauri::command]
@@ -185,7 +227,8 @@ async fn search(st: St<'_>, query: String, root: u32, limit: u32) -> Res<SearchR
 /// Enlaces rotos bajo `root` (ver [`links`]), ordenados por ruta. El árbol se lee bajo lectura sólo para
 /// tomar los candidatos y para las filas: el disco se mira sin cerrojo (las consultas, la papelera y un
 /// escaneo nuevo no esperan). Un nodo no válido viaja en `SearchResponse.error`, como en `search`; si
-/// mientras tanto se cargó otro escaneo, también `error.invalidNode`.
+/// mientras tanto se cargó otro escaneo, también `error.invalidNode`. Escaneo abierto desde archivo:
+/// `scan.offline`.
 #[tauri::command]
 async fn broken_links(st: St<'_>, root: u32, limit: u32) -> Res<SearchResponse> {
     let st = st.inner().clone();
@@ -193,6 +236,7 @@ async fn broken_links(st: St<'_>, root: u32, limit: u32) -> Res<SearchResponse> 
         let (items, generation) = {
             let g = st.scan.read().map_err(poisoned)?;
             let s = g.as_ref().ok_or_else(msg::no_scan)?;
+            s.check_online()?;
             match links::candidates(&s.tree, root) {
                 Ok(items) => (items, st.generation.load(SeqCst)),
                 Err(e) => return Ok(SearchResponse { error: Some(e), ..Default::default() }),
@@ -234,6 +278,8 @@ async fn node_info(st: St<'_>, id: u32) -> Res<NodeRow> {
 }
 
 /// `kind` llega como texto para responder `action.unknown` en vez de un error de deserialización.
+/// Con un escaneo abierto desde archivo, todas fallan con `scan.offline` (como `error.noScan`, en el
+/// `ActionResult`).
 #[tauri::command]
 async fn action(st: St<'_>, kind: String, id: u32) -> Res<ActionResult> {
     let kind: ActionKind = match kind.parse() {
@@ -246,6 +292,9 @@ async fn action(st: St<'_>, kind: String, id: u32) -> Res<ActionResult> {
         let (target, generation) = {
             let g = st.scan.read().map_err(poisoned)?;
             let Some(s) = g.as_ref() else { return Ok(ActionResult::fail(msg::no_scan())) };
+            if let Err(e) = s.check_online() {
+                return Ok(ActionResult::fail(e));
+            }
             match tessera_core::action_target(&s.tree, kind, id) {
                 Ok(t) => (t, st.generation.load(SeqCst)),
                 Err(e) => return Ok(ActionResult::fail(e)),
@@ -313,6 +362,7 @@ fn begin_duplicates(st: &AppState) -> Res<()> {
 fn run_duplicates(st: &AppState, root: u32, min_size: u64, limit: u32, on_progress: Channel<DupProgress>) -> Res<DupResult> {
     let g = st.scan.read().map_err(poisoned)?;
     let s = g.as_ref().ok_or_else(msg::no_scan)?;
+    s.check_online()?;
     check(s, root)?;
     let cb = move |p: DupProgress| {
         let _ = on_progress.send(p);
@@ -387,6 +437,22 @@ async fn compare(st: St<'_>, id: String, limit: u32) -> Res<CompareResult> {
     with_scan(&st, move |s| History::open()?.compare(s, &id, limit)).await
 }
 
+/// Tamaño del nodo `id` en cada resumen de su raíz, del más antiguo al más reciente (sin el escaneo
+/// actual). El árbol se lee bajo lectura sólo para tomar la ruta del nodo; los resúmenes se leen después,
+/// en paralelo y sin cerrojo. `scan.offline` con un escaneo abierto desde archivo.
+#[tauri::command]
+async fn history_trend(st: St<'_>, id: u32) -> Res<Vec<TrendPoint>> {
+    let st = st.inner().clone();
+    blocking(move || {
+        let q = {
+            let g = st.scan.read().map_err(poisoned)?;
+            TrendQuery::new(g.as_ref().ok_or_else(msg::no_scan)?, id)?
+        };
+        History::open()?.trend(&q)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn compare_clear(st: St<'_>) -> Res<()> {
     let st = st.inner().clone();
@@ -409,6 +475,42 @@ async fn reveal_export(path: String) -> Res<ActionResult> {
     blocking(move || export::reveal_export(&path)).await
 }
 
+/// El escaneo programado y su última ejecución. Sólo consulta (`schtasks /Query`, `systemctl is-enabled`).
+#[tauri::command]
+async fn schedule_get() -> Res<ScheduleInfo> {
+    blocking(schedule::get).await
+}
+
+/// Crea, cambia (`cfg`) o quita (`null`) el escaneo programado: tarea del Programador de tareas o
+/// temporizador de systemd del usuario. `cfg` llega como JSON para responder `schedule.invalid` (y no un
+/// error de deserialización) si no tiene la forma del contrato.
+#[tauri::command]
+async fn schedule_set(cfg: Option<serde_json::Value>) -> Res<ScheduleInfo> {
+    blocking(move || schedule::set(cfg.map(schedule::from_json).transpose()?)).await
+}
+
+/// `--scheduled-scan` (lo lanza el Programador de tareas o systemd): escanea, guarda el resumen, avisa si
+/// queda poco espacio y termina con 0, o con 1 si falló (el error queda en `schedule-last.json`).
+fn scheduled_scan() -> i32 {
+    let run = schedule::scheduled_scan(&notify::show);
+    if let Some(e) = &run.error {
+        eprintln!("TesseraFS: scheduled scan failed: {}", e.message);
+    }
+    i32::from(!run.ok)
+}
+
+/// `--restore-schedule` (lo lanza el instalador de Windows): vuelve a crear la tarea del escaneo programado
+/// si hay uno guardado. Termina con 0, o con 1 si no se pudo.
+fn restore_schedule() -> i32 {
+    match schedule::restore() {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("TesseraFS: couldn't restore the scheduled scan: {}", e.message);
+            1
+        }
+    }
+}
+
 #[tauri::command]
 fn elevation() -> ElevationInfo {
     sys::elevation()
@@ -424,6 +526,13 @@ async fn relaunch_elevated(app: AppHandle, st: St<'_>) -> Res<()> {
 }
 
 fn main() {
+    // Escaneo programado: sin ventana ni nada de Tauri (antes de `launch_path`, que ignora los argumentos con «-»)
+    if schedule::requested(std::env::args_os().skip(1)) {
+        std::process::exit(scheduled_scan());
+    }
+    if schedule::has_arg(std::env::args_os().skip(1), schedule::RESTORE_ARG) {
+        std::process::exit(restore_schedule());
+    }
     // WebKitGTK con NVIDIA o Wayland deja a veces la ventana en blanco con el renderizador DMA-BUF
     // (documentado por Tauri y WebKitGTK); se desactiva salvo que el usuario diga otra cosa.
     #[cfg(target_os = "linux")]
@@ -468,12 +577,17 @@ fn main() {
             history_list,
             history_delete,
             history_clear,
+            history_trend,
             compare,
             compare_clear,
             export_file,
+            save_scan,
+            open_scan,
             reveal_export,
             elevation,
-            relaunch_elevated
+            relaunch_elevated,
+            schedule_get,
+            schedule_set
         ])
         .run(tauri::generate_context!())
         .expect("error while starting TesseraFS");
@@ -502,5 +616,18 @@ mod tests {
         assert!(!st.busy.load(SeqCst));
         end_duplicates(&st);
         begin_tree_job(&st).unwrap();
+    }
+
+    #[test]
+    fn open_scan_body() {
+        // Binario (protocolo ipc:) o arreglo JSON de bytes (postMessage); otra cosa, scan.openFailed
+        assert_eq!(saved_bytes(&InvokeBody::Raw(vec![0x1f, 0x8b, 0])).unwrap(), [0x1f, 0x8b, 0]);
+        assert_eq!(saved_bytes(&InvokeBody::Json(serde_json::json!([31, 139, 255]))).unwrap(), [31, 139, 255]);
+        for bad in [serde_json::json!({ "data": [1] }), serde_json::json!([1, 256]), serde_json::json!([-1]), serde_json::json!("x")] {
+            assert_eq!(saved_bytes(&InvokeBody::Json(bad)).unwrap_err().code, "scan.openFailed");
+        }
+        // Lo que llega se abre (o no) como un escaneo guardado
+        let e = saved::open_scan(&saved_bytes(&InvokeBody::Raw(b"hola".to_vec())).unwrap()).err().unwrap();
+        assert_eq!((e.code.as_str(), e.get("error").map(|p| p.to_string())), ("scan.openFailed", Some("Not a gzip file".into())));
     }
 }

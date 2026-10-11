@@ -5,13 +5,17 @@
 //! - [`slice::encode_slice`], [`ops::children`], [`ops::search`] y [`ops::ext_stats`]
 //!   responden a la interfaz según el contrato de `docs/ARQUITECTURA.md`.
 //! - [`dup::duplicates`] busca archivos duplicados (tamaño, primeros 64 KiB y BLAKE3 completo).
-//! - [`history::History`] guarda resúmenes de los escaneos y compara el escaneo cargado con uno de ellos.
+//! - [`history::History`] guarda resúmenes de los escaneos, compara el escaneo cargado con uno de ellos
+//!   y sigue la evolución de un nodo ([`history::TrendQuery`]).
+//! - [`saved`] guarda el escaneo completo en un archivo `.tessera` y lo abre «sin conexión».
 //! - [`export`] guarda los archivos exportados en Descargas\TesseraFS (Linux: descargas de XDG).
 //! - [`rescan`] vuelve a escanear una carpeta del árbol cargado y actualiza con el diario USN ([`usn`]).
 //! - [`action`] abre, muestra, envía a la papelera o libera espacio de OneDrive ([`freeup`]); en Linux,
 //!   sólo abrir, mostrar y papelera ([`system_info`]).
 //! - [`links::broken_links`] busca enlaces simbólicos, uniones y carpetas montadas cuyo destino ya no existe.
 //! - [`launch`] lee la carpeta pedida al abrir la app (`SystemInfo.launchPath`).
+//! - [`schedule`] programa un escaneo sin ventana (Programador de tareas o temporizador de systemd) que
+//!   guarda un resumen en el historial y avisa si queda poco espacio.
 
 pub mod attrs;
 pub mod build;
@@ -29,7 +33,9 @@ pub mod ops;
 pub mod posix;
 pub mod query;
 pub mod rescan;
+pub mod saved;
 pub mod scan;
+pub mod schedule;
 pub mod slice;
 pub mod sys;
 pub mod tree;
@@ -41,7 +47,7 @@ pub mod walk;
 pub mod walk_unix;
 
 pub use dup::duplicates;
-pub use history::{Comparison, History};
+pub use history::{Comparison, History, TrendQuery};
 pub use rescan::{refresh, refresh_shared, rescan, rescan_shared};
 pub use scan::{scan, Progress, Scan, ScanOptions};
 pub use tree::Tree;

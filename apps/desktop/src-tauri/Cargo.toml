@@ -14,3 +14,7 @@ tauri = { version = "2", features = [] }
 serde.workspace = true
 serde_json.workspace = true
 tessera-core.workspace = true
+
+# Aviso (toast) del escaneo programado: la misma versión del crate `windows` que ya usa WebView2 (sin crates nuevos)
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications"] }

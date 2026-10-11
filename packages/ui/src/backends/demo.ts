@@ -2,7 +2,7 @@
 import {
   FLAG, compileQuery, encodeSlice, type Backend, type ChangeRow, type ChildrenRequest, type CompareResult, type DupGroup, type DupProgress,
   type DupRequest, type DupResult, type HistoryEntry, type NodeRow, type RemovedRow, type ScanProgress, type ScanRequest, type ScanResult,
-  type Os, type SearchRequest, type SearchRow, type SliceSource, type SystemInfo, type VolumeInfo,
+  type Os, type SavedScanInfo, type ScheduleConfig, type ScheduleInfo, type SearchRequest, type SearchRow, type SliceSource, type SystemInfo, type TrendPoint, type VolumeInfo,
 } from '@tessera/protocol';
 // @ts-ignore módulo JS sin tipos
 import { buildSample } from './sample.js';
@@ -29,13 +29,22 @@ export class DemoBackend implements Backend {
   readonly kind = 'demo' as const;
   /** Simula un Windows (por defecto) o un Linux (`#os=linux` en la demo). */
   readonly os: 'windows' | 'linux';
-  private readonly sep: '\\' | '/';
-  private readonly rootName: string;
+  private sep: '\\' | '/';
+  private rootName: string;
+  /** Escaneo abierto desde un archivo .tessera: sin acciones sobre el disco. */
+  private offline: SavedScanInfo | null = null;
+  private openedVolume: VolumeInfo | null = null;
+  private engineName: 'mft' | 'walk' = 'mft';
+  /** Cuándo se hizo el escaneo cargado: el resumen guardado después es «el actual» y no cuenta en la evolución. */
+  private scanAt = 0;
   constructor(os: Os = 'windows') {
     this.os = os === 'linux' ? 'linux' : 'windows';
     this.sep = this.os === 'linux' ? '/' : '\\';
     this.rootName = this.os === 'linux' ? '/' : 'C:\\';
+    this.engineName = this.os === 'linux' ? 'walk' : 'mft';
   }
+  /** Lo que no se puede hacer con un escaneo abierto desde archivo. */
+  private online() { if (this.offline) throw fail('scan.offline', "This scan was opened from a file: actions on the disk aren't available"); }
   private get volume() { return VOLUMES[this.os][0]; }
   private N: DNode[] = [];
   private root!: DNode;
@@ -50,6 +59,7 @@ export class DemoBackend implements Backend {
 
   private ensure() {
     if (this.ready) return;
+    this.sep = this.os === 'linux' ? '/' : '\\'; this.rootName = this.os === 'linux' ? '/' : 'C:\\';
     const { N, root } = buildSample(this.os); this.N = N; this.root = root; this.ready = true;
   }
   private flags(n: DNode) {
@@ -68,7 +78,7 @@ export class DemoBackend implements Backend {
   private path(n: DNode) {
     if (!n.parent) return this.rootName;
     const a: string[] = []; for (let x: DNode | null = n; x && x.parent; x = x.parent) a.push(x.name);
-    return this.rootName + a.reverse().join(this.sep);
+    return (this.rootName.endsWith(this.sep) ? this.rootName : this.rootName + this.sep) + a.reverse().join(this.sep);
   }
   private node(id: number) { this.ensure(); const n = this.N[id]; if (!n) throw fail('error.invalidNode', `Unknown node id: ${id}`, { id }); return n; }
 
@@ -81,6 +91,8 @@ export class DemoBackend implements Backend {
 
   async scan(_req: ScanRequest, onProgress: (p: ScanProgress) => void): Promise<ScanResult> {
     if (this.scanning) throw fail('error.scanBusy', 'A scan is already in progress');
+    // Un escaneo nuevo deja el archivo abierto y vuelve a la muestra
+    if (this.offline) { this.offline = null; this.openedVolume = null; this.ready = false; this.engineName = this.os === 'linux' ? 'walk' : 'mft'; }
     const t0 = performance.now(); this.ensure();
     const total = this.N.length, dur = 2600;
     this.scanning = true; this.cancelled = false;
@@ -95,7 +107,7 @@ export class DemoBackend implements Backend {
         step();
       });
     } finally { this.scanning = false; }
-    const el = performance.now() - t0;
+    const el = performance.now() - t0; this.scanAt = Date.now() / 1000;
     onProgress({ phase: 'done', entries: total, bytes: this.root.size, elapsedMs: el });
     const warnings = [{ code: 'scan.demoData', message: 'Sample data: no disk was read.' }];
     if (this.os === 'linux') warnings.push({ code: 'scan.otherMounts', params: { count: 3, paths: '/boot/efi, /mnt/datos, /snap/firefox/6966' },
@@ -154,6 +166,7 @@ export class DemoBackend implements Backend {
 
   // Duplicados simulados: mismo tamaño y mismo nombre (sin « (1)»). Las tres pasadas sólo se fingen, con su progreso.
   async duplicates(r: DupRequest, onProgress: (p: DupProgress) => void): Promise<DupResult> {
+    this.online();
     if (this.scanning) throw fail('error.scanBusy', 'A scan is already in progress');
     if (this.dupRunning) throw fail('error.dupBusy', 'A duplicate search is already in progress');
     const t0 = performance.now(), min = Math.max(1, r.minSize), files: DNode[] = [];
@@ -201,6 +214,7 @@ export class DemoBackend implements Backend {
 
   // Volver a escanear una carpeta: en la demo nada cambia, pero se simula el recorrido y su progreso
   async rescan(id: number, onProgress: (p: ScanProgress) => void) {
+    this.online();
     const n = this.node(id);
     if (!n.parent) throw fail('rescan.root', 'The scan root can’t be rescanned on its own');
     if (!n.isDir) throw fail('error.notFolder', `Not a folder: ${this.path(n)}`, { path: this.path(n) });
@@ -219,6 +233,7 @@ export class DemoBackend implements Backend {
     return { row: this.row(n), before: n.size, entries: total, elapsedMs: performance.now() - t0, warnings: [] };
   }
   async brokenLinks(root: number, limit: number) {
+    this.online();
     const hits: DNode[] = [], st = [this.node(root)];
     while (st.length) { const n = st.pop()!; if (n.kids) st.push(...n.kids); if (n.broken) hits.push(n); }
     const rows = hits.map(n => ({ ...this.row(n), path: this.path(n) })).sort((a, b) => a.path.localeCompare(b.path));
@@ -273,8 +288,79 @@ export class DemoBackend implements Backend {
     return { entry, prev, fresh, removed };
   }
   private seeded = false;
-  private ensureSnaps() { if (!this.seeded) { this.seeded = true; this.snaps.push(this.pastSnapshot()); } }
+  private ensureSnaps() {
+    if (this.seeded) return; this.seeded = true;
+    const past = this.pastSnapshot(); this.snaps.push(past);
+    // Dos resúmenes más antiguos (hace 120 y 75 días) con todo algo más pequeño: así la demo tiene tendencia
+    for (const [days, f] of [[120, .9], [75, .95]] as const) {
+      const prev = new Map([...past.prev].map(([id, s]) => [id, Math.round(s * f)] as [number, number]));
+      const e = this.entry(`20260${days === 120 ? 612 : 727}T093000Z-demo`, Date.now() / 1000 - days * 86400, prev.get(this.root.id)!, past.entry.files, past.entry.dirs);
+      this.snaps.push({ entry: e, prev, fresh: new Set(past.fresh), removed: [] });
+    }
+  }
+  // Escaneo programado simulado: se guarda en memoria y «se ejecutó ayer»
+  private sched: ScheduleConfig | null = null;
+  async scheduleGet(): Promise<ScheduleInfo> {
+    const v = VOLUMES[this.os][0];
+    return { supported: true, schedule: this.sched,
+      lastRun: this.sched ? { at: Math.round(Date.now() / 1000 - 86400), ok: true, bytes: this.ready ? this.root.size : 0, free: v.free, total: v.total, alerted: false } : undefined };
+  }
+  async scheduleSet(cfg: ScheduleConfig | null) { this.sched = cfg; return this.scheduleGet(); }
+  async historyTrend(id: number): Promise<TrendPoint[]> {
+    this.online(); this.ensureSnaps(); const n = this.node(id);
+    return this.snaps.filter(s => s.entry.scannedAt < this.scanAt).sort((a, b) => a.entry.scannedAt - b.entry.scannedAt)
+      .map(s => ({ id: s.entry.id, scannedAt: s.entry.scannedAt, size: s.fresh.has(n.id) ? null : s.prev.get(n.id) ?? null }));
+  }
+
+  // ---------- Escaneo guardado (.tessera): el mismo formato que los motores ----------
+  async saveScan() {
+    this.ensure();
+    const nodes: unknown[] = [], st: [DNode, number][] = [[this.root, -1]];
+    while (st.length) {
+      const [n, parent] = st.pop()!, me = nodes.length;
+      nodes.push([parent, n.parent ? n.name : this.rootName, n.isDir ? 1 : 0, n.size, n.alloc, n.files, n.dirs, n.mtime, this.flags(n)]);
+      if (n.kids) for (let i = n.kids.length - 1; i >= 0; i--) st.push([n.kids[i], me]);
+    }
+    const at = this.offline?.scannedAt ?? Math.round(this.scanAt || Date.now() / 1000);
+    const doc = { v: 1, kind: 'tesserafs-scan', app: this.offline?.app ?? 'demo', host: this.offline?.host ?? 'DEMO', path: this.rootName, scannedAt: at,
+      engine: this.engineName, volume: this.openedVolume ?? VOLUMES[this.os][0], nodes };
+    const gz = await new Response(new Blob([JSON.stringify(doc)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+    const d = new Date(at * 1000), p2 = (x: number) => String(x).padStart(2, '0');
+    const root = this.rootName === '/' ? 'raiz' : /^[A-Z]:\\?$/i.test(this.rootName) ? this.rootName[0] : this.rootName.split(/[\\/]/).filter(Boolean).pop() || 'raiz';
+    const name = `${root} ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}${p2(d.getMinutes())}.tessera`;
+    const url = URL.createObjectURL(new Blob([gz]));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return { path: name };
+  }
+  async openScan(data: ArrayBuffer): Promise<ScanResult> {
+    const t0 = performance.now();
+    let doc: { v: number; kind: string; app?: string; host?: string; path: string; scannedAt: number; engine: 'mft' | 'walk'; volume: VolumeInfo | null; nodes: [number, string, number, number, number, number, number, number, number][] };
+    try {
+      const text = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+      doc = JSON.parse(text);
+    } catch (e) { throw fail('scan.openFailed', `Couldn't open the saved scan: ${(e as Error).message}`, { error: (e as Error).message }); }
+    if (doc.v !== 1 || doc.kind !== 'tesserafs-scan' || !Array.isArray(doc.nodes) || !doc.nodes.length) throw fail('scan.openFailed', "Couldn't open the saved scan: not a TesseraFS scan", { error: 'not a TesseraFS scan' });
+    const N: DNode[] = [];
+    for (const [parent, name, isDir, size, alloc, files, dirs, mtime, flags] of doc.nodes) {
+      const p = parent >= 0 ? N[parent] : null;
+      if (parent >= N.length) throw fail('scan.openFailed', "Couldn't open the saved scan: bad node order", { error: 'bad node order' });
+      const dot = name.lastIndexOf('.');
+      const n: DNode = { id: N.length, name, parent: p, isDir: !!isDir, size, alloc, files, dirs, mtime, ext: !isDir && dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
+        kids: isDir ? [] : null, mk: null, comp: !!(flags & FLAG.COMPRESSED), hl: !!(flags & FLAG.HARDLINK), hidden: !!(flags & FLAG.HIDDEN), depth: p ? p.depth + 1 : 0,
+        cloud: !!(flags & FLAG.CLOUD), reparse: !!(flags & FLAG.REPARSE) };
+      N.push(n); if (p) p.kids!.push(n);
+    }
+    for (const n of N) if (n.kids) { n.kids.sort((a, b) => b.size - a.size); n.mk = n.kids.filter(k => k.size > 0); }
+    this.N = N; this.root = N[0]; this.ready = true; this.cmp = null;
+    this.rootName = doc.path; this.sep = doc.path.startsWith('/') ? '/' : '\\'; this.engineName = doc.engine;
+    this.offline = { scannedAt: doc.scannedAt, host: doc.host, app: doc.app }; this.openedVolume = doc.volume; this.scanAt = doc.scannedAt;
+    const r = this.root;
+    return { rootId: 0, rootPath: doc.path, engine: doc.engine, entries: N.length - 1, files: r.files, dirs: r.dirs, bytes: r.size,
+      elapsedMs: performance.now() - t0, volume: doc.volume, warnings: [], canRefresh: false, offline: this.offline };
+  }
   async historySave() {
+    this.online();
     this.ensureSnaps(); const r = this.root, prev = new Map(this.N.map(n => [n.id, n.size] as [number, number]));
     const e = this.entry(new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z-demo', Date.now() / 1000, r.size, r.files, r.dirs);
     if (this.snaps.some(s => s.entry.id === e.id)) e.id += '-2';
@@ -285,6 +371,7 @@ export class DemoBackend implements Backend {
   async historyDelete(id: string) { const i = this.snaps.findIndex(s => s.entry.id === id); if (i >= 0) this.snaps.splice(i, 1); return i >= 0; }
   async historyClear() { this.ensureSnaps(); const n = this.snaps.length; this.snaps = []; this.cmp = null; return n; }
   async compare(id: string, limit: number): Promise<CompareResult> {
+    this.online();
     this.ensureSnaps();
     const s = this.snaps.find(x => x.entry.id === id); if (!s) throw fail('history.notFound', `Snapshot not found: ${id}`, { id });
     this.cmp = { prev: s.prev, fresh: s.fresh };
@@ -314,7 +401,7 @@ export class DemoBackend implements Backend {
 
   // Sin efectos: devuelve el código de lo que haría la app real (engine.demo.* en los catálogos)
   async action(kind: string, id: number) {
-    const n = this.node(id);
+    this.online(); const n = this.node(id);
     const msg: Record<string, string> = {
       open: `Demo: the app would open "${n.name}" with its default program.`,
       reveal: `Demo: the app would open ${this.os === 'linux' ? 'the file manager' : 'Explorer'} with the item selected.`,

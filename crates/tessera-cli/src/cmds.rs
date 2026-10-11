@@ -1,16 +1,53 @@
 //! Órdenes `top` (lo más grande, en tabla, CSV o JSON) y `check` (espacio libre del volumen, sin
-//! escanear). El análisis de argumentos va aparte para probarlo.
+//! escanear). El análisis de argumentos va aparte para probarlo. Las dos abren un `.tessera` (escaneo
+//! guardado) en vez de escanear o mirar el disco.
 
 use std::borrow::Cow;
 use std::io::Write;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-use tessera_core::{msg, ops, sys, Engine, EngineChoice, EngineMessage, ScanOptions, SearchRow, Tree};
+use tessera_core::{msg, names, ops, saved, sys, Engine, EngineChoice, EngineMessage, Scan, ScanOptions, SearchRow, Tree, VolumeInfo};
 
 use crate::{human, sep};
 
-const USO_TOP: &str = "Uso: tessera-cli top <ruta> [--files N] [--folders N] [--depth D] [--format table|csv|json] [--out FICHERO] [--engine auto|walk|mft]";
-const USO_CHECK: &str = "Uso: tessera-cli check <ruta> --min-free <N%|N[KB|MB|GB|TB]>";
+const USO_TOP: &str = "Uso: tessera-cli top <ruta|archivo.tessera> [--files N] [--folders N] [--depth D] [--format table|csv|json] [--out FICHERO] [--engine auto|walk|mft]";
+const USO_CHECK: &str = "Uso: tessera-cli check <ruta|archivo.tessera> --min-free <N%|N[KB|MB|GB|TB]>";
+
+// ---------- Escaneo guardado ----------
+
+/// Abre un `.tessera` (la ruta, sin comillas alrededor).
+pub fn open_saved(path: &str) -> Result<Scan, EngineMessage> {
+    saved::open_file(Path::new(path.trim().trim_matches('"')))
+}
+
+/// Escanea `path` o, si es un `.tessera`, lo abre.
+fn load(path: &str, engine: EngineChoice) -> Result<Scan, EngineMessage> {
+    if saved::is_saved_scan(path) {
+        return open_saved(path);
+    }
+    tessera_core::scan(path, engine, &ScanOptions::default(), &|_| {}, &AtomicBool::new(false))
+}
+
+/// Nodo vivo de `t` en `path`: absoluta (bajo la raíz) o relativa a la raíz; en Windows sin distinguir
+/// mayúsculas y con `\` o `/`, en Linux tal cual y con `/`.
+pub fn find_node(t: &Tree, path: &str) -> Option<u32> {
+    let fold = !names::is_posix(t.root_path());
+    let key = |s: &str| if fold { s.to_lowercase() } else { s.to_string() };
+    let seps: &[char] = if fold { &['\\', '/'] } else { &['/'] };
+    let root = key(t.root_path().trim_end_matches(seps));
+    let k = key(path.trim());
+    let rel = match k.strip_prefix(&root) {
+        Some(rest) if rest.is_empty() || rest.starts_with(seps) => rest,
+        _ => &k,
+    };
+    let mut id = 0u32;
+    for want in rel.split(seps).filter(|c| !c.is_empty() && *c != ".") {
+        let kids = t.kids(id);
+        id = (0..kids.len()).map(|i| kids.get(i)).find(|&k| key(&t.name(k)) == want)?;
+    }
+    Some(id)
+}
 
 // ---------- Argumentos ----------
 
@@ -201,13 +238,25 @@ pub fn parse_check(args: &[String]) -> Result<CheckArgs, String> {
 
 // ---------- check ----------
 
-/// (hay espacio suficiente, línea de estado). Sin escanear: sólo el volumen que contiene la ruta.
+/// (hay espacio suficiente, línea de estado). Sin escanear: sólo el volumen que contiene la ruta. Con un
+/// `.tessera`, el volumen guardado (cuando se escaneó) y su fecha al final de la línea.
 pub fn check(a: &CheckArgs) -> Result<(bool, String), EngineMessage> {
+    if saved::is_saved_scan(&a.path) {
+        let s = open_saved(&a.path)?;
+        let v = s.result.volume.as_ref().ok_or_else(|| msg::scan_open_failed("The saved scan has no volume information"))?;
+        let (ok, line) = verdict(v, a.min_free);
+        return Ok((ok, format!("{line} · escaneado {}", iso(s.scanned_at))));
+    }
     let path = tessera_core::scan::normalize_path(&a.path)?;
     std::fs::metadata(&path).map_err(|e| msg::cannot_open(&path, &sys::io_error_text(&e)))?;
     let root = sys::volume_root_of(&path).unwrap_or_else(|| path.clone());
     let v = sys::volume_info(&root).ok_or_else(|| msg::cannot_open(&root, &sys::last_error_text()))?;
-    let need = a.min_free.bytes(v.total);
+    Ok(verdict(&v, a.min_free))
+}
+
+/// (queda al menos `min_free`, línea de estado) de un volumen.
+fn verdict(v: &VolumeInfo, min_free: Threshold) -> (bool, String) {
+    let need = min_free.bytes(v.total);
     let ok = v.free >= need;
     let pct = if v.total > 0 { v.free as f64 * 100.0 / v.total as f64 } else { 0.0 };
     let line = format!(
@@ -216,9 +265,9 @@ pub fn check(a: &CheckArgs) -> Result<(bool, String), EngineMessage> {
         v.path,
         human(v.free),
         human(v.total),
-        a.min_free.describe(v.total)
+        min_free.describe(v.total)
     );
-    Ok((ok, line))
+    (ok, line)
 }
 
 /// Código de salida: 0 si hay espacio suficiente, 2 si no, 1 si hay un error.
@@ -379,7 +428,7 @@ pub fn render_table(top: &Top) -> String {
     out
 }
 
-/// Escanea y escribe lo más grande. Código de salida: 0 bien, 1 error, 2 uso incorrecto.
+/// Escanea (o abre el `.tessera`) y escribe lo más grande. Código de salida: 0 bien, 1 error, 2 uso incorrecto.
 pub fn top_cmd(args: &[String]) -> i32 {
     let a = match parse_top(args) {
         Ok(a) => a,
@@ -388,8 +437,7 @@ pub fn top_cmd(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let cancel = AtomicBool::new(false);
-    let s = match tessera_core::scan(&a.path, a.engine, &ScanOptions::default(), &|_| {}, &cancel) {
+    let s = match load(&a.path, a.engine) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error: [{}] {}", e.code, e.message);
@@ -526,6 +574,52 @@ mod tests {
         assert_eq!(check_cmd(&args(&[&tmp, "--min-free", "0%"])), 0);
         assert_eq!(check_cmd(&args(&[&tmp, "--min-free", "16000000TB"])), 2);
         assert_eq!(check_cmd(&args(&[&tmp])), 1);
+    }
+
+    /// `top` y `check` sobre un `.tessera`: lo abren en vez de escanear (check con el volumen guardado).
+    #[test]
+    fn saved_scan_files() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("tessera-cli-saved-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(dir.join("datos/sub")).unwrap();
+        std::fs::write(dir.join("datos/sub/grande.bin"), vec![1u8; 5000]).unwrap();
+        std::fs::write(dir.join("datos/x.txt"), b"hola").unwrap();
+        let s = tessera_core::scan(&dir.join("datos").to_string_lossy(), EngineChoice::Walk, &ScanOptions::default(), &|_| {}, &AtomicBool::new(false)).unwrap();
+        let file = dir.join("copia.TESSERA");
+        saved::write_scan(std::fs::File::create(&file).unwrap(), &s).unwrap();
+        let f = file.to_string_lossy().into_owned();
+        assert!(saved::is_saved_scan(&f) && saved::is_saved_scan(&format!("\"{f}\"")));
+        let o = load(&f, EngineChoice::Mft).unwrap();
+        assert_eq!((o.tree.len(), o.result.root_path.as_str(), o.scanned_at), (s.tree.len(), s.result.root_path.as_str(), s.scanned_at));
+        assert!(o.result.offline.is_some());
+        // check: el volumen guardado
+        let (ok, line) = check(&CheckArgs { path: f.clone(), min_free: Threshold::Percent(0.0) }).unwrap();
+        assert!(ok && line.starts_with("OK · ") && line.ends_with(&format!("· escaneado {}", iso(s.scanned_at))), "{line}");
+        assert_eq!(check_cmd(&args(&[&f, "--min-free", "16000000TB"])), 2);
+        // top --format json desde el .tessera
+        let out = dir.join("top.json");
+        assert_eq!(top_cmd(&args(&[&f, "--files", "1", "--format", "json", "--out", &out.to_string_lossy()])), 0);
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!((v["root"].as_str(), v["files"][0]["name"].as_str()), (Some(s.result.root_path.as_str()), Some("grande.bin")));
+        // Uno dañado: scan.openFailed (código de salida 1)
+        let bad = dir.join("roto.tessera");
+        std::fs::write(&bad, b"nada").unwrap();
+        assert_eq!(load(&bad.to_string_lossy(), EngineChoice::Auto).err().unwrap().code, "scan.openFailed");
+        assert_eq!(top_cmd(&args(&[&bad.to_string_lossy()])), 1);
+        assert_eq!(check_cmd(&args(&[&bad.to_string_lossy(), "--min-free", "1%"])), 1);
+        // find_node: absoluta o relativa
+        let t = &o.tree;
+        let root = t.root_path().to_string();
+        let g = find_node(t, &format!("{root}{}sub{}grande.bin", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR)).unwrap();
+        assert_eq!(t.name(g), "grande.bin");
+        assert_eq!(find_node(t, "sub/grande.bin"), Some(g));
+        assert_eq!((find_node(t, &root), find_node(t, ""), find_node(t, "no/está")), (Some(0), Some(0), None));
+        if cfg!(windows) {
+            assert_eq!(find_node(t, &format!("{}\\SUB\\Grande.BIN", root.to_uppercase())), Some(g));
+        } else {
+            assert_eq!(find_node(t, "SUB/grande.bin"), None);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// raíz → a(dir) → a1.bin 100 · sub(dir) → «x, \"y\".txt» 300 ; b(dir) → b.bin 50 ; c.txt 70

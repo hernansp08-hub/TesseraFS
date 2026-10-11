@@ -32,6 +32,7 @@ Comprueba las descargas con `sha256sum -c SHA256SUMS.txt --ignore-missing`.
 | Enlaces | Enlaces duros contados una vez | Igual; los enlaces simbólicos no se siguen (`attr:reparse` los encuentra) |
 | Historial | `%LOCALAPPDATA%\TesseraFS\history` | `~/.local/share/TesseraFS/history` |
 | Exportar | `Descargas\TesseraFS` | Tu carpeta de descargas (la de XDG) `/TesseraFS` |
+| Escaneo programado | Tarea del Programador de tareas | Temporizador de systemd de tu usuario (`~/.config/systemd/user/tesserafs-scan.timer`); el aviso, con `notify-send`. Sin systemd (algunos contenedores, WSL sin systemd) no está disponible |
 
 > [!IMPORTANT]
 > No abras la aplicación con `sudo`: las aplicaciones gráficas con root pueden dejar archivos de tu usuario con otro dueño. Si necesitas ver carpetas protegidas (`/root`, los datos de Docker…), usa la línea de comandos con `sudo`.

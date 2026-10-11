@@ -108,6 +108,11 @@ pub struct Scan {
 
 static SERIAL: AtomicU64 = AtomicU64::new(1);
 
+/// Serie para un escaneo nuevo del proceso (también uno abierto desde archivo).
+pub(crate) fn next_serial() -> u64 {
+    SERIAL.fetch_add(1, Relaxed)
+}
+
 /// Ejecuta `f` mientras otro hilo publica `prog` con `on_progress` cada `tick`.
 pub fn ticking<T>(prog: &Progress, tick: Duration, on_progress: &(dyn Fn(ScanProgress) + Sync), f: impl FnOnce() -> T) -> T {
     /// Para el hilo del progreso también si `f` termina con pánico.
@@ -248,6 +253,7 @@ pub fn scan(
         volume,
         warnings,
         can_refresh: Some(usn.is_some()),
+        offline: None,
     };
     prog.set_phase(ScanPhase::Done);
     on_progress(ScanProgress {
@@ -258,7 +264,7 @@ pub fn scan(
         detail: None,
         fraction: Some(1.0),
     });
-    Ok(Scan { tree, result, scanned_at: crate::query::now_secs() as u64, usn, serial: SERIAL.fetch_add(1, Relaxed) })
+    Ok(Scan { tree, result, scanned_at: crate::query::now_secs() as u64, usn, serial: next_serial() })
 }
 
 /// Posición del diario USN al empezar: sólo con administrador, en un volumen NTFS local con letra.

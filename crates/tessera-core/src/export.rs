@@ -2,7 +2,7 @@
 //! descargas de XDG + `/TesseraFS`), o a `TESSERA_EXPORT_DIR`.
 
 use std::borrow::Cow;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -74,6 +74,13 @@ pub fn export_file(name: &str, data: &str, base64: bool) -> Result<ExportResult,
     } else {
         Cow::Borrowed(data.as_bytes())
     };
+    write_new(name, |f| f.write_all(&bytes))
+}
+
+/// Crea en la carpeta de exportación un archivo nuevo llamado `name` (o ` (2)`, ` (3)`… antes de la
+/// extensión, si ya existe) y lo llena con `fill`. Si `fill` falla, lo borra (`export.failed`).
+/// `name` ya tiene que ser válido ([`valid_name`]).
+pub(crate) fn write_new(name: &str, fill: impl FnOnce(&mut File) -> io::Result<()>) -> Result<ExportResult, EngineMessage> {
     let fail = |e: io::Error| msg::export_failed(&sys::io_error_text(&e));
     let dir = export_dir()?;
     fs::create_dir_all(&dir).map_err(fail)?;
@@ -82,7 +89,7 @@ pub fn export_file(name: &str, data: &str, base64: bool) -> Result<ExportResult,
         let path = dir.join(if n == 1 { name.to_string() } else { format!("{stem} ({n}){ext}") });
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut f) => {
-                if let Err(e) = f.write_all(&bytes).and_then(|()| f.flush()) {
+                if let Err(e) = fill(&mut f).and_then(|()| f.flush()) {
                     drop(f);
                     let _ = fs::remove_file(&path);
                     return Err(fail(e));

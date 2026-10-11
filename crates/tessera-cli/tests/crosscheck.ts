@@ -2,12 +2,18 @@
 //  1) decodifica con decodeSlice (packages/protocol) el slice que escribió tessera-cli;
 //  2) vuelve a codificar con encodeSlice sobre el volcado JSON del mismo árbol y compara byte a byte;
 //  3) repite cada búsqueda con compileQuery y compara total, bytes y tamaños de las primeras filas;
-//     las de ATTR_QUERIES y FILES_QUERIES tienen que estar entre ellas.
-// Uso: bun crates/tessera-cli/tests/crosscheck.ts arbol.json slice.bin busquedas.json minBytes maxNodes
+//     las de ATTR_QUERIES y FILES_QUERIES tienen que estar entre ellas;
+//  4) con escaneo.tessera (el que escribió `--save`): lo abre el lector del motor Bun (decodeTessera) y compara
+//     cada nodo con el volcado, el slice byte a byte con el de Rust y las búsquedas; con tessera-cli, además, la
+//     vuelta: el motor Bun vuelve a escribir el .tessera, tessera-cli lo abre y su slice tiene que ser el mismo.
+// Uso: bun crates/tessera-cli/tests/crosscheck.ts arbol.json slice.bin busquedas.json minBytes maxNodes [escaneo.tessera [tessera-cli]]
 // Los archivos salen de: tessera-cli scan <carpeta> --json-out arbol.json --slice-out slice.bin --min-bytes X
-//   --max-nodes N --search-out busquedas.json --search "<consulta>" … (una --search por consulta)
-import { readFileSync } from 'node:fs';
+//   --max-nodes N --search-out busquedas.json --save escaneo.tessera --search "<consulta>" … (una --search por consulta)
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { compileQuery, decodeSlice, encodeSlice, type EngineMessage, type SliceSource } from '../../../packages/protocol/src';
+import { decodeTessera, encodeTessera } from '../../../packages/core-bun/src/saved.ts';
 
 /** attr: en los dos motores: alias, mayúsculas, varios valores, negación, con type:dir y un valor no válido. */
 const ATTR_QUERIES = [
@@ -20,7 +26,7 @@ const FILES_QUERIES = [
   'files:=0', 'files:zz',
 ];
 
-const [jsonPath, slicePath, searchPath, minArg, maxArg] = process.argv.slice(2);
+const [jsonPath, slicePath, searchPath, minArg, maxArg, tesseraPath, cliPath] = process.argv.slice(2);
 const dump = JSON.parse(readFileSync(jsonPath, 'utf8')) as {
   rootPath: string;
   nodes: { id: number; name: string; ext: string; isDir: boolean; size: number; alloc: number; files: number; dirs: number; mtime: number; flags: number; parent: number; kids: number[] }[];
@@ -72,6 +78,62 @@ for (const { query, response: r } of searches) {
   const sizesOk = r.rows.every((row, i) => row.size === hits[i]?.size);
   const pathsOk = r.rows.every(row => row.path === pathOf(row.id));
   check(hits.length === r.total && bytes === r.totalBytes && sizesOk && pathsOk, `«${query}»: TS ${hits.length} / Rust ${r.total} resultados, ${bytes} / ${r.totalBytes} bytes`);
+}
+
+// 4) Escaneo guardado (.tessera) que escribió Rust, abierto por el motor Bun
+if (tesseraPath) {
+  const t0 = performance.now();
+  const f = decodeTessera(new Uint8Array(readFileSync(tesseraPath)));
+  const st = f.store;
+  check(f.path === dump.rootPath && st.n === N.length && f.scannedAt > 0 && (f.engine === 'walk' || f.engine === 'mft'),
+    `.tessera abierto por Bun: ${st.n} nodos (${N.length} en Rust), raíz «${f.path}», ${f.engine}, equipo ${f.host ?? '?'}, TesseraFS ${f.app ?? '?'} (${Math.round(performance.now() - t0)} ms)`);
+  // Cada nodo, por ruta: tipo, tamaños, totales, fecha, flags y extensión
+  const byPath = new Map<string, number>();
+  for (const n of N) byPath.set(pathOf(n.id), n.id);
+  let bad = 0, firstBad = '';
+  for (let id = 0; id < st.n; id++) {
+    const p = st.path(id), d = N[byPath.get(p) ?? -1];
+    const r = st.row(id);
+    const same = d && r.isDir === d.isDir && r.size === d.size && r.alloc === d.alloc && r.files === d.files && r.dirs === d.dirs
+      && r.mtime === d.mtime && r.flags === (d.flags & 0xFF) && r.ext === d.ext && st.children(id).length === d.kids.length;
+    if (!same) { bad++; firstBad ||= `${p}: Bun ${JSON.stringify(r)} | Rust ${JSON.stringify(d)}`; }
+  }
+  check(!bad, `cada nodo del .tessera coincide con el árbol de Rust (ruta, tipo, tamaños, totales, fecha, flags, extensión)${bad ? ` — ${bad} distintos, p. ej. ${firstBad}` : ''}`);
+  const bunSlice = encodeSlice(st, 0, Number(minArg), Number(maxArg));
+  const diff = (a: Uint8Array, b: Uint8Array) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) return i; return -1; };
+  // Cada motor numera los nodos a su manera (Rust por niveles, Bun en el orden del archivo): el slice tiene que ser
+  // el mismo byte a byte salvo el id de cada registro (los padres van por posición en el slice, no por id)
+  const withoutIds = (s: Uint8Array) => {
+    const c = s.slice(), dv = new DataView(c.buffer);
+    const count = dv.getUint32(8, true), recStart = 32 + Math.ceil(dv.getUint32(20, true) / 8) * 8;
+    for (let i = 0; i < count; i++) dv.setUint32(recStart + i * 64, 0, true);
+    return c;
+  };
+  const d1 = diff(withoutIds(bunSlice), withoutIds(rustBytes));
+  check(d1 < 0, `slice del .tessera en Bun == slice de Rust salvo los ids (${bunSlice.length} / ${rustBytes.length} bytes${d1 >= 0 ? `, primera diferencia en ${d1}` : ''})`);
+  for (const { query, response: r } of searches) {
+    if (r.error) continue;
+    const b = st.search(query, 0, r.rows.length || 1);
+    check(b.total === r.total && b.totalBytes === r.totalBytes, `«${query}» sobre el .tessera en Bun: ${b.total} / Rust ${r.total} resultados, ${b.totalBytes} / ${r.totalBytes} bytes`);
+  }
+  // Vuelta: lo que escribe el motor Bun lo abre tessera-cli con el mismo slice
+  if (cliPath) {
+    const dir = mkdtempSync(join(tmpdir(), 'tessera-crosscheck-'));
+    try {
+      const back = join(dir, 'bun.tessera'), out = join(dir, 'slice.bin');
+      writeFileSync(back, encodeTessera(st, { app: f.app, host: f.host, scannedAt: f.scannedAt, engine: f.engine, volume: f.volume }));
+      const p = Bun.spawnSync([cliPath, 'scan', back, '--top', '0', '--slice-out', out, '--min-bytes', String(minArg), '--max-nodes', String(maxArg)]);
+      const text = p.stdout.toString();
+      check(p.exitCode === 0 && /Origen:\s+\.tessera escaneado/.test(text), `tessera-cli abre el .tessera que escribió Bun (código ${p.exitCode}${p.exitCode ? `: ${p.stderr.toString().trim()}` : ''})`);
+      if (p.exitCode === 0) {
+        const again = new Uint8Array(readFileSync(out));
+        const d2 = diff(again, rustBytes);
+        check(d2 < 0, `slice de tessera-cli sobre el .tessera de Bun == slice original (${again.length} / ${rustBytes.length} bytes${d2 >= 0 ? `, primera diferencia en ${d2}` : ''})`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 }
 console.log(fails ? `\n${fails} comprobaciones fallidas` : '\nTodo coincide');
 process.exit(fails ? 1 : 0);

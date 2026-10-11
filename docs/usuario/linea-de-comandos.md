@@ -79,5 +79,21 @@ tessera-cli history clear
 
 `scan` también admite `--dups <bytes>` (busca duplicados de ese tamaño o más) y `--dups-out duplicados.json`.
 
+## Escaneo completo para abrirlo en otro equipo: `--save`
+
+```bash
+tessera-cli scan /srv/datos --save datos.tessera      # en el servidor o el NAS
+tessera-cli top datos.tessera                          # lo más grande, sin volver a escanear
+tessera-cli check datos.tessera --min-free 10%         # con el espacio que tenía la unidad al escanear
+```
+
+El `.tessera` se abre después en la app (Exportar › **Abrir un escaneo guardado…**) en cualquier equipo, Windows o Linux. `scan`, `top` y `check` aceptan un `.tessera` en lugar de una carpeta; `check` usa el espacio que tenía la unidad al escanear y añade la fecha del escaneo.
+
+Para ver cómo ha cambiado una carpeta en los resúmenes del historial:
+
+```bash
+tessera-cli scan C:\ --history-trend Users\ana\Downloads    # ruta absoluta o relativa a la raíz
+```
+
 > [!TIP]
 > La variable de entorno `TESSERA_HISTORY_DIR` cambia la carpeta del historial, por ejemplo para guardar los resúmenes de varios equipos en una carpeta compartida.

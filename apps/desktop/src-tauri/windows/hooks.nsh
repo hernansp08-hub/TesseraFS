@@ -29,10 +29,21 @@ Var TesseraMenuText
   !insertmacro TESSERA_MENU_KEY "Directory" "$\"%V$\""
   !insertmacro TESSERA_MENU_KEY "Directory\Background" "$\"%V$\""
   !insertmacro TESSERA_MENU_KEY "Drive" "%V"
+  ; Escaneo programado: al actualizar, el instalador desinstala antes la versión anterior, que quita la tarea;
+  ; si había uno guardado (schedule.json queda, como el historial), la app vuelve a crear la tarea
+  ${If} ${FileExists} "$LOCALAPPDATA\TesseraFS\schedule.json"
+    nsExec::Exec '"$INSTDIR\${MAINBINARYNAME}.exe" --restore-schedule'
+    Pop $0
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
   DeleteRegKey HKCU "Software\Classes\Directory\shell\TesseraFS"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\TesseraFS"
   DeleteRegKey HKCU "Software\Classes\Drive\shell\TesseraFS"
+  ; La tarea del escaneo programado, que sin la app fallaría cada vez (si no hay, schtasks sólo da un error)
+  ${If} $UpdateMode <> 1
+    nsExec::Exec '"$SYSDIR\schtasks.exe" /Delete /F /TN "TesseraFS scheduled scan"'
+    Pop $0
+  ${EndIf}
 !macroend

@@ -64,12 +64,21 @@ Tipos en [`packages/protocol/src/types.ts`](../packages/protocol/src/types.ts). 
 | Actualizar con el diario USN | `refresh {onProgress: Channel<ScanProgress>}` | `POST /api/refresh` (siempre `refresh.unavailable` en la portable) | `RefreshResult` |
 | Elevación | `elevation` / `relaunch_elevated` | `GET /api/elevation` / `POST /api/relaunch-elevated` | `ElevationInfo` |
 | Sistema | `system` | `GET /api/system` (siempre Windows en la portable) | `SystemInfo {os, sep, actions, launchPath?}`: la interfaz adapta rutas, textos y acciones (en Linux no hay `properties` ni `freeUp`); con `launchPath` (la carpeta pasada al abrir la app) la escanea al arrancar |
+| Evolución | `history_trend {id}` | `GET /api/history/trend?id=N` | `TrendPoint[]`: el tamaño del nodo en cada resumen de su raíz, del más antiguo al más reciente, sin el del escaneo cargado; `null` si no estaba |
+| Guardar el escaneo | `save_scan` | `POST /api/scan/save` | `ExportResult`: el `.tessera` en la carpeta de exportación |
+| Abrir un escaneo guardado | `open_scan` (cuerpo binario: el archivo) | `POST /api/scan/open` (`application/octet-stream`, hasta 1 GiB) | `ScanResult` con `offline`; mientras tanto, las acciones, `rescan`, `refresh`, duplicados, enlaces rotos e historial devuelven `scan.offline` |
+| Escaneo programado | `schedule_get` | `GET /api/schedule` | `ScheduleInfo`: si el sistema programa escaneos, la programación (sólo si la tarea o el temporizador existen) y la última ejecución. La portable responde `supported: false` |
+| Programar o quitar | `schedule_set {cfg}` (`null`: quitar) | `POST /api/schedule` → `schedule.unsupported` (409) | `ScheduleInfo`; `schedule.invalid` si `cfg` no vale, `schedule.failed` si schtasks o systemctl fallan |
 | Enlaces rotos | `broken_links {root, limit}` | `POST /api/broken-links` `{root, limit}` | `SearchResponse`: enlaces simbólicos y uniones bajo `root` cuyo destino ya no existe, comprobados en el momento, ordenados por ruta |
 
 Historial: cada resumen son dos archivos en `%LOCALAPPDATA%\TesseraFS\history`, con el mismo formato en las dos ediciones:
 
 - `<id>.json`: el `HistoryEntry`.
 - `<id>.snap.gz`: JSON comprimido con gzip, `{"v":1,"path":…,"scannedAt":…,"nodes":[[parent,name,isDir,size,alloc,files,dirs,mtime],…]}`. `nodes[0]` es la raíz (`parent` −1, `name` = la ruta) y cada nodo va después de su padre. Se guardan todas las carpetas y los archivos de 1 MiB o más; `isDir` es 0 o 1.
+
+Escaneo guardado (`.tessera`): gzip de `{"v":1,"kind":"tesserafs-scan","app":…,"host":…,"path":…,"scannedAt":…,"engine":…,"volume":…,"nodes":[[parent,name,isDir,size,alloc,files,dirs,mtime,flags],…]}`. Como el resumen del historial pero con **todos** los nodos y los bits públicos de `FLAG`. Los dos motores lo escriben y lo leen igual (lo comprueba la prueba cruzada).
+
+Escaneo programado (sólo escritorio, `tessera_core::schedule`): la tarea del Programador de tareas (`TesseraFS scheduled scan`, creada con `schtasks /Create /XML`) o el temporizador de systemd del usuario (`tesserafs-scan.timer` + `.service`) sólo lanzan `tesserafs-desktop --scheduled-scan`, que sale antes de crear nada de Tauri: lee `<datos>/schedule.json` (el `ScheduleConfig`), escanea con el motor `auto`, guarda el resumen en el historial, avisa (toast de Windows o `notify-send`) si el espacio libre baja de `minFreePct` y escribe `<datos>/schedule-last.json` (`ScheduleRun`). `<datos>` es `%LOCALAPPDATA%\TesseraFS` o `$XDG_DATA_HOME/TesseraFS` (`TESSERA_DATA_DIR` en las pruebas). El instalador NSIS quita la tarea al desinstalar y la vuelve a crear al instalar con `--restore-schedule` si queda `schedule.json`.
 
 La comparación empareja por nombre sin distinguir mayúsculas, bajando desde la raíz. Un archivo de menos de 1 MiB que no está en el resumen no tiene `prev` (se desconoce); uno de 1 MiB o más, o una carpeta, que no está, es `fresh`.
 

@@ -67,7 +67,7 @@ test('demo: historial simulado, comparación, orden por cambio y borrado', async
   expect((await b.nodeInfo(res.rootId)).prev).toBeUndefined();
   const saved = await b.historySave();
   expect((await b.historyList())[0].id).toBe(saved.id);
-  expect(await b.historyClear()).toBe(2);
+  expect(await b.historyClear()).toBe(4); // 3 simulados (hace 120, 75 y 30 días) + el guardado
   expect(await b.historyList()).toEqual([]);
 }, 20000);
 

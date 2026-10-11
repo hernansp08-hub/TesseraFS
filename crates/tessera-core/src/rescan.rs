@@ -116,9 +116,10 @@ fn warnings_of(walked: &[Walked]) -> Vec<EngineMessage> {
 }
 
 impl Scan {
-    /// Valida `id` para volver a escanearlo: `error.invalidNode` (no existe o se quitó), `rescan.root`
-    /// (la raíz) o `error.notFolder` (un archivo).
+    /// Valida `id` para volver a escanearlo: `scan.offline` (escaneo abierto desde archivo),
+    /// `error.invalidNode` (no existe o se quitó), `rescan.root` (la raíz) o `error.notFolder` (un archivo).
     pub fn rescan_job(&self, id: u32) -> Result<RescanJob, EngineMessage> {
+        self.check_online()?;
         let t = &self.tree;
         if !t.live(id) {
             return Err(msg::invalid_node(id));
@@ -166,8 +167,10 @@ impl Scan {
         Ok(())
     }
 
-    /// Posición del diario para `refresh`; `refresh.unavailable` si el escaneo no la guardó.
+    /// Posición del diario para `refresh`; `scan.offline` si el escaneo se abrió desde archivo,
+    /// `refresh.unavailable` si no la guardó.
     pub fn refresh_cursor(&self) -> Result<UsnCursor, EngineMessage> {
+        self.check_online()?;
         self.usn.filter(|_| self.tree.has_frn()).ok_or_else(msg::refresh_unavailable)
     }
 
@@ -470,6 +473,7 @@ mod tests {
             volume: None,
             warnings: vec![],
             can_refresh: Some(true),
+            offline: None,
         };
         Scan { tree, result, scanned_at: 0, usn: Some(UsnCursor { letter: 'C', journal_id: 1, next_usn: 0 }), serial: 0 }
     }

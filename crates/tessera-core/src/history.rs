@@ -9,9 +9,13 @@
 //! El id es la fecha UTC del guardado (`YYYYMMDDTHHMMSSZ`) + `-` + FNV-1a de 32 bits de la ruta (UTF-8;
 //! en minúsculas si es de Windows, tal cual en Linux, que distingue mayúsculas), en hex; si ya existe,
 //! se añade `-2`, `-3`…
+//!
+//! Además de comparar, [`History::trend`] da el tamaño de un nodo del escaneo cargado en cada resumen
+//! de su raíz (la evolución de una carpeta o archivo).
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,7 +24,8 @@ use std::sync::Arc;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use serde::de::IgnoredAny;
+use rayon::prelude::*;
+use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 
 use crate::msg;
@@ -28,7 +33,7 @@ use crate::names;
 use crate::scan::Scan;
 use crate::sys;
 use crate::tree::{Tree, NONE};
-use crate::types::{ChangeRow, CompareResult, EngineMessage, HistoryEntry, RemovedRow, SearchRow, Totals};
+use crate::types::{ChangeRow, CompareResult, EngineMessage, HistoryEntry, RemovedRow, SearchRow, Totals, TrendPoint};
 
 /// Archivos que entran en el resumen (las carpetas entran todas).
 pub const MIN_FILE: u64 = 1 << 20;
@@ -230,10 +235,16 @@ fn write_snapshot(file: File, t: &Tree, scanned_at: u64) -> io::Result<u64> {
     Ok(n)
 }
 
-/// Lee y valida un `.snap.gz` (cada nodo después de su padre, que es una carpeta).
-fn read_snapshot(file: File) -> Result<SnapFile, String> {
+/// Descomprime un `.snap.gz`.
+fn read_gz(file: File) -> Result<Vec<u8>, String> {
     let mut raw = Vec::new();
     MultiGzDecoder::new(BufReader::new(file)).read_to_end(&mut raw).map_err(|e| sys::io_error_text(&e))?;
+    Ok(raw)
+}
+
+/// Lee y valida un `.snap.gz` (cada nodo después de su padre, que es una carpeta).
+fn read_snapshot(file: File) -> Result<SnapFile, String> {
+    let raw = read_gz(file)?;
     let snap: SnapFile = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
     if snap.v != 1 {
         return Err(format!("Unsupported snapshot version {}", snap.v));
@@ -277,15 +288,13 @@ pub struct History {
 }
 
 impl History {
-    /// `TESSERA_HISTORY_DIR` si está definida; si no, `%LOCALAPPDATA%\TesseraFS\history` en Windows y
-    /// `$XDG_DATA_HOME/TesseraFS/history` (o `~/.local/share/TesseraFS/history`) en Linux.
+    /// `TESSERA_HISTORY_DIR` si está definida; si no, `history` en la carpeta de datos ([`sys::data_dir`]:
+    /// `%LOCALAPPDATA%\TesseraFS\history` en Windows y `$XDG_DATA_HOME/TesseraFS/history` (o
+    /// `~/.local/share/TesseraFS/history`) en Linux).
     pub fn open() -> Result<History, EngineMessage> {
         let dir = match std::env::var_os("TESSERA_HISTORY_DIR").filter(|d| !d.is_empty()) {
             Some(d) => PathBuf::from(d),
-            None => sys::local_app_data()
-                .ok_or_else(|| msg::internal("Local application data folder not found"))?
-                .join("TesseraFS")
-                .join("history"),
+            None => sys::data_dir()?.join("history"),
         };
         Ok(History { dir })
     }
@@ -303,7 +312,9 @@ impl History {
     }
 
     /// Guarda el escaneo (sin lo enviado a la papelera) y deja los [`KEEP`] más recientes de su ruta.
+    /// Un escaneo abierto desde archivo no se guarda (`scan.offline`).
     pub fn save(&self, scan: &Scan) -> Result<HistoryEntry, EngineMessage> {
+        scan.check_online()?;
         let fail = |e: io::Error| msg::history_save_failed(&sys::io_error_text(&e));
         fs::create_dir_all(&self.dir).map_err(fail)?;
         let t = &scan.tree;
@@ -424,8 +435,10 @@ impl History {
 
     /// Compara el escaneo cargado con un resumen de la misma ruta y deja la comparación activa en
     /// el árbol (filas con `prev`/`fresh` y orden `delta`) hasta quitarla o cargar otro escaneo.
-    /// `history.notFound` si no está; `history.readFailed` si está dañado; `history.otherRoot` si es de otra ruta.
+    /// `history.notFound` si no está; `history.readFailed` si está dañado; `history.otherRoot` si es de otra ruta;
+    /// `scan.offline` si el escaneo se abrió desde archivo.
     pub fn compare(&self, scan: &Scan, id: &str, limit: u32) -> Result<CompareResult, EngineMessage> {
+        scan.check_online()?;
         if !valid_id(id) || !self.file(id, ENTRY).is_file() || !self.file(id, SNAP).is_file() {
             return Err(msg::history_not_found(id));
         }
@@ -463,6 +476,274 @@ impl History {
             shrank,
             removed,
         })
+    }
+
+    /// Evolución de un nodo del escaneo cargado: su tamaño en cada resumen de la misma raíz (misma regla
+    /// que `prune` y `compare`: en Windows sin distinguir mayúsculas), del más antiguo al más reciente,
+    /// sin el que tiene el mismo `scannedAt` que el escaneo cargado (es el actual, guardado
+    /// automáticamente). `size: null` si no estaba (o era un archivo de menos de 1 MiB). Los resúmenes
+    /// se leen en paralelo; los ilegibles o de otra raíz se saltan.
+    pub fn trend(&self, q: &TrendQuery) -> Result<Vec<TrendPoint>, EngineMessage> {
+        let key = root_key(&q.root);
+        let mut entries: Vec<HistoryEntry> = self.list()?.into_iter().filter(|e| e.scanned_at != q.scanned_at && root_key(&e.path) == key).collect();
+        entries.reverse();
+        let points: Vec<Option<TrendPoint>> = entries
+            .par_iter()
+            .map(|e| {
+                // Se descomprime a la vez que se analiza: sin el JSON entero en memoria y, al encontrarlo, se deja de leer
+                let gz = MultiGzDecoder::new(File::open(self.file(&e.id, SNAP)).ok()?);
+                let size = find_in_snapshot(BufReader::with_capacity(1 << 16, gz), q, &key).ok()?;
+                Some(TrendPoint { id: e.id.clone(), scanned_at: e.scanned_at, size })
+            })
+            .collect();
+        Ok(points.into_iter().flatten().collect())
+    }
+
+    /// [`Self::trend`] del nodo `id` del escaneo `scan` (`scan.offline`, `error.invalidNode`).
+    pub fn node_trend(&self, scan: &Scan, id: u32) -> Result<Vec<TrendPoint>, EngineMessage> {
+        self.trend(&TrendQuery::new(scan, id)?)
+    }
+}
+
+// ---------- Evolución de un nodo ----------
+
+/// Lo que [`History::trend`] necesita del escaneo cargado: se toma con el árbol bajo lectura y la
+/// búsqueda en los resúmenes va después, sin él.
+pub struct TrendQuery {
+    root: String,
+    /// Nombres desde la raíz (sin ella) hasta el nodo; en minúsculas si la ruta es de Windows.
+    comps: Vec<String>,
+    fold: bool,
+    is_dir: bool,
+    scanned_at: u64,
+}
+
+impl TrendQuery {
+    /// `scan.offline` si el escaneo se abrió desde archivo; `error.invalidNode` si `id` no está vivo.
+    pub fn new(scan: &Scan, id: u32) -> Result<TrendQuery, EngineMessage> {
+        scan.check_online()?;
+        let t = &scan.tree;
+        if !t.live(id) {
+            return Err(msg::invalid_node(id));
+        }
+        let fold = !names::is_posix(t.root_path());
+        let mut comps = Vec::new();
+        let mut a = id;
+        while a != 0 {
+            let name = t.name(a);
+            comps.push(if fold {
+                let mut s = String::with_capacity(name.len());
+                names::lower_into(&mut s, &name);
+                s
+            } else {
+                name.into_owned()
+            });
+            a = t.parent[a as usize];
+        }
+        comps.reverse();
+        Ok(TrendQuery { root: t.root_path().to_string(), comps, fold, is_dir: t.is_dir(id), scanned_at: scan.scanned_at })
+    }
+}
+
+/// Profundidad de un nodo del resumen que no coincide con la ruta buscada.
+const NO_MATCH: u32 = u32::MAX;
+
+/// Búsqueda de un nodo en un resumen: hasta qué profundidad coincide cada nodo con la ruta.
+struct Finder<'a> {
+    q: &'a TrendQuery,
+    key: &'a str,
+    depth: Vec<u32>,
+    /// Índice de la última carpeta que coincide (la más profunda de la ruta hasta ahora; 0 = la raíz).
+    last: usize,
+    found: Option<u64>,
+    /// Ya se sabe la respuesta: el análisis se corta con un error que no lo es.
+    done: bool,
+    nodes: bool,
+    scratch: String,
+}
+
+/// Tamaño del nodo de `q` en el JSON de un resumen de la raíz `key` (`None` si no está). Recorre los
+/// nodos en preorden con los componentes de la ruta: un nodo coincide hasta la profundidad k si su padre
+/// coincide hasta k − 1 y su nombre es el componente k. No construye rutas ni guarda nombres (sólo se
+/// compara el de los hijos de lo que coincide) y deja de leer en cuanto lo encuentra o en cuanto sale de
+/// la última carpeta que coincidía sin encontrarlo (los nombres de una carpeta son únicos; en Windows,
+/// sin distinguir mayúsculas).
+fn find_in_snapshot(json: impl Read, q: &TrendQuery, key: &str) -> Result<Option<u64>, String> {
+    let mut f = Finder { q, key, depth: Vec::new(), last: 0, found: None, done: false, nodes: false, scratch: String::new() };
+    let mut de = serde_json::Deserializer::from_reader(json);
+    match SnapSeed(&mut f).deserialize(&mut de) {
+        Ok(()) => {}
+        Err(_) if f.done => return Ok(f.found),
+        Err(e) => return Err(e.to_string()),
+    }
+    if !f.nodes {
+        return Err("Snapshot without nodes".into());
+    }
+    Ok(f.found)
+}
+
+struct SnapSeed<'f, 'a>(&'f mut Finder<'a>);
+
+impl<'de> DeserializeSeed<'de> for SnapSeed<'_, '_> {
+    type Value = ();
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_map(self)
+    }
+}
+
+impl<'de> Visitor<'de> for SnapSeed<'_, '_> {
+    type Value = ();
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a snapshot")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let f = self.0;
+        while let Some(k) = map.next_key::<String>()? {
+            match k.as_str() {
+                "v" => {
+                    if map.next_value::<f64>()? != 1.0 {
+                        return Err(de::Error::custom("Unsupported snapshot version"));
+                    }
+                }
+                "path" => {
+                    if root_key(&map.next_value::<String>()?) != f.key {
+                        return Err(de::Error::custom("Snapshot of another root"));
+                    }
+                }
+                "nodes" => map.next_value_seed(NodesFinder(&mut *f))?,
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+struct NodesFinder<'f, 'a>(&'f mut Finder<'a>);
+
+impl<'de> DeserializeSeed<'de> for NodesFinder<'_, '_> {
+    type Value = ();
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for NodesFinder<'_, '_> {
+    type Value = ();
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("an array of nodes")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let f = self.0;
+        let mut i = 0;
+        while seq.next_element_seed(NodeFinder { f: &mut *f, i })?.is_some() {
+            i += 1;
+        }
+        f.nodes = i > 0;
+        Ok(())
+    }
+}
+
+/// `[parent, name, isDir, size, …]` de un resumen.
+struct NodeFinder<'f, 'a> {
+    f: &'f mut Finder<'a>,
+    i: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for NodeFinder<'_, '_> {
+    type Value = ();
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for NodeFinder<'_, '_> {
+    type Value = ();
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a node array")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let (f, i) = (self.f, self.i);
+        let missing = || <A::Error as de::Error>::custom(format!("Incomplete snapshot node {i}"));
+        let parent = seq.next_element::<f64>()?.ok_or_else(missing)?;
+        // Componente que tiene que ser su nombre: el siguiente al de su padre, si el padre coincide
+        let k = if i == 0 {
+            if parent >= 0.0 {
+                return Err(de::Error::custom("Invalid snapshot root"));
+            }
+            None
+        } else if parent >= 0.0 && parent < i as f64 && parent.fract() == 0.0 {
+            if (parent as usize) < f.last {
+                // Preorden: ya se salió de la última carpeta que coincidía y no estaba dentro
+                f.done = true;
+                return Err(de::Error::custom("not found"));
+            }
+            Some(f.depth[parent as usize]).filter(|&d| d != NO_MATCH && (d as usize) < f.q.comps.len())
+        } else {
+            return Err(de::Error::custom(format!("Invalid parent in snapshot node {i}")));
+        };
+        let same_name = match k {
+            Some(d) => seq.next_element_seed(NameEq { comp: &f.q.comps[d as usize], fold: f.q.fold, scratch: &mut f.scratch })?.ok_or_else(missing)?,
+            None => seq.next_element::<IgnoredAny>()?.map(|_| false).ok_or_else(missing)?,
+        };
+        let dir = seq.next_element::<f64>()?.ok_or_else(missing)? != 0.0;
+        let size = seq.next_element::<f64>()?.ok_or_else(missing)?;
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        let depth = match k {
+            _ if i == 0 => 0,
+            Some(d) if same_name => d + 1,
+            _ => NO_MATCH,
+        };
+        if depth as usize == f.q.comps.len() && dir == f.q.is_dir {
+            f.found = Some(num(size));
+            f.done = true;
+            return Err(de::Error::custom("found"));
+        }
+        // Sólo una carpeta puede llevar al siguiente componente
+        let leads = dir && (depth as usize) < f.q.comps.len();
+        if leads && i > 0 {
+            f.last = i;
+        }
+        f.depth.push(if leads { depth } else { NO_MATCH });
+        Ok(())
+    }
+}
+
+/// El nombre (leído como bytes: admite suplentes sueltos) es `comp` (en minúsculas con `fold`).
+struct NameEq<'a> {
+    comp: &'a str,
+    fold: bool,
+    scratch: &'a mut String,
+}
+
+impl<'de> DeserializeSeed<'de> for NameEq<'_> {
+    type Value = bool;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<bool, D::Error> {
+        d.deserialize_bytes(self)
+    }
+}
+
+impl<'de> Visitor<'de> for NameEq<'_> {
+    type Value = bool;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a name")
+    }
+    fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<bool, E> {
+        let s = names::lossy(v);
+        Ok(if !self.fold {
+            s == self.comp
+        } else if s.is_ascii() {
+            // `comp` ya está en minúsculas
+            s.eq_ignore_ascii_case(self.comp)
+        } else {
+            self.scratch.clear();
+            names::lower_into(self.scratch, &s);
+            *self.scratch == self.comp
+        })
+    }
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<bool, E> {
+        self.visit_bytes(v.as_bytes())
     }
 }
 
@@ -687,6 +968,7 @@ mod tests {
             volume: None,
             warnings: vec![],
             can_refresh: None,
+            offline: None,
         };
         Scan { tree, result, scanned_at: 1_791_654_312, usn: None, serial: 0 }
     }
@@ -793,6 +1075,34 @@ mod tests {
         let m = match_nodes(&t, &nodes);
         assert_eq!((t.name(m[1]), t.name(m[2]), m[3]), ("X".into(), "x".into(), NONE));
         assert_eq!(snap_path(&nodes, 3), "/srv/X/y");
+    }
+
+    #[test]
+    fn finds_a_node_without_reading_the_rest() {
+        let q = |comps: &[&str], fold: bool, is_dir: bool| TrendQuery {
+            root: "C:\\D".into(),
+            comps: comps.iter().map(|c| c.to_string()).collect(),
+            fold,
+            is_dir,
+            scanned_at: 0,
+        };
+        // Lo que sigue a «b» está roto: sólo se llega ahí si no se para antes
+        let head = r#"{"v":1,"path":"c:\\d","nodes":[[-1,"C:\\D",1,10],[0,"A",1,5,0,0,0,0],[1,"x\ud800",0,5],[1,"Ñu",1,0],[0,"b",1,5],"#;
+        let json = format!("{head}[[[ roto");
+        let find = |q: &TrendQuery| find_in_snapshot(json.as_bytes(), q, "c:\\d");
+        assert_eq!(find(&q(&[], true, true)), Ok(Some(10)));
+        assert_eq!(find(&q(&["a"], true, true)), Ok(Some(5)));
+        assert_eq!(find(&q(&["a", "x\u{FFFD}"], true, false)), Ok(Some(5)), "suplente suelto: U+FFFD, como en el árbol");
+        assert_eq!(find(&q(&["a", "x\u{FFFD}"], true, true)), Ok(None), "otro tipo");
+        assert_eq!(find(&q(&["a", "ñu"], true, true)), Ok(Some(0)));
+        assert_eq!(find(&q(&["a", "y"], true, false)), Ok(None), "sale de «A» sin encontrarlo");
+        // Sin `fold` (Linux) las mayúsculas cuentan: «a» no está y hay que leerlo todo (hasta lo roto)
+        assert!(find(&q(&["a"], false, true)).unwrap_err().contains("expected"));
+        assert_eq!(find_in_snapshot(head.as_bytes(), &q(&["A"], false, true), "c:\\d"), Ok(Some(5)));
+        // Otra raíz u otra versión: error (el resumen se salta)
+        assert!(find_in_snapshot(json.as_bytes(), &q(&[], true, true), "c:\\e").unwrap_err().starts_with("Snapshot of another root"));
+        assert!(find_in_snapshot(&br#"{"v":2,"nodes":[]}"#[..], &q(&[], true, true), "c:\\d").unwrap_err().starts_with("Unsupported snapshot version"));
+        assert!(find_in_snapshot(&br#"{"v":1,"nodes":[[0,"x",1,1]]}"#[..], &q(&[], true, true), "c:\\d").unwrap_err().starts_with("Invalid snapshot root"));
     }
 
     #[test]

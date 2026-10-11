@@ -7,7 +7,9 @@ import {
 import { layout, raster, type Layout, type Tile } from './render';
 import { AGE_BINS, CATEGORIES, REST_COLOR, ageBin, ageColor, ageName, catName, categoryById, categoryOf, extColor, rgb, setExtRanking, type ColorMode, type RGB } from './colors';
 import { GB, MB, ageText, esc, fmtB, fmtD, fmtN, fmtP, fmtS } from './format';
-import { SYS, baseName, can, folderHint, isSystemVolume, isUnder, joinPath, parentPath, pathKey, setSystem, trimSep, volTag } from './platform';
+import { SYS, baseName, can, folderHint, isOffline, isSystemVolume, isUnder, joinPath, parentPath, pathKey, pathOs, setOffline, setPathStyle, setSystem, trimSep, volTag } from './platform';
+import { daysToFill, fitTrend, trendSVG, type Pt } from './trend';
+import type { ScheduleConfig, ScheduleInfo, ScheduleRun, TrendPoint } from '@tessera/protocol';
 import { LOCALES, PSEUDO, html, i18n, msgText, onLocaleChange, preference, setPreference, systemLocale, t, tk, translateDom, type MessageKey } from './i18n';
 import { cmdOf, howKey, knownIdFor, ruleMatches, rulesFor, titleOf, type Key, type Risk, type Rule } from './clean';
 
@@ -552,8 +554,9 @@ export function renderInspector() {
   const acts = S.confirmTrash
     ? `<div class="confirm"><p>${tx('insp.confirmTrash', { name: r.name, size: fmtB(r.size) })}</p><div><button class="btn sm" type="button" data-act="cancel">${tx('insp.cancel')}</button><button class="btn sm danger solid" type="button" data-act="trash-ok">${tx('insp.trashConfirm')}</button></div></div>`
     : `<div class="actions">${can('reveal') ? `<button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button>` : ''}<button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button>`
-      + `<button class="btn sm${S.marked.has(r.id) ? ' on' : ''}" type="button" data-act="mark" aria-pressed="${S.marked.has(r.id)}"${r.parentId >= 0 ? '' : ' disabled'}>${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}</button>`
-      + (r.isDir ? `<button class="btn sm" type="button" data-act="rescan" title="${tx('menu.rescan')}">${tx('insp.rescan')}</button>` : '')
+      + (isOffline() ? '' : `<button class="btn sm${S.marked.has(r.id) ? ' on' : ''}" type="button" data-act="mark" aria-pressed="${S.marked.has(r.id)}"${r.parentId >= 0 ? '' : ' disabled'}>${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}</button>`)
+      + (r.isDir && !isOffline() ? `<button class="btn sm" type="button" data-act="rescan" title="${tx('menu.rescan')}">${tx('insp.rescan')}</button>` : '')
+      + (!isOffline() ? `<button class="btn sm${trendSel?.id === r.id ? ' on' : ''}" type="button" data-act="trend" title="${tx('insp.trend.title')}">${tx('insp.trend')}</button>` : '')
       + (canFreeUp(r) ? `<button class="btn sm" type="button" data-act="freeUp" title="${tx('menu.freeUp.title')}">${tx('menu.freeUp')}</button>` : '')
       + (can('trash') ? `<button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button>` : '') + `</div>`;
   const inMarked = markedAncestor(r);
@@ -573,18 +576,57 @@ export function renderInspector() {
     + (savedOnDisk(r) && (r.isDir || r.flags & FLAG.COMPRESSED) ? `<p class="note">${tx(r.flags & FLAG.COMPRESSED ? 'insp.saved' : 'insp.saved.cloud', { saved: fmtB(r.size - r.alloc), pct: fmtP(1 - r.alloc / r.size) })}</p>` : '')
     + (inMarked ? `<p class="note marked-note">${tx('basket.alreadyIn', { name: inMarked.row.name })}</p>` : '')
     + knownHTML(r, path)
+    + trendHTML(r)
     + acts;
+}
+// ---------- Evolución en el historial ----------
+/** Evolución pedida en el panel de detalle (un elemento cada vez). */
+let trendSel: { id: number; pts: TrendPoint[] | null } | null = null;
+async function loadTrend(r: NodeRow) {
+  if (trendSel?.id === r.id) { trendSel = null; renderInspector(); return; }
+  trendSel = { id: r.id, pts: null }; renderInspector();
+  try { const pts = await B.historyTrend(r.id); if (trendSel?.id === r.id) { trendSel.pts = pts; renderInspector(); } }
+  catch (e) { trendSel = null; renderInspector(); toast(msgText(e)); }
+}
+function trendHTML(r: NodeRow) {
+  const tr = trendSel; if (!tr || tr.id !== r.id) return '';
+  if (!tr.pts) return `<p class="note">${tx('insp.trend.loading')}</p>`;
+  const past = tr.pts.filter(p => p.size != null).map(p => ({ t: p.scannedAt, y: p.size! }));
+  if (!past.length) return `<p class="note">${tx('insp.trend.none')}</p>`;
+  const first = past[0], pts: Pt[] = [...past, { t: Date.now() / 1000, y: r.size }];
+  return `<div class="insp-trend">${trendSVG(pts, { width: 260, height: 44, spark: true, fmtY: fmtB, fmtX: fmtD })}`
+    + `<p class="note">${tx('insp.trend.since', { delta: signedB(r.size - first.y), date: i18n.date(first.t), count: past.length })}</p></div>`;
+}
+/** Puntos del gráfico de la pestaña Cambios (para el tooltip). */
+let trendPts: Pt[] = [];
+/** Evolución de la raíz con todos sus resúmenes y, si es una unidad entera, cuándo se llenaría a este ritmo. */
+function trendBlock(mine: HistoryEntry[]) {
+  const nowT = H.entries.find(e => e.id === H.savedId)?.scannedAt ?? Date.now() / 1000;
+  const pts: Pt[] = [...mine.map(e => ({ t: e.scannedAt, y: e.bytes })), { t: nowT, y: S.root!.size }].sort((a, b) => a.t - b.t);
+  trendPts = pts;
+  const fit = fitTrend(pts), v = S.vol, whole = !!v && !!S.scan && pathKey(S.scan.rootPath) === pathKey(v.path);
+  const until = fit && fit.perDay > 0 ? nowT + 30 * 86400 : undefined;
+  let text: string;
+  if (!fit) text = t('trend.need');
+  else {
+    text = t(fit.perDay >= 0 ? 'trend.grows' : 'trend.shrinks', { rate: fmtB(Math.abs(fit.perDay) * 7), days: Math.round(fit.days) });
+    const left = whole ? daysToFill(fit.perDay, v!.free) : null;
+    if (left != null) { const at = nowT + left * 86400; text += ' ' + t('trend.full', { drive: volTag(v!), free: fmtB(v!.free), when: i18n.relative(at), date: i18n.date(at) }); }
+  }
+  return `<h3 class="ch-h">${tx('trend.title')}</h3><div class="trend" id="trendBox">`
+    + trendSVG(pts, { width: Math.max(280, $('changesBody').clientWidth - 30), height: 150, fmtY: fmtB, fmtX: fmtD, fit, until, label: t('trend.estimate') })
+    + `<div class="trend-tip" id="trendTip" hidden></div></div><p class="note">${esc(text)}</p>`;
 }
 // Primero una regla de limpieza que lo describa (con su riesgo y su orden), después las carpetas conocidas.
 // Se calcula una vez por elemento: alguna regla pregunta al motor por los hijos (CACHEDIR.TAG de Rust).
 async function knownFor(r: NodeRow, path: string): Promise<Known | null> {
   const tg = { name: r.name, path, isDir: r.isDir, ext: r.ext, size: r.size, alloc: r.alloc, flags: r.flags };
-  for (const rule of rulesFor(SYS.os)) {
+  for (const rule of rulesFor(pathOs())) {
     if (!ruleMatches(rule, tg)) continue;
     if (rule.needs && !(await hasChild(r.id, rule.needs).catch(() => false))) continue;
     return { rule, title: titleOf(rule, tg), cmd: cmdOf(rule, tg) };
   }
-  const id = knownIdFor(path, SYS.os);
+  const id = knownIdFor(path, pathOs());
   return id ? { id } : null;
 }
 function knownHTML(r: NodeRow, path: string | undefined): string {
@@ -654,6 +696,7 @@ $('insp').addEventListener('click', e => {
     case 'trash-ok': S.confirmTrash = false; renderInspector(); doAction('trash', r); break;
     case 'mark': toggleMark(r); break;
     case 'rescan': rescanFolder(r); break;
+    case 'trend': loadTrend(r); break;
     case 'freeUp': freeUp(r); break;
     case 'copy-cmd': { const k = S.known.get(r.id); if (k && 'rule' in k && k.cmd) copyText(k.cmd, 'toast.commandCopied'); break; }
   }
@@ -724,7 +767,7 @@ function storeSearches(list: SavedSearch[]) { try { localStorage.setItem(SAVED_K
 function discoverHTML() {
   const saved = savedSearches(), cur = q.value.trim();
   return `<div class="menu-h">${tx('discover.title')}</div>`
-    + DISCOVER.filter(([, , win]) => !win || SYS.os === 'windows')
+    + DISCOVER.filter(([, , win]) => !win || pathOs() === 'windows')
       .map(([k, query]) => `<button type="button" role="menuitem" data-m="q" data-q="${esc(query)}">${tx(k as MessageKey)}<span>${esc(query)}</span></button>`).join('')
     + `<hr><div class="menu-h">${tx('discover.saved')}</div>`
     + (saved.length ? saved.map((s, i) => `<div class="menu-row"><button type="button" role="menuitem" data-m="q" data-q="${esc(s.q)}">${esc(s.name)}<span>${esc(s.q)}</span></button>`
@@ -752,7 +795,7 @@ async function loadClean() {
   if (!S.root) return;
   const cards: CleanCard[] = [], root = S.root, rootPath = S.scan?.rootPath ?? '';
   const seen: string[] = []; // rutas que ya tienen tarjeta: la caché declarada no se repite ni se anida
-  for (const rule of rulesFor(SYS.os)) {
+  for (const rule of rulesFor(pathOs())) {
     if (rule.list) {
       const res = await (rule.list === 'links' ? B.brokenLinks(root.id, 500) : B.search({ query: rule.q, root: root.id, limit: 500 })).catch(() => null);
       if (!res || res.error || !res.total) continue;
@@ -844,7 +887,9 @@ export function setTab(t: string) {
 // El motor compara tamaños, luego los primeros 64 KiB y por último el contenido completo de los candidatos.
 // Desde aquí se marcan las copias para la cesta «Para borrar»; nada se borra sin pasar por ella.
 const DUP_SIZES = [100 * 1024, 1024 ** 2, 10 * 1024 ** 2, 100 * 1024 ** 2], DUP_PAGE = 40;
-const D = { result: null as DupResult | null, running: false, progress: null as DupProgress | null, all: false, min: 1024 ** 2, shown: DUP_PAGE };
+type DupKeep = 'oldest' | 'newest' | 'shortest' | 'map';
+const KEEP_KEY: Record<Exclude<DupKeep, 'map'>, MessageKey> = { oldest: 'dups.keep.oldest', newest: 'dups.keep.newest', shortest: 'dups.keep.shortest' };
+const D = { result: null as DupResult | null, running: false, progress: null as DupProgress | null, all: false, min: 1024 ** 2, shown: DUP_PAGE, keep: 'oldest' as DupKeep };
 const ICON_BOX = '<svg class="i" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/></svg>';
 const ICON_CHECKED = '<svg class="i" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="m5.5 8 1.8 1.8L10.8 6"/></svg>';
 function resetDups() { D.result = null; D.progress = null; D.shown = DUP_PAGE; $('dupsCount').textContent = ''; }
@@ -886,7 +931,9 @@ function renderDups() {
   el.innerHTML = controls
     + `<div class="dp-sum"><div class="bk-sum"><b>${fmtB(r.wasted)}</b><span>${tx('dups.summary', { groups: r.totalGroups })}</span>`
     + `<small>${tx('dups.stats', { candidates: r.candidates, read: fmtB(r.readBytes), time: fmtS(r.elapsedMs) })}</small></div>`
-    + `<div class="bk-acts"><button class="btn sm" type="button" data-dp="hl">${tx('dups.highlight')}</button><button class="btn sm danger" type="button" data-dp="mark">${tx('dups.markCopies')}</button></div></div>`
+    + `<div class="bk-acts"><button class="btn sm" type="button" data-dp="hl">${tx('dups.highlight')}</button>`
+    + `<label class="dp-min">${tx('dups.keep')} <select data-dp="keep">${(['oldest', 'newest', 'shortest', 'map'] as DupKeep[]).map(k => `<option value="${k}"${D.keep === k ? ' selected' : ''}${k === 'map' && whole ? ' disabled' : ''}>${k === 'map' ? tx('dups.keep.map', { name: nameOf(z) }) : tx(KEEP_KEY[k])}</option>`).join('')}</select></label>`
+    + `<button class="btn sm danger" type="button" data-dp="mark">${tx('dups.markCopies')}</button></div></div>`
     + skipped + warns + (r.totalGroups > r.groups.length ? `<p class="note">${tx('dups.shown', { count: r.groups.length })}</p>` : '')
     + r.groups.slice(0, D.shown).map(dupGroupHTML).join('')
     + (r.groups.length > D.shown ? `<button class="btn sm dp-more" type="button" data-dp="more">${tx('dups.more', { count: Math.min(DUP_PAGE, r.groups.length - D.shown) })}</button>` : '');
@@ -906,12 +953,28 @@ async function runDups() {
   } finally { D.running = false; if (S.tab === 'dups') renderDups(); }
 }
 /** Marca todas las copias menos una por grupo: se conserva la más antigua (a igualdad, la de ruta más corta). */
+/**
+ * Marca las copias que sobran de cada grupo según `D.keep`: se conserva la más antigua, la más reciente o la de
+ * ruta más corta (una por grupo); o todas las que están en la carpeta del mapa («de referencia»), y entonces sólo
+ * se marcan las de fuera, en los grupos que tienen alguna dentro y alguna fuera.
+ */
 async function markCopies() {
   if (!D.result) return; let n = 0, bytes = 0;
+  const ref = D.keep === 'map' ? await pathOf((zoomRow() || S.root)!.id).catch(() => '') : '';
+  const order: Record<Exclude<DupKeep, 'map'>, (a: SearchRow, b: SearchRow) => number> = {
+    oldest: (a, b) => a.mtime - b.mtime || a.path.length - b.path.length,
+    newest: (a, b) => b.mtime - a.mtime || a.path.length - b.path.length,
+    shortest: (a, b) => a.path.length - b.path.length || a.mtime - b.mtime,
+  };
   for (const g of D.result.groups) {
-    const keep = [...g.files].sort((a, b) => a.mtime - b.mtime || a.path.length - b.path.length)[0];
-    if (S.marked.has(keep.id)) await toggleMark(keep, true); // nunca se marcan todas las copias de un grupo
-    for (const f of g.files) if (f.id !== keep.id && !S.marked.has(f.id)) {
+    let keepers: SearchRow[];
+    if (D.keep === 'map') {
+      keepers = ref ? g.files.filter(f => isUnder(f.path, ref)) : [];
+      if (!keepers.length || keepers.length === g.files.length) continue;
+    } else keepers = [[...g.files].sort(order[D.keep])[0]];
+    const keepIds = new Set(keepers.map(f => f.id));
+    for (const k of keepers) if (S.marked.has(k.id)) await toggleMark(k, true); // nunca se marcan todas las copias de un grupo
+    for (const f of g.files) if (!keepIds.has(f.id) && !S.marked.has(f.id)) {
       await toggleMark(f, true); if (S.marked.has(f.id)) { n++; bytes += f.size; }
     }
   }
@@ -952,6 +1015,7 @@ $('dupsBody').addEventListener('dblclick', e => {
 });
 $('dupsBody').addEventListener('change', e => {
   const s = (e.target as HTMLElement).closest('[data-dp="min"]') as HTMLSelectElement; if (s) D.min = +s.value;
+  const k = (e.target as HTMLElement).closest('[data-dp="keep"]') as HTMLSelectElement; if (k) D.keep = k.value as DupKeep;
 });
 
 // ---------- Historial y cambios ----------
@@ -1014,6 +1078,8 @@ async function renderChanges() {
   if (!H.loaded) { H.loaded = true; H.entries = await B.historyList().catch(() => []); }
   const root = pathKey(S.scan.rootPath), mine = H.entries.filter(e => pathKey(e.path) === root && e.id !== H.savedId), c = H.cmp;
   let h = `<p class="dp-intro">${tx('changes.intro')}</p>`;
+  if (S.scan.offline) { el.innerHTML = h + `<p class="note">${esc(msgText({ code: 'scan.offline', message: '' }))}</p>` + scheduleHTML(); return; }
+  if (mine.length) h += trendBlock(mine);
   if (c) {
     const d = c.after.bytes - c.before.bytes;
     h += `<div class="dp-sum"><div class="bk-sum"><b class="delta ${d >= 0 ? 'up' : 'down'}">${esc(signedB(d))}</b><span>${tx('changes.since', { when: i18n.relative(c.entry.scannedAt), date: i18n.dateTime(c.entry.scannedAt) })}</span>`
@@ -1037,9 +1103,76 @@ async function renderChanges() {
       ? `<span class="ch-confirm">${tx('changes.clearConfirm', { count: H.entries.length })} <button class="btn sm" type="button" data-ch="clearNo">${tx('insp.cancel')}</button> <button class="btn sm danger solid" type="button" data-ch="clearYes">${tx('changes.clear')}</button></span>`
       : `<button class="btn sm danger" type="button" data-ch="clear"${H.entries.length ? '' : ' disabled'}>${tx('changes.clear')}</button>`)
     + `</div><p class="note">${tx('changes.where')}</p>`;
-  el.innerHTML = h;
+  el.innerHTML = h + scheduleHTML();
 }
+// ---------- Escaneo programado ----------
+// Configuración persistente del sistema (una tarea del Programador de tareas o un temporizador de systemd): sólo
+// se crea, cambia o quita cuando el usuario pulsa el botón correspondiente.
+// draft: lo que se envió, para no perderlo si falla (ruta que no existe…)
+const SCH = { info: null as ScheduleInfo | null, loading: false, editing: false, busy: false, draft: null as ScheduleConfig | null };
+async function loadSchedule() {
+  if (SCH.loading) return; SCH.loading = true;
+  try { SCH.info = await B.scheduleGet(); } catch { SCH.info = { supported: false, schedule: null }; }
+  SCH.loading = false; if (S.tab === 'changes') renderChanges();
+}
+/** «domingo», «Sunday»…: 1 de enero de 2023 fue domingo. */
+const weekdayName = (d: number) => new Intl.DateTimeFormat(document.documentElement.lang || undefined, { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2023, 0, 1 + d)));
+function lastRunHTML(r?: ScheduleRun) {
+  if (!r) return `<p class="note">${tx('sched.never')}</p>`;
+  if (!r.ok) return `<p class="note">${tx('sched.lastFail', { when: i18n.relative(r.at), error: r.error ? msgText(r.error) : '' })}</p>`;
+  return `<p class="note">${tx(r.alerted ? 'sched.lastAlert' : 'sched.lastOk', { when: i18n.relative(r.at), size: fmtB(r.bytes ?? 0), free: fmtB(r.free ?? 0) })}</p>`;
+}
+function scheduleHTML() {
+  const inf = SCH.info; if (!inf) { loadSchedule(); return ''; }
+  let h = `<h3 class="ch-h">${tx('sched.title')}</h3>`;
+  if (!inf.supported) return h + `<p class="note">${esc(msgText({ code: 'schedule.unsupported', message: '' }))}</p>`;
+  const c = inf.schedule;
+  if (c && !SCH.editing) {
+    return h + `<p class="sch-now">${tx('sched.current', { path: c.path, every: c.every, day: weekdayName(c.weekday ?? 0), time: c.time, pct: c.minFreePct })}</p>`
+      + lastRunHTML(inf.lastRun)
+      + `<div class="bk-acts"><button class="btn sm" type="button" data-sch="edit">${tx('sched.edit')}</button>`
+      + `<button class="btn sm danger" type="button" data-sch="remove"${SCH.busy ? ' disabled' : ''}>${tx('sched.remove')}</button></div>`;
+  }
+  const v: ScheduleConfig = SCH.draft ?? c ?? { path: S.scan?.offline ? S.target : (S.scan?.rootPath ?? S.target), every: 'weekly', time: '10:00', weekday: 0, minFreePct: 10 };
+  return h + `<p class="note">${tx('sched.intro')}</p><form class="sch-form" data-sch="form">`
+    + `<label>${tx('sched.path')} <input name="path" value="${esc(v.path)}" spellcheck="false" required></label>`
+    + `<label>${tx('sched.every')} <select name="every"><option value="daily"${v.every === 'daily' ? ' selected' : ''}>${tx('sched.daily')}</option><option value="weekly"${v.every === 'weekly' ? ' selected' : ''}>${tx('sched.weekly')}</option></select></label>`
+    + `<label>${tx('sched.day')} <select name="weekday"${v.every === 'daily' ? ' disabled' : ''}>${[0, 1, 2, 3, 4, 5, 6].map(d => `<option value="${d}"${(v.weekday ?? 0) === d ? ' selected' : ''}>${esc(weekdayName(d))}</option>`).join('')}</select></label>`
+    + `<label>${tx('sched.time')} <input name="time" type="time" value="${esc(v.time)}" required></label>`
+    + `<label>${tx('sched.alert')} <input name="pct" type="number" min="0" max="99" value="${v.minFreePct}"> %</label>`
+    + `<div class="bk-acts"><button class="btn sm primary" type="submit"${SCH.busy ? ' disabled' : ''}>${tx(c ? 'sched.save' : 'sched.create')}</button>`
+    + (c ? `<button class="btn sm" type="button" data-sch="cancel">${tx('insp.cancel')}</button>` : '') + `</div></form>`
+    + (inf.lastRun ? lastRunHTML(inf.lastRun) : '');
+}
+async function setSchedule(cfg: ScheduleConfig | null) {
+  SCH.busy = true; renderChanges();
+  try { SCH.info = await B.scheduleSet(cfg); SCH.editing = false; SCH.draft = null; toast(t(cfg ? 'toast.scheduled' : 'toast.unscheduled')); }
+  catch (e) { SCH.draft = cfg; toast(t('toast.error', { error: msgText(e) })); }
+  finally { SCH.busy = false; if (S.tab === 'changes') renderChanges(); }
+}
+$('changesBody').addEventListener('submit', e => {
+  const f = (e.target as HTMLElement).closest('[data-sch="form"]') as HTMLFormElement; if (!f) return;
+  e.preventDefault();
+  const d = new FormData(f), every = d.get('every') === 'daily' ? 'daily' : 'weekly';
+  setSchedule({
+    path: String(d.get('path') || '').trim(), every, time: String(d.get('time') || '10:00'), weekday: every === 'weekly' ? +(d.get('weekday') || 0) : undefined,
+    minFreePct: Math.max(0, Math.min(99, Math.round(+(d.get('pct') || 0)))),
+    // El escaneo programado no tiene interfaz: el aviso lleva ya el texto en el idioma actual, con sus huecos
+    messages: { title: t('sched.notify.title'), body: t('sched.notify.body', { drive: '{drive}', free: '{free}', pct: '{pct}' }), sizes: i18n.sizePatterns() },
+  });
+});
 const changeRow = (id: number) => H.cmp ? [...H.cmp.grew, ...H.cmp.shrank].find(r => r.id === id) ?? null : null;
+$('changesBody').addEventListener('click', e => {
+  const b = (e.target as HTMLElement).closest('[data-sch]') as HTMLElement | null; if (!b || b.tagName === 'FORM') return;
+  if (b.dataset.sch === 'edit') { SCH.editing = true; renderChanges(); }
+  else if (b.dataset.sch === 'cancel') { SCH.editing = false; SCH.draft = null; renderChanges(); }
+  else if (b.dataset.sch === 'remove') setSchedule(null);
+});
+// El día sólo cuenta en la semanal
+$('changesBody').addEventListener('change', e => {
+  const s = e.target as HTMLSelectElement; if (s.name !== 'every' || !s.closest('[data-sch="form"]')) return;
+  const day = s.form?.elements.namedItem('weekday') as HTMLSelectElement | null; if (day) day.disabled = s.value === 'daily';
+});
 $('changesBody').addEventListener('click', async e => {
   const el = e.target as HTMLElement, b = el.closest('[data-ch]') as HTMLElement, entry = (el.closest('[data-entry]') as HTMLElement | null)?.dataset.entry;
   switch (b?.dataset.ch) {
@@ -1062,6 +1195,18 @@ $('changesBody').addEventListener('click', async e => {
   const row = el.closest('.ch-row') as HTMLElement | null, r = row ? changeRow(+row.dataset.id!) : null;
   if (r) { select(asRow(r)); renderChanges(); }
 });
+// Tooltip del gráfico de evolución: fecha, tamaño y cambio respecto al punto anterior
+$('changesBody').addEventListener('pointerover', e => {
+  const tipEl = document.getElementById('trendTip'); if (!tipEl) return;
+  const h = (e.target as Element).closest?.('.thit') as SVGElement | null; if (!h) { tipEl.hidden = true; return; }
+  const i = +h.dataset.i!, p = trendPts[i], prev = trendPts[i - 1]; if (!p) return;
+  tipEl.innerHTML = `<b>${esc(fmtB(p.y))}</b><br>${esc(i18n.dateTime(p.t))}` + (prev ? `<br>${esc(signedB(p.y - prev.y))}` : '');
+  tipEl.hidden = false;
+  const box = $('trendBox').getBoundingClientRect(), r = h.getBoundingClientRect();
+  let l = r.right - box.left + 4; if (l + tipEl.offsetWidth > box.width) l = r.left - box.left - tipEl.offsetWidth - 4;
+  tipEl.style.transform = `translate(${Math.max(0, l)}px,${Math.max(0, r.top - box.top - 8)}px)`;
+});
+$('changesBody').addEventListener('pointerleave', () => { const tipEl = document.getElementById('trendTip'); if (tipEl) tipEl.hidden = true; });
 $('changesBody').addEventListener('dblclick', e => {
   const row = (e.target as HTMLElement).closest('.ch-row') as HTMLElement | null, r = row ? changeRow(+row.dataset.id!) : null;
   if (r) { setTab('tree'); locate(asRow(r)); }
@@ -1190,7 +1335,17 @@ async function buildReport(): Promise<string> {
     + `<title>${tx('report.title')} · ${esc(scan.rootPath)}</title><style>${REPORT_CSS}</style></head><body><main>${h}</main></body></html>`;
 }
 async function runExport(kind: string) {
+  if (kind === 'openScan') { ($('scanFile') as HTMLInputElement).click(); return; }
   if (!S.root) return;
+  if (kind === 'saveScan') {
+    try {
+      const r = await B.saveScan();
+      toast(t('export.saved', { name: r.path }), B.kind === 'demo' ? undefined : {
+        label: t('export.show'), run: () => { B.revealExport(r.path).then(x => { if (!x.ok) toast(msgText(x)); }).catch(err => toast(msgText(err))); },
+      });
+    } catch (e) { toast(t('toast.error', { error: msgText(e) })); }
+    return;
+  }
   if (kind === 'png') return saveExport(`TesseraFS-map-${stamp()}.png`, mapC.toDataURL('image/png').split(',')[1], true);
   if (kind === 'report') { toast(t('export.building')); return saveExport(`TesseraFS-report-${stamp()}.html`, await buildReport()); }
   const tb = await currentTable(); if (!tb) return;
@@ -1206,8 +1361,19 @@ $('exportBtn').addEventListener('click', e => {
     + `<button type="button" role="menuitem" data-m="png"${has && S.slice ? '' : ' disabled'}>${tx('export.png')}<span>PNG</span></button><hr>`
     + `<div class="menu-h">${tx('export.list', { view: tk(VIEW_KEY[S.tab] ?? 'export.view.tree') })}</div>`
     + `<button type="button" role="menuitem" data-m="csv"${listOk ? '' : ' disabled'}>${tx('export.csv')}<span>CSV</span></button>`
-    + `<button type="button" role="menuitem" data-m="json"${listOk ? '' : ' disabled'}>${tx('export.json')}<span>JSON</span></button>`,
+    + `<button type="button" role="menuitem" data-m="json"${listOk ? '' : ' disabled'}>${tx('export.json')}<span>JSON</span></button>`
+    + `<hr><div class="menu-h">${tx('export.scan')}</div>`
+    + `<button type="button" role="menuitem" data-m="saveScan"${has ? '' : ' disabled'}>${tx('export.saveScan')}<span>.tessera</span></button>`
+    + `<button type="button" role="menuitem" data-m="openScan"${S.scanning ? ' disabled' : ''}>${tx('export.openScan')}<span>.tessera</span></button>`,
     r.left, r.bottom + 6, 'export');
+});
+// Abrir un escaneo guardado: se carga como un escaneo más, pero «sin conexión» (sin acciones sobre el disco)
+$('scanFile').addEventListener('change', async e => {
+  const inp = e.target as HTMLInputElement, f = inp.files?.[0]; inp.value = ''; if (!f) return;
+  // Los motores no abren archivos de más de 1 GiB: se avisa antes de leerlo entero
+  if (f.size > 1024 ** 3) { toast(msgText({ code: 'scan.openFailed', params: { error: `${fmtB(f.size)} > ${fmtB(1024 ** 3)}` }, message: '' })); return; }
+  const buf = await f.arrayBuffer().catch(() => null); if (!buf) return;
+  startScan(() => B.openScan(buf));
 });
 
 // ---------- Cesta «Para borrar» ----------
@@ -1226,6 +1392,7 @@ const cardMarked = (c: CleanCard) => (c.rows || [c.row]).every(r => S.marked.has
 /** `quiet`: sin repintar ni avisos (marcado por lotes desde una tarjeta). */
 async function toggleMark(r: NodeRow, quiet = false) {
   if (r.parentId < 0) return; // la raíz del escaneo no se borra
+  if (isOffline()) { if (!quiet) toast(msgText({ code: 'scan.offline', message: '' })); return; }
   if (S.marked.has(r.id)) { S.marked.delete(r.id); if (!quiet) afterMarksChanged(); return; }
   const path = await pathOf(r.id).catch(() => ''); if (!path) return;
   for (const m of S.marked.values()) if (m.row.isDir && inside(path, m.path)) { if (!quiet) toast(t('basket.alreadyIn', { name: m.row.name })); return; }
@@ -1313,8 +1480,8 @@ function nodeMenu(r: NodeRow, x: number, y: number) {
     + `<button type="button" role="menuitem" data-m="copy">${tx('menu.copyPath')}</button>`
     + `<button type="button" role="menuitem" data-m="zoom">${tx('menu.zoom')}</button>`
     + `<button type="button" role="menuitem" data-m="tree">${tx('menu.locate')}</button><hr>`
-    + (r.parentId >= 0 ? `<button type="button" role="menuitem" data-m="mark">${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}<span>${tx('key.space')}</span></button>` : '')
-    + (r.isDir ? `<button type="button" role="menuitem" data-m="rescan">${tx('menu.rescan')}<span>${r.parentId < 0 || (zoomRow()?.id === r.id) ? tx('key.f5') : ''}</span></button>` : '')
+    + (r.parentId >= 0 && !isOffline() ? `<button type="button" role="menuitem" data-m="mark">${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}<span>${tx('key.space')}</span></button>` : '')
+    + (r.isDir && !isOffline() ? `<button type="button" role="menuitem" data-m="rescan">${tx('menu.rescan')}<span>${r.parentId < 0 || (zoomRow()?.id === r.id) ? tx('key.f5') : ''}</span></button>` : '')
     + (canFreeUp(r) ? `<button type="button" role="menuitem" data-m="freeUp">${tx('menu.freeUp')}</button>` : '')
     + (can('properties') ? `<button type="button" role="menuitem" data-m="properties">${tx('menu.properties')}</button>` : '')
     + (can('trash') ? `<button type="button" role="menuitem" data-m="trash" class="danger">${tx('menu.trash')}<span>${tx('key.delete')}</span></button>` : ''), x, y, 'node', r.id);
@@ -1471,7 +1638,8 @@ function showProgress(p: ScanProgress) {
     $('scanTxt').textContent = t('header.scanProgress', { value: pct });
   } else $('scanTxt').textContent = t('header.scanProgress', { value: fmtN(p.entries) });
 }
-export async function startScan() {
+/** Escanea la unidad o carpeta elegida o, con `loader`, carga un escaneo de otra fuente (un archivo .tessera). */
+export async function startScan(loader?: () => Promise<ScanResult>) {
   if (S.scanning) return;
   if (D.running) { toast(t('engine.error.dupBusy')); return; } S.scanning = true; closeMenus(); tip.hidden = true;
   // Durante el escaneo el botón principal pasa a Cancelar
@@ -1479,7 +1647,8 @@ export async function startScan() {
   $('scanBar').hidden = !expectedBytes(); ($('scanBar').firstElementChild as HTMLElement).style.transform = 'scaleX(0)';
   scanCard = null; showProgress({ phase: 'starting', entries: 0, bytes: 0, elapsedMs: 0 });
   try {
-    const res = await B.scan({ path: S.target, engine: 'auto' }, showProgress);
+    const res = await (loader ? loader() : B.scan({ path: S.target, engine: 'auto' }, showProgress));
+    setOffline(!!res.offline); setPathStyle(res.offline ? res.rootPath : null); if (res.offline) S.target = res.rootPath; trendSel = null;
     S.scan = res; S.kids.clear(); S.rowCache.clear(); S.pathCache.clear(); S.clean = null; S.marked.clear(); S.basketConfirm = false; renderBasketCount(); S.known.clear(); resetDups(); resetChanges(); S.hl = null; $('hlChip').hidden = true; S.query = ''; q.value = '';
     S.root = remember(await B.nodeInfo(res.rootId)); S.pathCache.set(res.rootId, res.rootPath);
     S.chain = [S.root]; S.expanded = new Set([S.root.id]); S.slice = null;
@@ -1494,7 +1663,7 @@ export async function startScan() {
     $('cleanCount').textContent = ''; if (S.tab === 'clean') renderClean(); if (S.tab === 'files') loadFiles();
     if (res.warnings.length && B.kind !== 'demo') toast(res.warnings.map(msgText).join(' · '));
     applyHash();
-    if (autoHistory()) saveHistory();
+    if (autoHistory() && !res.offline) saveHistory();
   } catch (e) {
     if ((e as { code?: string }).code === 'error.cancelled') await afterCancel();
     else mapState(() => `<h2>${tx('state.error.title')}</h2><p>${esc(msgText(e))}</p>`);
@@ -1583,6 +1752,7 @@ function refreshChanges() {
 /** F5: lo más rápido disponible: el diario USN, la carpeta del mapa o un escaneo completo. */
 function quickUpdate() {
   if (S.scanning || D.running) return;
+  if (isOffline()) { toast(msgText({ code: 'scan.offline', message: '' })); return; }
   if (!S.root) { startScan(); return; }
   if (S.scan?.canRefresh) { refreshChanges(); return; }
   const z = zoomRow(); if (z && z.parentId >= 0) rescanFolder(z); else startScan();
@@ -1591,8 +1761,10 @@ function renderRefreshBtn() { $('refreshBtn').hidden = !S.scan?.canRefresh; }
 $('refreshBtn').addEventListener('click', () => refreshChanges());
 function renderScanSummary() {
   const res = S.scan; if (!res) return;
-  $('enginePill').textContent = t(res.engine === 'mft' ? 'header.engine.mft' : 'header.engine.walk');
-  $('scanTxt').textContent = t('header.scanDone', { time: fmtS(res.elapsedMs), count: res.entries });
+  const off = res.offline;
+  $('enginePill').textContent = t(off ? 'header.engine.file' : res.engine === 'mft' ? 'header.engine.mft' : 'header.engine.walk');
+  $('scanTxt').textContent = off ? t(off.host ? 'header.offlineHost' : 'header.offline', { date: i18n.dateTime(off.scannedAt), host: off.host ?? '' })
+    : t('header.scanDone', { time: fmtS(res.elapsedMs), count: res.entries });
 }
 $('scanBtn').addEventListener('click', () => S.scanning ? cancelScan() : startScan());
 // Enlaces directos a una vista, en inglés o en español: #files, #clean, #extension, #age, #relief, #guide

@@ -8,7 +8,7 @@ import {
 // La tabla de docs/tecnica/i18n.md («Mensajes de los motores»)
 const CONTRACT = [
   'scan.mftNeedsAdmin', 'scan.mftUnsupportedFs', 'scan.mftNetworkPath', 'scan.mftFailed', 'scan.mftFragmented',
-  'scan.mftBadRecords', 'scan.mftOrphans', 'scan.accessDenied', 'scan.readErrors', 'scan.demoData',
+  'scan.mftBadRecords', 'scan.mftOrphans', 'scan.accessDenied', 'scan.readErrors', 'scan.demoData', 'scan.offline', 'scan.openFailed', 'schedule.unsupported',
   'dup.readErrors',
   'error.invalidPath', 'error.notFolder', 'error.cannotOpen', 'error.scanBusy', 'error.dupBusy', 'error.noScan', 'error.invalidNode',
   'error.cancelled', 'error.unsupportedPlatform', 'error.internal',
@@ -44,6 +44,10 @@ test('messages: forma del objeto y plurales en inglés', () => {
     code: 'history.otherRoot', params: { path: 'D:\\' }, message: 'That snapshot is of another folder (D:\\)',
   });
   expect(msg('export.invalidName', { name: 'a/b' }).message).toBe('Invalid file name: a/b');
+  expect(msg('scan.offline')).toEqual({ code: 'scan.offline', message: "This scan was opened from a file: actions on the disk aren't available" });
+  expect(msg('scan.openFailed', { error: 'not a gzip file' })).toEqual({
+    code: 'scan.openFailed', params: { error: 'not a gzip file' }, message: "Couldn't open the saved scan: not a gzip file",
+  });
   expect(msg('action.freedUp', { count: 1, bytes: 4096 }).message).toBe('1 file set to online-only; 4,096 bytes will be freed shortly');
   expect(msg('action.freedUp', { count: 3, bytes: 5_000_000 })).toEqual({
     code: 'action.freedUp', params: { count: 3, bytes: 5_000_000 }, message: '3 files set to online-only; 5,000,000 bytes will be freed shortly',
@@ -98,6 +102,8 @@ test('http: estados por código y cuerpo JSON que es un EngineMessage', async ()
     [engineError('rescan.root'), 400],
     [engineError('refresh.unavailable'), 409],
     [engineError('refresh.journalReset'), 409],
+    [engineError('scan.offline'), 409],
+    [engineError('scan.openFailed', { error: 'not a gzip file' }), 400],
   ];
   for (const [err, status] of cases) {
     const r = errorResponse(err);

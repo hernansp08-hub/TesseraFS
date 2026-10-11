@@ -3,7 +3,9 @@
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { win32 as winPath } from 'node:path';
-import { FLAG, type ChangeRow, type CompareResult, type Engine, type ExportResult, type HistoryEntry, type RemovedRow } from '../../protocol/src/index.ts';
+import {
+  FLAG, type ChangeRow, type CompareResult, type Engine, type ExportResult, type HistoryEntry, type RemovedRow, type TrendPoint,
+} from '../../protocol/src/index.ts';
 import { engineError, errorText } from './messages.ts';
 import { CMP_FRESH, CMP_MATCHED, NONE, type Store } from './store.ts';
 import { FOLDERID, knownFolder } from './win32.ts';
@@ -79,7 +81,7 @@ function unlink(p: string): boolean {
 
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 /** Suplentes sueltas → U+FFFD (lo que hace String.prototype.toWellFormed, ES2024). */
-const wellFormed = (x: string) => /[\ud800-\udfff]/.test(x) ? x.replace(LONE_SURROGATE, '\uFFFD') : x;
+export const wellFormed = (x: string) => /[\ud800-\udfff]/.test(x) ? x.replace(LONE_SURROGATE, '\uFFFD') : x;
 
 /**
  * Nombres de todo el árbol decodificados de una vez (varias veces más rápido que Store.name nodo a nodo). Las
@@ -394,6 +396,59 @@ function top(ids: number[], key: (i: number) => number, limit: number, pathOf: (
   return list.slice(0, limit);
 }
 
+// ---------- evolución de un nodo ----------
+/** Caché pequeña de la evolución: (resumen, ruta) → tamaño. Un resumen no cambia una vez escrito. */
+const trendCache = new Map<string, number | null>();
+const TREND_CACHE_MAX = 4096;
+
+/**
+ * Tamaño del nodo con esa ruta (componentes en minúsculas; vacía = la raíz) en el resumen, o null si no está. Un
+ * recorrido en preorden: un nodo coincide hasta la profundidad k si su padre coincide hasta k − 1 y su nombre es el
+ * componente k (sin distinguir mayúsculas). No construye ninguna ruta; sólo mira los hijos de lo que ya coincide.
+ */
+export function trendSize(snap: LoadedSnapshot, parts: string[]): number | null {
+  const k = parts.length;
+  if (!k) return snap.size[0];
+  const m = snap.n, sp = snap.parent, sn = snap.names, depth = new Int32Array(m).fill(-1);
+  depth[0] = 0;
+  for (let j = 1; j < m; j++) {
+    const d = depth[sp[j]]; // el padre siempre va antes (lo comprueba parseSnapshot)
+    if (d < 0 || d >= k || wellFormed(sn[j]).toLowerCase() !== parts[d]) continue;
+    if (d + 1 === k) return snap.size[j];
+    depth[j] = d + 1;
+  }
+  return null;
+}
+
+/**
+ * Evolución del nodo `id` del árbol cargado en los resúmenes de su raíz (misma regla que la retención y `compare`:
+ * sin distinguir mayúsculas), del más antiguo al más reciente, sin el que tenga el `scannedAt` del escaneo cargado
+ * (es el actual, que la interfaz guarda sola). `size` es null si el nodo no está en el resumen (o es un archivo de
+ * menos de 1 MiB). Un resumen que no se puede leer, o cuyo .snap.gz es de otra raíz, no da punto.
+ */
+export function historyTrend(s: Store, id: number, scannedAt: number, dir = historyDir()): TrendPoint[] {
+  const parts: string[] = [];
+  for (let i = id; i !== s.rootId && i !== NONE; i = s.par[i]) parts.push(wellFormed(s.name(i)).toLowerCase());
+  parts.reverse();
+  const rel = parts.join('\0'); // clave de la caché (ningún nombre lleva U+0000)
+  const out: TrendPoint[] = [];
+  const same = listHistory(dir).filter(e => sameRoot(e.path, s.rootPath) && e.scannedAt !== scannedAt).reverse();
+  for (const e of same) {
+    const key = `${e.id}\0${e.fileBytes}\0${rel}`;
+    let size = trendCache.get(key);
+    if (size === undefined) {
+      let snap: LoadedSnapshot;
+      try { snap = parseSnapshot(fs.readFileSync(files(dir, e.id).snap)); } catch { continue; }
+      if (!sameRoot(snap.path, s.rootPath)) continue;
+      size = trendSize(snap, parts);
+      if (trendCache.size >= TREND_CACHE_MAX) trendCache.clear();
+      trendCache.set(key, size);
+    }
+    out.push({ id: e.id, scannedAt: e.scannedAt, size });
+  }
+  return out;
+}
+
 // ---------- exportación ----------
 // rutas, comodines y caracteres de control (categoría Cc de Unicode, como char::is_control en Rust)
 const BAD_CHARS = /[\\/:*?"<>|\x00-\x1f\x7f-\x9f]/;
@@ -421,6 +476,14 @@ export function exportFile(name: unknown, data: unknown, base64: boolean, dir = 
   const text = typeof data === 'string' ? data : String(data ?? '');
   let bytes: Buffer;
   try { bytes = base64 ? decodeBase64(text) : Buffer.from(text, 'utf8'); } catch (e) { throw engineError('export.failed', { error: errorText(e) }); }
+  return writeExport(name, bytes, dir);
+}
+
+/**
+ * Escribe `bytes` en la carpeta de exportación con un nombre ya válido (validExportName); si existe, añade « (2)»,
+ * « (3)»… antes de la extensión. Nunca sobrescribe; un fallo de E/S → export.failed (sin dejar el archivo a medias).
+ */
+export function writeExport(name: string, bytes: Uint8Array, dir = exportDir()): ExportResult {
   const dot = name.lastIndexOf('.');
   const stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
   let created: string | null = null;

@@ -197,6 +197,25 @@ pub struct ScanResult {
     /// siempre lo da (`true` o `false`); falta en el JSON sólo si es `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub can_refresh: Option<bool>,
+    /// Escaneo abierto desde un archivo `.tessera` (ver [`crate::saved`]), no leído del disco ahora: las
+    /// acciones sobre el disco, volver a escanear, actualizar, duplicados e historial dan `scan.offline`.
+    /// Falta en el JSON en un escaneo normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline: Option<SavedScanInfo>,
+}
+
+/// De dónde viene un escaneo abierto desde archivo (`ScanResult.offline`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedScanInfo {
+    /// Cuándo se escaneó (segundos Unix).
+    pub scanned_at: u64,
+    /// Nombre del equipo donde se escaneó, si se sabe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Versión de TesseraFS que lo guardó.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -453,6 +472,16 @@ pub struct HistoryEntry {
     pub file_bytes: u64,
 }
 
+/// Tamaño de un nodo del escaneo cargado en un resumen del historial (`historyTrend`, ver
+/// [`crate::history`]); `size: null` si no estaba (o era un archivo de menos de 1 MiB, que el resumen no guarda).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrendPoint {
+    pub id: String,
+    pub scanned_at: u64,
+    pub size: Option<u64>,
+}
+
 /// Un elemento actual con su tamaño anterior; `prev: null` = no existía.
 /// (El `prev` de la fila va aquí, no en `row.node.prev`.)
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -533,6 +562,92 @@ pub struct ExportResult {
     pub path: String,
 }
 
+// ---------- Escaneo programado (ver crate::schedule) ----------
+
+/// Cada cuánto se repite el escaneo programado.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScheduleEvery {
+    Daily,
+    Weekly,
+}
+
+/// Textos de la notificación de poco espacio, ya traducidos por la interfaz al crear la programación:
+/// `{drive}`, `{free}` y `{pct}` se sustituyen al avisar. `sizes`: cómo escribe el idioma un tamaño en KB,
+/// MB, GB y TB, con `{int}` y `{frac}` en lugar de las cifras («{int},{frac} Go»).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ScheduleMessages {
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sizes: Option<Vec<String>>,
+}
+
+/// Porcentaje entero no negativo (el JSON de JavaScript puede traer `10.0`); otra cosa es un error.
+fn de_pct<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let n = f64::deserialize(d)?;
+    if n.is_finite() && n >= 0.0 && n.fract() == 0.0 && n <= f64::from(u32::MAX) {
+        Ok(n as u32)
+    } else {
+        Err(serde::de::Error::custom(format!("minFreePct must be a whole number from 0 to 99, not {n}")))
+    }
+}
+
+/// El escaneo programado (sólo hay uno): se guarda tal cual en `schedule.json`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleConfig {
+    /// Unidad o carpeta que se escanea.
+    pub path: String,
+    pub every: ScheduleEvery,
+    /// Hora local, «HH:MM».
+    pub time: String,
+    /// Con `weekly`: día de la semana, 0 = domingo … 6 = sábado.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekday: Option<u8>,
+    /// Avisar si el espacio libre baja de este porcentaje (0 = no avisar nunca).
+    #[serde(deserialize_with = "de_pct")]
+    pub min_free_pct: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<ScheduleMessages>,
+}
+
+/// Resultado de la última ejecución del escaneo programado (`schedule-last.json`).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleRun {
+    /// Cuándo terminó (segundos Unix).
+    #[serde(deserialize_with = "de_u64")]
+    pub at: u64,
+    pub ok: bool,
+    /// Bytes escaneados y espacio libre de la unidad en ese momento.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+    /// Si avisó por poco espacio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alerted: Option<bool>,
+    /// Error, si falló.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<EngineMessage>,
+}
+
+/// Lo que la interfaz necesita del escaneo programado (`scheduleGet` / `scheduleSet`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleInfo {
+    /// Esta edición y este sistema pueden programar escaneos.
+    pub supported: bool,
+    /// El escaneo programado actual, o null.
+    pub schedule: Option<ScheduleConfig>,
+    /// La última vez que se ejecutó, si se sabe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<ScheduleRun>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,9 +691,22 @@ mod tests {
             volume: None,
             warnings: vec![msg::mft_orphans(7)],
             can_refresh: None,
+            offline: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert!(v.get("canRefresh").is_none());
+        assert!(v.get("offline").is_none());
+        // Escaneo abierto desde archivo: offline con scannedAt y, si se saben, host y app
+        let info = SavedScanInfo { scanned_at: 1_791_700_000, host: Some("PC-1".into()), app: None };
+        let o = serde_json::to_value(ScanResult { offline: Some(info.clone()), ..r.clone() }).unwrap();
+        assert_eq!(o["offline"], serde_json::json!({ "scannedAt": 1_791_700_000u64, "host": "PC-1" }));
+        assert_eq!(serde_json::from_value::<ScanResult>(o).unwrap().offline, Some(info));
+        let t = TrendPoint { id: "x".into(), scanned_at: 5, size: None };
+        assert_eq!(serde_json::to_value(&t).unwrap(), serde_json::json!({ "id": "x", "scannedAt": 5, "size": null }));
+        assert_eq!(serde_json::to_value(TrendPoint { size: Some(7), ..t }).unwrap()["size"], 7);
+        assert_eq!(serde_json::to_value(msg::scan_offline()).unwrap(), serde_json::json!({ "code": "scan.offline", "message": "This scan was opened from a file: actions on the disk aren't available" }));
+        let f = msg::scan_open_failed("Not a gzip file");
+        assert_eq!((f.code.as_str(), f.message.as_str(), f.get("error")), ("scan.openFailed", "Couldn't open the saved scan: Not a gzip file", Some(&Param::Str("Not a gzip file".into()))));
         assert_eq!(v["warnings"][0]["code"], "scan.mftOrphans");
         let v = serde_json::to_value(ScanResult { can_refresh: Some(false), ..r.clone() }).unwrap();
         assert_eq!(v["canRefresh"], false);

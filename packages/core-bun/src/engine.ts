@@ -6,14 +6,16 @@ import {
   FLAG, encodeSlice, type ActionKind, type ActionResult, type ChildrenRequest, type ChildrenResponse, type CompareResult, type DupProgress,
   type DupRequest, type DupResult, type ElevationInfo, type Engine,
   type EngineMessage, type ExportResult, type ExtStat, type HistoryEntry, type NodeRow, type RefreshResult, type RescanResult,
-  type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest, type SearchResponse, type VolumeInfo,
+  type SavedScanInfo, type ScanProgress, type ScanRequest, type ScanResult, type SearchRequest, type SearchResponse, type TrendPoint,
+  type VolumeInfo,
 } from '../../protocol/src/index.ts';
 import { EngineError, engineError, errorText, msg, type MessageCode, type MessageParams } from './messages.ts';
 import { freeUp } from './cloud.ts';
 import { findDuplicates } from './dup.ts';
-import { clearHistory, compareHistory, deleteHistory, exportFile, exportedFile, listHistory, saveHistory } from './history.ts';
+import { clearHistory, compareHistory, deleteHistory, exportFile, exportedFile, historyTrend, listHistory, saveHistory } from './history.ts';
 import { brokenLinks } from './links.ts';
 import { mftScan } from './mft.ts';
+import { APP_VERSION, decodeTessera, hostName, saveScanFile } from './saved.ts';
 import { Store } from './store.ts';
 import { checkRoot, walkScan, type WalkOutcome } from './walk.ts';
 import './walkworker.ts'; // registra el worker cuando este módulo se carga como tal
@@ -160,6 +162,12 @@ export class TesseraEngine {
   result: ScanResult | null = null;
   /** Cuándo terminó el escaneo cargado (segundos Unix): el `scannedAt` del historial. */
   scannedAt = 0;
+  /**
+   * El escaneo cargado se abrió desde un archivo (openScan): de dónde viene. Mientras tanto, lo que mira o toca el
+   * disco (acciones, rescan, refresh, duplicados, enlaces rotos) y el historial (guardar, comparar, evolución)
+   * responden scan.offline. Un escaneo nuevo lo quita.
+   */
+  offline: SavedScanInfo | null = null;
   scanning = false;
   dupRunning = false;
   private cancelled = false;
@@ -183,8 +191,8 @@ export class TesseraEngine {
     this.scanning = true; this.cancelled = false;
     const isCancelled = () => this.cancelled;
     // el árbol anterior se suelta ya: sus ids dejan de valer al terminar y así no conviven dos árboles en memoria
-    // (y con él la comparación activa, que vive en el almacén)
-    this.store = null; this.result = null; this.scannedAt = 0;
+    // (y con él la comparación activa, que vive en el almacén, y el estado «sin conexión» de un escaneo abierto)
+    this.store = null; this.result = null; this.scannedAt = 0; this.offline = null;
     Bun.gc(true);
     const t0 = performance.now();
     const ms = () => Math.round(performance.now() - t0);
@@ -265,6 +273,7 @@ export class TesseraEngine {
    * de ella puede quedar contado dos veces (limitación conocida, hasta el próximo escaneo completo).
    */
   async rescan(id: number, onProgress: (p: ScanProgress) => void = () => { }): Promise<RescanResult> {
+    this.online();
     if (this.scanning) throw engineError('error.scanBusy');
     if (this.dupRunning) throw engineError('error.dupBusy');
     const s = this.need(id);
@@ -317,13 +326,18 @@ export class TesseraEngine {
     }
   }
 
-  /** Actualizar con el diario USN sólo existe en el motor Rust (escritorio con administrador): aquí, siempre refresh.unavailable. */
+  /**
+   * Actualizar con el diario USN sólo existe en el motor Rust (escritorio con administrador): aquí, siempre
+   * refresh.unavailable (o scan.offline con un escaneo abierto desde archivo).
+   */
   async refresh(_onProgress?: (p: ScanProgress) => void): Promise<RefreshResult> {
+    this.online();
     throw engineError('refresh.unavailable');
   }
 
   /** Archivos duplicados bajo `root` (ver dup.ts). Exige un escaneo cargado y ninguna operación larga en curso. */
   async duplicates(req: DupRequest, onProgress: (p: DupProgress) => void = () => { }): Promise<DupResult> {
+    this.online();
     if (this.scanning) throw engineError('error.scanBusy');
     if (this.dupRunning) throw engineError('error.dupBusy');
     const s = this.need(req.root);
@@ -346,6 +360,7 @@ export class TesseraEngine {
   // ---------- historial y comparación (history.ts) ----------
   /** Guarda el escaneo cargado en el historial. Se permite durante una búsqueda de duplicados, no durante un escaneo. */
   historySave(): HistoryEntry {
+    this.online();
     if (this.scanning) throw engineError('error.scanBusy');
     const s = this.store, r = this.result;
     if (!s || !r) throw engineError('error.noScan');
@@ -356,14 +371,68 @@ export class TesseraEngine {
   historyDelete(id: string): boolean { return deleteHistory(id); }
   historyClear(): number { return clearHistory(); }
 
+  /**
+   * Evolución del nodo `id` en los resúmenes de su raíz, del más antiguo al más reciente, sin el del escaneo cargado
+   * (history.ts › historyTrend). Errores: error.noScan, scan.offline, error.invalidNode.
+   */
+  historyTrend(id: number): TrendPoint[] {
+    if (!this.store) throw engineError('error.noScan');
+    this.online();
+    return historyTrend(this.need(id), id, this.scannedAt);
+  }
+
   /** Compara con un resumen de la misma ruta y deja la comparación activa (hasta compareClear o un escaneo nuevo). */
   compare(id: string, limit: number): CompareResult {
+    this.online();
     if (this.scanning) throw engineError('error.scanBusy');
     if (!this.store) throw engineError('error.noScan');
     return compareHistory(this.store, id, limit);
   }
 
   compareClear(): void { this.store?.setCompare(null); }
+
+  // ---------- escaneo guardado (saved.ts) ----------
+  /**
+   * Guarda el escaneo cargado COMPLETO como `<raíz> <fecha>.tessera` en la carpeta de exportación. Uno abierto desde
+   * archivo conserva su scannedAt, host y app. Errores: error.noScan, export.failed.
+   */
+  saveScan(): ExportResult {
+    const s = this.store, r = this.result;
+    if (!s || !r) throw engineError('error.noScan');
+    const o = this.offline;
+    return saveScanFile(s, {
+      app: o ? o.app : APP_VERSION, host: o ? o.host : hostName(), scannedAt: this.scannedAt, engine: r.engine, volume: r.volume,
+    });
+  }
+
+  /**
+   * Abre un escaneo guardado (el contenido de un .tessera) y sustituye al cargado, como un escaneo nuevo (ids
+   * nuevos, sin comparación), en estado «sin conexión». Se lee entero antes de soltar el árbol anterior: un archivo
+   * dañado (scan.openFailed) lo deja como estaba. Mismos cerrojos que un escaneo (error.scanBusy / error.dupBusy).
+   */
+  openScan(data: Uint8Array | ArrayBuffer): ScanResult {
+    if (this.scanning) throw engineError('error.scanBusy');
+    if (this.dupRunning) throw engineError('error.dupBusy');
+    const t0 = performance.now();
+    const f = decodeTessera(data instanceof Uint8Array ? data : new Uint8Array(data));
+    const s = f.store, root = s.rootId;
+    const offline: SavedScanInfo = { scannedAt: f.scannedAt, ...(f.host ? { host: f.host } : {}), ...(f.app ? { app: f.app } : {}) };
+    this.store = s;
+    this.scannedAt = f.scannedAt;
+    this.offline = offline;
+    const result: ScanResult = {
+      rootId: root, rootPath: s.rootPath, engine: f.engine, entries: s.n - 1, files: s.nf[root], dirs: s.nd[root],
+      bytes: s.sz[root], elapsedMs: Math.round(performance.now() - t0), volume: f.volume, warnings: [], canRefresh: false, offline,
+    };
+    this.result = result;
+    Bun.gc(true); // el árbol anterior y el JSON descomprimido
+    return result;
+  }
+
+  /** Lo que mira o toca el disco no vale con un escaneo abierto desde archivo. */
+  private online() {
+    if (this.offline) throw engineError('scan.offline');
+  }
 
   // ---------- exportación ----------
   exportFile(name: string, data: string, base64: boolean): ExportResult { return exportFile(name, data, base64); }
@@ -401,6 +470,7 @@ export class TesseraEngine {
    * error.noScan si aún no hay árbol). Sin escaneo o con un nodo no válido, lanza como search.
    */
   async brokenLinks(root: number, limit: number): Promise<SearchResponse> {
+    this.online();
     const s = this.need(root);
     const verify = () => {
       if (!this.store) throw engineError('error.noScan');
@@ -411,7 +481,9 @@ export class TesseraEngine {
   nodePath(id: number): string { return this.need(id).path(id); }
   nodeInfo(id: number): NodeRow { return this.need(id).row(id); }
 
+  /** Acciones sobre el disco; con un escaneo abierto desde archivo, todas lanzan scan.offline. */
   action(kind: ActionKind, id: number): ActionResult {
+    this.online();
     const s = this.need(id);
     const path = s.path(id);
     switch (kind) {

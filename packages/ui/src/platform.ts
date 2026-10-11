@@ -10,8 +10,23 @@ export function setSystem(s: SystemInfo) {
   Object.assign(SYS, s);
   GLOBAL_PARAMS.os = s.os;
 }
-/** La acción existe en este sistema (en Linux no hay Propiedades ni «Liberar espacio» de OneDrive). */
-export const can = (a: ActionKind) => SYS.actions.includes(a);
+let offline = false;
+/** Escaneo abierto desde un archivo (.tessera): ninguna acción sobre el disco. */
+export function setOffline(v: boolean) { offline = v; }
+export const isOffline = () => offline;
+/** La acción existe en este sistema (en Linux no hay Propiedades ni «Liberar espacio» de OneDrive) y el escaneo es del disco. */
+export const can = (a: ActionKind) => !offline && SYS.actions.includes(a);
+let realSep: SystemInfo['sep'] | null = null;
+/**
+ * Rutas del escaneo cargado: un escaneo abierto desde archivo puede venir de otro sistema (uno de Linux abierto en
+ * Windows) y entonces sus rutas mandan (separador y mayúsculas). `null` vuelve a las del sistema donde corre la app.
+ */
+export function setPathStyle(rootPath: string | null) {
+  if (realSep == null) realSep = SYS.sep;
+  SYS.sep = rootPath == null ? realSep : rootPath.startsWith('/') ? '/' : '\\';
+}
+/** Sistema de las rutas del escaneo cargado: decide las reglas de limpieza y las carpetas conocidas. */
+export const pathOs = (): SystemInfo['os'] => SYS.sep === '\\' ? 'windows' : SYS.os === 'windows' ? 'linux' : SYS.os;
 const win = () => SYS.sep === '\\';
 
 /** Sin separador final, salvo en una raíz («C:\», «/»). */

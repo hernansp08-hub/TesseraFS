@@ -52,6 +52,21 @@ export interface ScanResult {
   warnings: EngineMessage[]; // p. ej. { code: 'scan.mftNeedsAdmin', message: 'MFT unavailable…' }
   /** true si `refresh()` puede actualizar con el diario USN de NTFS (escritorio, con administrador). */
   canRefresh?: boolean;
+  /**
+   * Escaneo abierto desde un archivo (`openScan`), no leído del disco ahora: las acciones sobre el disco, volver a
+   * escanear, actualizar, duplicados e historial no están disponibles (`scan.offline`).
+   */
+  offline?: SavedScanInfo;
+}
+
+/** De dónde viene un escaneo abierto desde archivo. */
+export interface SavedScanInfo {
+  /** Cuándo se escaneó (segundos Unix). */
+  scannedAt: number;
+  /** Nombre del equipo donde se escaneó, si se sabe. */
+  host?: string;
+  /** Versión de TesseraFS que lo guardó. */
+  app?: string;
 }
 
 export interface NodeRow {
@@ -200,6 +215,56 @@ export interface RefreshResult {
 /** Archivo exportado en Descargas\TesseraFS. */
 export interface ExportResult { path: string }
 
+/**
+ * Tamaño de una carpeta o archivo en cada resumen guardado de la misma raíz, del más antiguo al más reciente.
+ * `size` es null si no existía (o, en archivos, si medía menos de 1 MiB y el resumen no lo guardó).
+ */
+export interface TrendPoint { id: string; scannedAt: number; size: number | null }
+
+// ---------- Escaneos programados ----------
+/**
+ * Un escaneo que el sistema lanza solo (Programador de tareas en Windows, temporizador de systemd del usuario en
+ * Linux): escanea `path` sin abrir ventana, guarda un resumen en el historial y, si el espacio libre de su unidad
+ * queda por debajo de `minFreePct`, avisa con una notificación del sistema. Sólo en la edición de escritorio.
+ */
+export interface ScheduleConfig {
+  /** Unidad o carpeta que se escanea. */
+  path: string;
+  every: 'daily' | 'weekly';
+  /** Hora local, «HH:MM». */
+  time: string;
+  /** Con `weekly`: día de la semana, 0 = domingo … 6 = sábado. */
+  weekday?: number;
+  /** Avisar si el espacio libre baja de este porcentaje (0 = no avisar nunca). */
+  minFreePct: number;
+  /**
+   * Textos de la notificación, ya traducidos por la interfaz al crear la programación (el escaneo programado se
+   * ejecuta sin interfaz). `{drive}`, `{free}` y `{pct}` se sustituyen al avisar. `sizes`: cómo escribe el idioma
+   * un tamaño en KB, MB, GB y TB, con `{int}` y `{frac}` en lugar de las cifras (`«{int},{frac} Go»`); sin él,
+   * «12.3 GB».
+   */
+  messages?: { title: string; body: string; sizes?: string[] };
+}
+export interface ScheduleRun {
+  /** Cuándo terminó (segundos Unix). */
+  at: number;
+  ok: boolean;
+  /** Bytes escaneados y espacio libre de la unidad en ese momento. */
+  bytes?: number; free?: number; total?: number;
+  /** Si avisó por poco espacio. */
+  alerted?: boolean;
+  /** Error, si falló. */
+  error?: EngineMessage;
+}
+export interface ScheduleInfo {
+  /** Esta edición y este sistema pueden programar escaneos (no la portable, ni Linux sin systemd). */
+  supported: boolean;
+  /** El escaneo programado actual (sólo hay uno), o null. */
+  schedule: ScheduleConfig | null;
+  /** La última vez que se ejecutó, si se sabe. */
+  lastRun?: ScheduleRun;
+}
+
 /** Lo que la interfaz necesita de un motor. Implementaciones: demo, tauri, http. */
 export interface Backend {
   readonly kind: 'demo' | 'tauri' | 'http';
@@ -225,6 +290,8 @@ export interface Backend {
   historyDelete(id: string): Promise<boolean>;
   /** Borra todo el historial; devuelve cuántos resúmenes borró. */
   historyClear(): Promise<number>;
+  /** Evolución de un nodo del escaneo cargado en los resúmenes de su raíz (sin el escaneo actual). */
+  historyTrend(id: number): Promise<TrendPoint[]>;
   /**
    * Compara el escaneo cargado con un resumen de la misma ruta y deja la comparación activa: desde entonces
    * las filas llevan `prev`/`fresh` y `children` admite `sort: 'delta'`. Un escaneo nuevo la desactiva.
@@ -233,6 +300,13 @@ export interface Backend {
   compareClear(): Promise<void>;
   /** Guarda un archivo en Descargas\TesseraFS (nombre sin rutas; si existe, añade « (2)»…). */
   exportFile(name: string, data: string, base64: boolean): Promise<ExportResult>;
+  /**
+   * Guarda el escaneo cargado COMPLETO (todos los nodos) en Descargas\TesseraFS como `<raíz> <fecha>.tessera`,
+   * para abrirlo después en otro equipo o en otro momento. Ver docs/ARQUITECTURA.md › Escaneo guardado.
+   */
+  saveScan(): Promise<ExportResult>;
+  /** Abre un escaneo guardado (el contenido del archivo .tessera): sustituye al cargado, como escaneo sin conexión. */
+  openScan(data: ArrayBuffer): Promise<ScanResult>;
   /** Abre el Explorador con un archivo exportado seleccionado (sólo dentro de Descargas\TesseraFS). */
   revealExport(path: string): Promise<ActionResult>;
   /**
@@ -249,6 +323,12 @@ export interface Backend {
   elevation(): Promise<ElevationInfo>;
   relaunchElevated(): Promise<void>;
   system(): Promise<SystemInfo>;
+  scheduleGet(): Promise<ScheduleInfo>;
+  /**
+   * Crea o sustituye el escaneo programado (`null`: lo quita). Es configuración persistente del sistema: la
+   * interfaz sólo lo llama cuando el usuario lo pide expresamente.
+   */
+  scheduleSet(cfg: ScheduleConfig | null): Promise<ScheduleInfo>;
   /**
    * Enlaces rotos bajo `root`: enlaces simbólicos, uniones (junctions) y carpetas montadas cuyo destino ya no
    * existe. Sólo los puntos de reanálisis que sustituyen un nombre (no OneDrive, WOF, deduplicación ni alias de

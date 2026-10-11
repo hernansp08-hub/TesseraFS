@@ -21,6 +21,9 @@ const EN = {
   'scan.accessDenied': (p: MessageParams) => `${count(p.count, 'folder', 'folders')} could not be read (access denied); their contents are not counted${eg(p)}`,
   'scan.readErrors': (p: MessageParams) => `${count(p.count, 'folder', 'folders')} could not be read because of errors; their contents are not counted${eg(p)}`,
   'scan.demoData': () => 'Demo data: nothing was read from your disk',
+  'scan.offline': () => "This scan was opened from a file: actions on the disk aren't available",
+  'scan.openFailed': (p: MessageParams) => `Couldn't open the saved scan: ${p.error}`,
+  'schedule.unsupported': () => 'Scheduled scans need the desktop edition on Windows, or Linux with systemd',
   'dup.readErrors': (p: MessageParams) => `${count(p.count, 'file', 'files')} couldn't be read and ${p.count === 1 ? 'was' : 'were'} left out`,
   'error.invalidPath': (p: MessageParams) => `Invalid path (it must be absolute): ${p.path}`,
   'error.notFolder': (p: MessageParams) => `Not a folder: ${p.path}`,
@@ -100,10 +103,10 @@ export function toEngineMessage(e: unknown): EngineMessage {
 export function httpStatus(code: string): number {
   switch (code) {
     case 'error.invalidPath': case 'error.notFolder': case 'error.cannotOpen': case 'action.unknown': case 'export.invalidName':
-    case 'rescan.root': return 400;
+    case 'rescan.root': case 'scan.openFailed': return 400;
     case 'error.invalidNode': case 'history.notFound': case 'export.notFound': return 404;
     case 'error.noScan': case 'error.scanBusy': case 'error.dupBusy': case 'error.cancelled': case 'history.otherRoot':
-    case 'refresh.unavailable': case 'refresh.journalReset': return 409;
+    case 'refresh.unavailable': case 'refresh.journalReset': case 'scan.offline': case 'schedule.unsupported': return 409;
     default: return 500;
   }
 }

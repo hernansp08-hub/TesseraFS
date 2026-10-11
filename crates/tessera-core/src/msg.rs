@@ -9,8 +9,9 @@ fn plural(n: u64, one: &str, other: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { other })
 }
 
-/// Tamaño legible para los textos de reserva (KB = 1024 bytes, como el Explorador).
-fn human_bytes(b: u64) -> String {
+/// Tamaño legible para los textos de reserva y el aviso del escaneo programado (KB = 1024 bytes, como el
+/// Explorador; un decimal: «12.3 GB»).
+pub(crate) fn human_bytes(b: u64) -> String {
     const UNITS: [&str; 5] = ["bytes", "KB", "MB", "GB", "TB"];
     let (mut v, mut i) = (b as f64, 0);
     while v >= 1024.0 && i < UNITS.len() - 1 {
@@ -214,6 +215,19 @@ pub fn export_not_found(path: &str) -> EngineMessage {
     EngineMessage::new("export.notFound", format!("Not an exported file: {path}")).param("path", path)
 }
 
+// ---- Escaneo guardado (.tessera) ----
+
+/// El escaneo cargado se abrió desde un archivo: las operaciones sobre el disco (acciones, volver a
+/// escanear, actualizar, duplicados, enlaces rotos) y el historial no están disponibles.
+pub fn scan_offline() -> EngineMessage {
+    EngineMessage::new("scan.offline", "This scan was opened from a file: actions on the disk aren't available")
+}
+
+/// `error`: texto breve en inglés (gzip o JSON rotos, otra versión, nodos inconsistentes…).
+pub fn scan_open_failed(error: &str) -> EngineMessage {
+    EngineMessage::new("scan.openFailed", format!("Couldn't open the saved scan: {error}")).param("error", error)
+}
+
 // ---- Volver a escanear una carpeta y actualizar con el diario USN ----
 
 /// Se pidió volver a escanear la raíz por partes (hay que escanearla entera).
@@ -229,6 +243,23 @@ pub fn refresh_unavailable() -> EngineMessage {
 /// El diario se reinició, perdió registros o cambió demasiado: hace falta un escaneo completo.
 pub fn refresh_journal_reset() -> EngineMessage {
     EngineMessage::new("refresh.journalReset", "The change journal can't tell everything that changed since the last scan: a full scan is needed")
+}
+
+// ---- Escaneo programado (ver crate::schedule) ----
+
+/// La edición portable, o un sistema sin Programador de tareas ni systemd del usuario (WSL sin systemd…).
+pub fn schedule_unsupported() -> EngineMessage {
+    EngineMessage::new("schedule.unsupported", "Scheduled scans need the desktop edition on Windows, or Linux with systemd")
+}
+
+/// `error`: la salida de schtasks o systemctl, resumida (texto del sistema).
+pub fn schedule_failed(error: &str) -> EngineMessage {
+    EngineMessage::new("schedule.failed", format!("Couldn't change the scheduled scan: {error}")).param("error", error)
+}
+
+/// `error`: qué está mal, en inglés (hora, día, porcentaje o carpeta).
+pub fn schedule_invalid(error: &str) -> EngineMessage {
+    EngineMessage::new("schedule.invalid", format!("Invalid schedule: {error}")).param("error", error)
 }
 
 // ---- Errores de sintaxis de la búsqueda (SearchResponse.error), igual que packages/protocol/src/query.ts ----

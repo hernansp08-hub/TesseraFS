@@ -51,6 +51,8 @@ export class Store implements SliceSource {
   kidStart = new Uint32Array(0); kidCount = new Uint32Array(0); kids = new Uint32Array(0);
   readonly rootId = 0;
   rootPath = '';
+  /** Separador de las rutas: «\» salvo en un escaneo guardado en Linux (raíz «/…») y abierto aquí (saved.ts). */
+  sep = '\\';
   version = 0; // cambia al borrar nodos (invalida cachés)
   /** Comparación activa: las filas llevan `prev`/`fresh` y `childRows` admite el orden 'delta'. */
   cmp: CompareState | null = null;
@@ -221,7 +223,8 @@ export class Store implements SliceSource {
     while (i !== this.rootId && i !== NONE) { parts.push(this.name(i)); i = this.par[i]; }
     if (!parts.length) return this.rootPath;
     parts.reverse();
-    return this.rootPath + (this.rootPath.endsWith('\\') ? '' : '\\') + parts.join('\\');
+    const sep = this.sep;
+    return this.rootPath + (this.rootPath.endsWith(sep) ? '' : sep) + parts.join(sep);
   }
 
   row(id: number): NodeRow {

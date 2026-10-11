@@ -136,6 +136,12 @@ export class I18n {
     if (!f) { f = new Intl.NumberFormat(this.intl, { style: 'unit', unit, unitDisplay: display, minimumFractionDigits: digits, maximumFractionDigits: digits }); this.fmt.unit.set(k, f); }
     return f;
   }
+  /** Cómo escribe este idioma un tamaño en KB, MB, GB y TB (como `bytes`), con `{int}` y `{frac}` en lugar de
+   *  las cifras: «{int},{frac} Go». Para el aviso del escaneo programado, que se escribe sin la interfaz. */
+  sizePatterns(): string[] {
+    return (['kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const).map((u, i) => this.unit(u, i ? 1 : 0).formatToParts(i ? 1.5 : 2)
+      .map(p => p.type === 'integer' ? '{int}' : p.type === 'fraction' ? '{frac}' : p.value).join(''));
+  }
   /** Bytes con el símbolo corto (B, o) y siempre separado del número, como GB o Mo. */
   private plainBytes(n: number): string {
     const parts = this.unit('byte', 0, 'narrow').formatToParts(n);
@@ -157,12 +163,12 @@ export class I18n {
     return this.plainBytes(Math.round(b));
   }
   seconds(ms: number): string { return this.unit('second', 1).format(ms / 1000); }
-  /** «hace 4 días», «4 days ago», «il y a 4 jours». */
+  /** «hace 4 días», «4 days ago», «il y a 4 jours»; en el futuro, «dentro de 3 meses», «in 3 months». */
   relative(unixSeconds: number, now = Date.now() / 1000): string {
-    const d = (now - unixSeconds) / 86400;
-    if (d < 1) return this.fmt.rel.format(0, 'day');
-    if (d < 31) return this.fmt.rel.format(-Math.round(d), 'day');
-    if (d < 365) return this.fmt.rel.format(-Math.round(d / 30), 'month');
-    return this.fmt.rel.format(-Math.max(1, Math.round(d / 365)), 'year');
+    const d = (now - unixSeconds) / 86400, a = Math.abs(d), s = d >= 0 ? -1 : 1;
+    if (a < 1) return this.fmt.rel.format(0, 'day');
+    if (a < 31) return this.fmt.rel.format(s * Math.round(a), 'day');
+    if (a < 365) return this.fmt.rel.format(s * Math.round(a / 30), 'month');
+    return this.fmt.rel.format(s * Math.max(1, Math.round(a / 365)), 'year');
   }
 }

@@ -4,10 +4,15 @@ export * from './messages.ts';
 export { Store, NONE, DEAD, flagsFromAttrs, CMP_MATCHED, CMP_FRESH, type CompareState } from './store.ts';
 export {
   historyDir, exportDir, fnv1a32, pathHash, historyId, buildSnapshot, parseSnapshot, listHistory, saveHistory, deleteHistory,
-  clearHistory, compareHistory, compareSnapshot, validExportName, exportFile, exportedFile,
+  clearHistory, compareHistory, compareSnapshot, historyTrend, trendSize, validExportName, exportFile, writeExport, exportedFile,
   HISTORY_KEEP, SNAP_MIN_FILE, COMPARE_MAX_LIMIT, COMPARE_DEFAULT_LIMIT, EXPORT_MAX_NAME,
   type Snapshot, type SnapNode, type LoadedSnapshot,
 } from './history.ts';
+export {
+  APP_VERSION, TESSERA_VERSION, TESSERA_KIND, TESSERA_EXT, TESSERA_MAX_FILE, TESSERA_MAX_JSON, TESSERA_MAX_NODES, TESSERA_GZIP_LEVEL,
+  hostName, savedScanLabel, savedScanName, tesseraJson, encodeTessera, saveScanFile, decodeTessera,
+  type TesseraMeta, type TesseraFile, type TesseraLimits,
+} from './saved.ts';
 export { walkScan, setWalkWorkerUrl, DirReader, WALK_WORKER_FLAG } from './walk.ts';
 export { mftScan } from './mft.ts';
 export { freeUp, freeUpAttrs, freeUpCandidates, win32AttrIo, FREE_UP_SETTABLE, type AttrIo } from './cloud.ts';

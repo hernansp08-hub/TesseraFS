@@ -22,6 +22,7 @@ TesseraFS te muestra **qué ocupa tu disco** en unos segundos. Dibuja la unidad 
     - [OneDrive y compresión](#onedrive-y-compresión)
     - [Archivos duplicados](#archivos-duplicados)
     - [Qué ha cambiado: historial y comparación](#qué-ha-cambiado-historial-y-comparación)
+    - [Escaneo programado](#escaneo-programado)
     - [Exportar e informes](#exportar-e-informes)
 11. [Atajos de teclado](#11-atajos-de-teclado)
 12. [Personalizar](#12-personalizar)
@@ -378,6 +379,8 @@ Sólo se lee lo imprescindible: la mayoría de archivos se descartan por tamaño
 > [!TIP]
 > Si todas las copias de un grupo quedan marcadas, el grupo se pone en rojo para que conserves al menos una. **Resaltar en el mapa** muestra dónde están todas las copias.
 
+**Qué copia se conserva:** junto a **Marcar las copias** eliges **Conservar**: la más antigua (lo normal), la más reciente, la de ruta más corta o **las de la carpeta del mapa**. Con esta última, la carpeta que tienes en el mapa hace de «referencia» (por ejemplo, tu carpeta de fotos ordenada): se conservan todas las copias que están dentro y se marcan las de fuera, sólo en los grupos que tienen alguna en cada lado.
+
 ### Qué ha cambiado: historial y comparación
 
 Después de cada escaneo, TesseraFS guarda un **resumen** en tu equipo: el tamaño de todas las carpetas y de los archivos de 1 MB o más. La pestaña **Cambios** lista los escaneos anteriores de la misma unidad o carpeta y, con **Comparar**, muestra:
@@ -385,6 +388,8 @@ Después de cada escaneo, TesseraFS guarda un **resumen** en tu equipo: el tama�
 - cuánto creció o se redujo todo desde entonces, y cuántos archivos más o menos hay;
 - **lo que más creció**: las carpetas y archivos que explican el crecimiento, marcados como **nuevo** si no existían. No se repiten las carpetas padre cuando una sola subcarpeta explica casi todo;
 - lo que **se redujo** y lo que **ya no existe**.
+
+**Evolución.** Arriba de la pestaña, un gráfico muestra cómo ha cambiado el tamaño en todos los escaneos guardados de esa ubicación (pasa el ratón por un punto para ver la fecha, el tamaño y el cambio). Con tres escaneos en días distintos aparece la tendencia: cuánto crece o se reduce por semana y, si es una unidad entera, **cuándo se acabaría el espacio libre** a este ritmo, con la línea discontinua de la estimación. En el panel de detalle, **Evolución** hace lo mismo con la carpeta o el archivo seleccionado: cuánto ha cambiado desde el escaneo más antiguo.
 
 Mientras la comparación está activa, el árbol de Carpetas tiene una columna **Δ** (pulsa su cabecera para ordenar por cambio) y el panel de detalle muestra el cambio de lo seleccionado. **Resaltar lo que creció** lo marca en el mapa; **Dejar de comparar** lo quita todo.
 
@@ -399,6 +404,18 @@ flowchart LR
 > [!NOTE]
 > Los resúmenes se quedan en `%LOCALAPPDATA%\TesseraFS\history` (unos pocos MB por unidad completa) y se conservan los 20 últimos de cada ubicación. Puedes desactivar el guardado automático, guardar a mano o borrar el historial desde la propia pestaña. Las dos ediciones comparten el mismo historial.
 
+### Escaneo programado
+
+Sólo en la edición de escritorio. Al final de la pestaña **Cambios**, **Escaneo programado** escanea una unidad o carpeta cada día o cada semana a la hora que elijas, **sin abrir la app**: guarda un resumen en el historial (así la **Evolución** se completa sola) y, si el espacio libre de esa unidad baja del porcentaje que indiques, te avisa con una notificación del sistema. Pon **0 %** si no quieres avisos.
+
+- **Windows**: crea la tarea «TesseraFS scheduled scan» en el Programador de tareas, para tu usuario y sin administrador. Se ejecuta con la sesión iniciada, también con el portátil a batería, y si el equipo estaba apagado a esa hora, en cuanto vuelvas a encenderlo.
+- **Linux**: crea un temporizador de systemd de tu usuario (`~/.config/systemd/user/tesserafs-scan.timer`), que también se pone al día al encender el equipo. Hace falta systemd; el aviso usa `notify-send`, si está instalado.
+
+Debajo verás cuándo se ejecutó por última vez, cuánto ocupaba y el espacio libre que quedaba, o el error si falló. **Cambiar** y **Quitar** hacen lo que dicen; quitarlo borra la tarea o el temporizador y deja el historial.
+
+> [!NOTE]
+> El escaneo programado no pide administrador, así que usa el modo normal (recorre las carpetas) y no ve las que tu usuario no puede abrir. La programación se guarda en `%LOCALAPPDATA%\TesseraFS\schedule.json` (en Linux, `~/.local/share/TesseraFS`). Con el instalador de Windows, desinstalar la app quita la tarea y al instalar otra versión se vuelve a crear; con el zip o Scoop, quítala desde la app antes de borrarla. Si usas la AppImage y la cambias de sitio o de nombre, vuelve a guardar la programación para que apunte al archivo nuevo.
+
 ### Exportar e informes
 
 El botón de **Exportar** de la cabecera (la flecha hacia abajo) guarda en `Descargas\TesseraFS`:
@@ -411,6 +428,19 @@ El botón de **Exportar** de la cabecera (la flecha hacia abajo) guarda en `Desc
 | **Datos para scripts** (JSON) | Lo mismo, con todos los campos |
 
 Al terminar, el aviso tiene un botón **Mostrar** que abre el Explorador con el archivo seleccionado.
+
+### Guardar un escaneo y abrirlo en otro sitio
+
+En el mismo menú, **Guardar el escaneo completo** crea un archivo `.tessera` en `Descargas\TesseraFS` con todo lo escaneado (carpetas, archivos, tamaños y atributos), y **Abrir un escaneo guardado…** lo vuelve a cargar, en este equipo o en otro. Sirve para:
+
+- revisar con calma el disco de otro equipo (el de un familiar, el de un compañero), que te manda su `.tessera`;
+- analizar un servidor o un NAS desde tu equipo: allí se escanea con `tessera-cli scan /ruta --save datos.tessera` ([línea de comandos](linea-de-comandos.md)) y aquí se abre;
+- guardar cómo estaba un disco antes de un cambio grande.
+
+Un escaneo abierto desde archivo se ve igual (mapa, árbol, filtros, Liberar espacio, exportar), pero la cabecera dice **ARCHIVO** con la fecha y el equipo de origen, y no ofrece acciones sobre el disco: ni abrir, ni papelera, ni volver a escanear, duplicados o historial. Las reglas de limpieza son las del sistema del escaneo (un `.tessera` de Linux abierto en Windows usa las de Linux). Un escaneo normal vuelve al disco.
+
+> [!IMPORTANT]
+> Un `.tessera` contiene los nombres y rutas de todo lo escaneado. Antes de compartirlo, piensa si eso incluye algo privado.
 
 ---
 

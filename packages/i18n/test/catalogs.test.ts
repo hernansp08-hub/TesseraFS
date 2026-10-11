@@ -114,6 +114,13 @@ describe('formato', () => {
     expect([en, es, de, fr].map(i => sp(i.bytes(GB)))).toEqual(['1.5 GB', '1,5 GB', '1,5 GB', '1,5 Go']);
     expect([en, es, de, fr].map(i => sp(i.bytes(512)))).toEqual(['512 B', '512 B', '512 B', '512 o']);
     expect(sp(en.bytes(0))).toBe('0 B');
+    // Los formatos que se guardan para el aviso del escaneo programado: los mismos que `bytes`
+    expect([en, fr].map(i => i.sizePatterns().map(sp))).toEqual([
+      ['{int} kB', '{int}.{frac} MB', '{int}.{frac} GB', '{int}.{frac} TB'],
+      ['{int} ko', '{int},{frac} Mo', '{int},{frac} Go', '{int},{frac} To'],
+    ]);
+    const fill = (p: string, n: string) => { const [a, b = ''] = n.split('.'); return p.replace('{int}', a).replace('{frac}', b); };
+    for (const i of [en, es, de, fr]) expect(sp(fill(i.sizePatterns()[2], '1.5'))).toBe(sp(i.bytes(GB)));
     expect([en, es, de, fr].map(i => sp(i.number(1234)))).toEqual(['1,234', '1.234', '1.234', '1 234']);
     expect([en, es].map(i => sp(i.percent(0.125)))).toEqual(['12.5%', '12,5 %']);
     expect([en, de].map(i => i.date(1700000000))).toEqual(['11/14/2023', '14.11.2023']);
