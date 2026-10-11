@@ -4,11 +4,19 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.11.0] - 2026-10-11
+
 ### El tiempo
 - **Evolución:** en Cambios, un gráfico del tamaño en todos los escaneos guardados y, con tres o más, cuánto crece por semana y cuándo se acabaría el espacio libre de la unidad a este ritmo (estimación). En el panel de detalle, la evolución de la carpeta o archivo seleccionado.
 - **Guardar y abrir un escaneo completo** (`.tessera`): para revisar en tu equipo el disco de otro, o un servidor o NAS escaneado con `tessera-cli scan … --save`. Se abre sin conexión: se ve todo, sin acciones sobre el disco. `tessera-cli top` y `check` aceptan un `.tessera`.
 - **Duplicados:** se elige qué copia se conserva (la más antigua, la más reciente, la de ruta más corta o las de la carpeta del mapa como referencia).
 - **Escaneo programado** (edición de escritorio): cada día o cada semana, sin abrir la app, escanea una unidad o carpeta, guarda el resumen en el historial y avisa con una notificación si el espacio libre baja del porcentaje elegido. En Windows es una tarea del Programador de tareas de tu usuario (sin administrador; también a batería y, si el equipo estaba apagado, al encenderlo); en Linux, un temporizador de systemd del usuario. Se crea, cambia y quita desde Cambios, que muestra la última ejecución.
+
+### Añadido
+- evolución, escaneos guardados (.tessera) y escaneo programado
+
+### Corregido
+- **manifests:** descripción entre comillas en el YAML de winget
 
 ## [0.10.0] - 2026-10-11
 
@@ -143,7 +151,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.10.0...HEAD
+[Sin publicar]: ../../compare/v0.11.0...HEAD
+[0.11.0]: ../../compare/v0.10.0...v0.11.0
 [0.10.0]: ../../compare/v0.9.0...v0.10.0
 [0.9.0]: ../../compare/v0.8.1...v0.9.0
 [0.8.1]: ../../compare/v0.8.0...v0.8.1
