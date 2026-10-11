@@ -1,1 +1,1 @@
-{ "name": "@tessera/protocol", "version": "0.9.0", "private": true, "type": "module", "main": "src/index.ts", "types": "src/index.ts" }
+{ "name": "@tessera/protocol", "version": "0.10.0", "private": true, "type": "module", "main": "src/index.ts", "types": "src/index.ts" }

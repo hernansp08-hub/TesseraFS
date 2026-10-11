@@ -4,6 +4,8 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.10.0] - 2026-10-11
+
 ### Instalador para Windows
 - `TesseraFS-X.Y.Z-instalador-win-x64.exe`: se instala sólo para tu usuario (sin pedir administrador), con acceso en el menú Inicio, en los cinco idiomas de la app; se actualiza instalando encima y se desinstala desde Configuración › Aplicaciones.
 - Desinstalar nunca borra el historial de escaneos.
@@ -15,6 +17,10 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 - Clave nueva `files:` (`archivos:`): archivos dentro de una carpeta, p. ej. `type:dir files:=0`.
 - Liberar espacio: tarjetas de **enlaces rotos**, **carpetas vacías** y **archivos vacíos**, y **cachés declaradas** con `CACHEDIR.TAG`.
 - En Windows, la pestaña explica qué hace el **Sensor de almacenamiento** y cómo abrirlo.
+
+### Añadido
+- menú «Analizar con TesseraFS», Descubrir, búsquedas guardadas y orden
+- **installer:** instalador NSIS por usuario para Windows
 
 ## [0.9.0] - 2026-10-11
 
@@ -131,7 +137,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.9.0...HEAD
+[Sin publicar]: ../../compare/v0.10.0...HEAD
+[0.10.0]: ../../compare/v0.9.0...v0.10.0
 [0.9.0]: ../../compare/v0.8.1...v0.9.0
 [0.8.1]: ../../compare/v0.8.0...v0.8.1
 [0.8.0]: ../../compare/v0.7.0...v0.8.0
