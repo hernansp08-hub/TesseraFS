@@ -26,6 +26,13 @@ export interface Rule {
   useAlloc?: boolean;
   /** Acción propia de la tarjeta en lugar de marcar para borrar. */
   action?: 'freeUp';
+  /** La consulta encuentra una marca (p. ej. CACHEDIR.TAG) y el candidato es la carpeta que la contiene. */
+  parent?: true;
+  /**
+   * Tarjeta de resumen, no de un elemento: cuántos hay y algunos ejemplos. `query`: los de la consulta, con «Ver
+   * todos» en Archivos; `links`: los enlaces rotos (Backend.brokenLinks), con «Marcar todos».
+   */
+  list?: 'query' | 'links';
   /** Agrupa los archivos por carpeta en una sola tarjeta. */
   group?: boolean;
   /** Tamaño mínimo para proponerlo. */
@@ -33,6 +40,9 @@ export interface Rule {
 }
 
 const MB = 1024 ** 2, GB = 1024 ** 3;
+// Vacíos que no conviene tocar: los del sistema, los de programas instalados y los internos de Git y Node
+const KEEP_EMPTY_WIN = String.raw`-path:\windows\ -path:"\program files" -path:\programdata\ -path:\appdata\ -path:\.git\ -path:\node_modules\ -path:$recycle.bin -path:"system volume information" -attr:reparse`;
+const KEEP_EMPTY_LINUX = '-path:/usr/ -path:/etc/ -path:/var/lib/ -path:/run/ -path:/snap/ -path:/.local/ -path:/.cache/ -path:/.config/ -path:/.git/ -path:/node_modules/ -attr:reparse';
 // Carpetas que pertenecen a programas instalados: sus dependencias no se regeneran solas
 const INSTALLED = /\\(Program Files( \(x86\))?|AppData|ProgramData|\.cache|\.vscode[^\\]*|\.cursor|Windows)\\|\\resources\\app\\|\\extensions\\/i;
 
@@ -56,6 +66,8 @@ const PACKAGE_CACHES: [RegExp, string, string][] = [
 ];
 /** Sin comprimir: ocupa en disco al menos el 90 % de su tamaño (sin datos, se supone que sí). */
 const uncompressed = (t: Target) => t.size == null || t.alloc == null || t.alloc >= t.size * .9;
+/** «restic › e4b1c9a07d»: la carpeta con su padre, porque muchas cachés se llaman con un código. */
+const lastTwo = (p: string) => p.split(/[\\/]/).filter(Boolean).slice(-2).join(' › ');
 const browserOf = (p: string) => BROWSERS.find(([re]) => re.test(p))?.[1];
 const packageCacheOf = (p: string) => PACKAGE_CACHES.find(([re]) => re.test(p));
 
@@ -100,6 +112,13 @@ export const RULES: Rule[] = [
   { id: 'installer', q: 'type:dir name:Installer', risk: 'bad', ok: t => /^[A-Z]:\\Windows\\Installer$/i.test(t.path) },
   { id: 'packageCache', q: 'type:dir name:"Package Cache"', risk: 'bad', ok: t => /^[A-Z]:\\ProgramData\\Package Cache$/i.test(t.path), min: 500 * MB },
   { id: 'driverStore', q: 'type:dir name:FileRepository', risk: 'bad', cmd: 'pnputil /enum-drivers', ok: t => /^[A-Z]:\\Windows\\System32\\DriverStore\\FileRepository$/i.test(t.path), min: 1 * GB },
+  // ---- Orden: no liberan espacio, pero sobran ----
+  { id: 'brokenLinks', q: '', risk: 'ok', list: 'links' },
+  { id: 'emptyFolders', q: 'type:dir files:=0 ' + KEEP_EMPTY_WIN, risk: 'warn', list: 'query' },
+  { id: 'emptyFiles', q: 'size:=0 ' + KEEP_EMPTY_WIN, risk: 'warn', list: 'query' },
+  // Al final: una carpeta que ya tiene tarjeta (o está dentro de otra) no se repite como caché declarada
+  { id: 'cacheTag', q: 're:^CACHEDIR\\.TAG$', risk: 'ok', parent: true, title: t => ['clean.cacheTag.title', { name: lastTwo(t.path) }],
+    ok: t => !/^[A-Z]:\\(Windows|Program Files( \(x86\))?)\\/i.test(t.path), min: 50 * MB },
 ];
 
 /** Carpetas que conviene explicar aunque no sean candidatas a limpieza (texto: known.<id>). */
@@ -177,6 +196,12 @@ export const LINUX_RULES: Rule[] = [
   { id: 'timeshift', q: 'type:dir name:snapshots', risk: 'warn', how: true, ok: t => /^\/timeshift(-btrfs)?\/snapshots$/.test(t.path), min: 1 * GB },
   // ---- No borrar a mano: lo gestiona el sistema ----
   { id: 'swapLinux', q: 'swap.img OR swapfile', risk: 'bad', cmd: 'swapon --show', ok: t => /^\/(swap\.img|swapfile)$/.test(t.path) },
+  // ---- Orden ----
+  { id: 'brokenLinks', q: '', risk: 'ok', list: 'links' },
+  { id: 'emptyFolders', q: 'type:dir files:=0 ' + KEEP_EMPTY_LINUX, risk: 'warn', list: 'query' },
+  { id: 'emptyFiles', q: 'size:=0 ' + KEEP_EMPTY_LINUX, risk: 'warn', list: 'query' },
+  { id: 'cacheTag', q: 're:^CACHEDIR\\.TAG$', risk: 'ok', parent: true, title: t => ['clean.cacheTag.title', { name: lastTwo(t.path) }],
+    ok: t => !INSTALLED_LINUX.test(t.path + '/'), min: 50 * MB },
 ];
 
 /** Carpetas de Linux que conviene explicar (texto: known.<id>). */

@@ -34,6 +34,7 @@ Sin la clave `type:`, el filtro sólo devuelve **archivos**. Para incluir carpet
 | `name:` (`nombre:`) | `name:backup` · `name:*.bak` | Texto o comodín sobre el nombre |
 | `re:` | `re:^IMG_\d{4}` | Expresión regular sobre el nombre |
 | `type:` (`tipo:`) | `type:dir` · `tipo:carpeta` · `type:file` | Carpetas o archivos |
+| `files:` (`archivos:`) | `type:dir files:=0` · `type:dir files:>10k` · `files:10..1k` | Archivos que hay dentro de una carpeta, contando subcarpetas (en un archivo, 0). Sin operador significa «al menos»: para «exactamente», `=`. `k` = mil, `m` = millón |
 | `attr:` (`atrib:`) | `attr:cloud` · `atrib:oculto,sistema` · `attr:compressed` | Atributos: `cloud` (OneDrive y similares), `hidden`, `system`, `compressed`, `hardlink`, `sparse`, `reparse`; en español `nube`, `oculto`, `sistema`, `comprimido`, `enlace`, `disperso`, `reanalisis`. Varios con comas = cualquiera |
 
 **Unidades de tamaño** (base 1024, como en Windows): `b`, `k`, `m`, `g`, `t`. `1g` = 1.073.741.824 bytes.
@@ -60,6 +61,10 @@ Sin la clave `type:`, el filtro sólo devuelve **archivos**. Para incluir carpet
 | Entornos virtuales de Python | `type:dir name:.venv` |
 | Discos virtuales (WSL, Docker, Hyper-V) | `ext:vhdx,vhd` |
 | Copias de seguridad sueltas | `ext:bak,old,tmp size:>50m` |
+| Carpetas vacías (sin contar enlaces ni puntos de montaje) | `type:dir files:=0 -attr:reparse` |
+| Archivos vacíos | `size:=0` |
+| Carpetas con muchísimos archivos pequeños | `type:dir files:>10k size:<500m` |
+| Cachés que se declaran como tales | `re:^CACHEDIR\.TAG$` (la carpeta que lo contiene es la caché) |
 | Registros enormes | `ext:log size:>200m` |
 | Fotos del móvil | `IMG_*.jpg OR IMG_*.heic` |
 | Todo lo de un proyecto menos su `.git` | `path:mi-proyecto -path:.git` |

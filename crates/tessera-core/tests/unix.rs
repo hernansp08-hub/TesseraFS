@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use tessera_core::types::flag;
-use tessera_core::{ops, scan, sys, ActionKind, Engine, EngineChoice, Os, ScanOptions, Tree};
+use tessera_core::{links, ops, scan, sys, ActionKind, Engine, EngineChoice, Os, ScanOptions, Tree};
 
 struct TempDir(PathBuf);
 impl TempDir {
@@ -145,6 +145,48 @@ fn platform_information() {
         assert!(sys::local_app_data().unwrap().is_absolute());
         assert!(sys::downloads_dir().unwrap().is_absolute());
     }
+}
+
+#[test]
+fn broken_links_are_checked_on_disk() {
+    use std::os::unix::fs::symlink;
+    let d = TempDir::new("unix-enlaces");
+    d.file("a/real.txt", 5);
+    d.file("luego.txt", 1);
+    symlink("/no/existe/nunca", d.0.join("roto")).unwrap();
+    symlink("a/real.txt", d.0.join("bueno")).unwrap();
+    symlink("a", d.0.join("carpeta")).unwrap();
+    symlink("bucle2", d.0.join("bucle1")).unwrap();
+    symlink("bucle1", d.0.join("bucle2")).unwrap();
+    symlink("real.txt/x", d.0.join("a/no-carpeta")).unwrap(); // ENOTDIR
+    symlink("no-existe", d.0.join("a/Rel-roto")).unwrap();
+    symlink("luego.txt", d.0.join("luego")).unwrap();
+    symlink("/no/existe", d.0.join("quitado")).unwrap();
+
+    let s = run(&d.0, EngineChoice::Walk);
+    let t = &s.tree;
+    let snapshot = |t: &Tree| (0..t.len() as u32).map(|i| (t.live(i), t.size(i), t.files(i), t.flags(i))).collect::<Vec<_>>();
+    let before = snapshot(t);
+    // Después del escaneo: un destino desaparece y un enlace roto se quita (ya no se informa)
+    std::fs::remove_file(d.0.join("luego.txt")).unwrap();
+    std::fs::remove_file(d.0.join("quitado")).unwrap();
+    let rel = |r: &tessera_core::SearchResponse| r.rows.iter().map(|x| x.path[d.0.as_os_str().len() + 1..].to_string()).collect::<Vec<_>>();
+    let r = links::broken_links(t, 0, 10);
+    assert!(r.error.is_none());
+    // Ordenados por ruta sin distinguir mayúsculas (a/no-carpeta, a/Rel-roto); los buenos no salen
+    assert_eq!(rel(&r), ["a/no-carpeta", "a/Rel-roto", "bucle1", "bucle2", "luego", "roto"]);
+    assert_eq!(r.total, 6);
+    // Tamaño de un enlace = longitud de su destino
+    assert_eq!(r.total_bytes, (10 + 9 + 6 + 6 + 9 + 16) as u64);
+    assert!(r.rows.iter().all(|x| !x.node.is_dir && x.node.flags & flag::REPARSE != 0));
+    let r2 = links::broken_links(t, 0, 2);
+    assert_eq!((r2.total, rel(&r2)), (6, vec!["a/no-carpeta".to_string(), "a/Rel-roto".to_string()]));
+    assert_eq!(rel(&links::broken_links(t, find(t, &d.0.join("a")), 10)), ["a/no-carpeta", "a/Rel-roto"]);
+    assert_eq!(links::broken_links(t, find(t, &d.0.join("roto")), 10).total, 1);
+    assert_eq!(links::broken_links(t, 999_999, 10).error.unwrap().code, "error.invalidNode");
+    // Ni el árbol ni el disco cambian
+    assert_eq!(snapshot(t), before);
+    assert!(std::fs::symlink_metadata(d.0.join("roto")).unwrap().file_type().is_symlink());
 }
 
 fn euid_is_root() -> bool {

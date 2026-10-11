@@ -2,7 +2,7 @@
 //  1) decodifica con decodeSlice (packages/protocol) el slice que escribió tessera-cli;
 //  2) vuelve a codificar con encodeSlice sobre el volcado JSON del mismo árbol y compara byte a byte;
 //  3) repite cada búsqueda con compileQuery y compara total, bytes y tamaños de las primeras filas;
-//     las de ATTR_QUERIES tienen que estar entre ellas.
+//     las de ATTR_QUERIES y FILES_QUERIES tienen que estar entre ellas.
 // Uso: bun crates/tessera-cli/tests/crosscheck.ts arbol.json slice.bin busquedas.json minBytes maxNodes
 // Los archivos salen de: tessera-cli scan <carpeta> --json-out arbol.json --slice-out slice.bin --min-bytes X
 //   --max-nodes N --search-out busquedas.json --search "<consulta>" … (una --search por consulta)
@@ -13,6 +13,11 @@ import { compileQuery, decodeSlice, encodeSlice, type EngineMessage, type SliceS
 const ATTR_QUERIES = [
   'attr:hidden', 'atrib:SISTEMA,oculto', 'attr:cloud', '-attr:cloud type:dir', 'type:dir attr:reparse',
   'attr:hardlink,compressed,sparse', '-atrib:oculto ext:txt', 'attr:cloud,raro',
+];
+/** files: en los dos motores: operadores, rango con k, alias, negación, sin type:dir (sólo archivos) y un valor no válido. */
+const FILES_QUERIES = [
+  'type:dir files:=0', 'type:dir archivos:>100', 'type:dir files:10..1k', '-files:0 type:dir', 'type:dir files:<=2 size:>1k',
+  'files:=0', 'files:zz',
 ];
 
 const [jsonPath, slicePath, searchPath, minArg, maxArg] = process.argv.slice(2);
@@ -50,8 +55,8 @@ const pathOf = (id: number): string => {
   return p;
 };
 const searches = JSON.parse(readFileSync(searchPath, 'utf8')) as { query: string; response: { total: number; totalBytes: number; rows: { id: number; size: number; path: string }[]; error?: EngineMessage } }[];
-const missing = ATTR_QUERIES.filter(a => !searches.some(s => s.query === a));
-check(!missing.length, `búsquedas de attr: incluidas${missing.length ? ` (faltan: ${missing.map(m => `--search "${m}"`).join(' ')})` : ''}`);
+const missing = [...ATTR_QUERIES, ...FILES_QUERIES].filter(a => !searches.some(s => s.query === a));
+check(!missing.length, `búsquedas de attr: y files: incluidas${missing.length ? ` (faltan: ${missing.map(m => `--search "${m}"`).join(' ')})` : ''}`);
 for (const { query, response: r } of searches) {
   const q = compileQuery(query);
   if (q.error || r.error) {
@@ -61,10 +66,10 @@ for (const { query, response: r } of searches) {
     check(same, `«${query}»: error en ambos (${q.error?.code} ${JSON.stringify(q.error?.params)} | ${r.error?.code} ${JSON.stringify(r.error?.params)})`);
     continue;
   }
-  const hits = N.filter(n => n.id !== 0 && q.match({ name: n.name, ext: n.ext, isDir: n.isDir, size: n.size, alloc: n.alloc, mtime: n.mtime, flags: n.flags, path: () => pathOf(n.id) }));
+  const hits = N.filter(n => n.id !== 0 && q.match({ name: n.name, ext: n.ext, isDir: n.isDir, size: n.size, alloc: n.alloc, mtime: n.mtime, flags: n.flags, files: n.files, path: () => pathOf(n.id) }));
   const bytes = hits.reduce((s, n) => s + n.size, 0);
   hits.sort((a, b) => b.size - a.size);
-  const sizesOk = r.rows.every((row, i) => row.size === hits[i].size);
+  const sizesOk = r.rows.every((row, i) => row.size === hits[i]?.size);
   const pathsOk = r.rows.every(row => row.path === pathOf(row.id));
   check(hits.length === r.total && bytes === r.totalBytes && sizesOk && pathsOk, `«${query}»: TS ${hits.length} / Rust ${r.total} resultados, ${bytes} / ${r.totalBytes} bytes`);
 }

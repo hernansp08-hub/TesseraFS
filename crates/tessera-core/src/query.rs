@@ -1,6 +1,6 @@
 //! Lenguaje de búsqueda: réplica fiel de `packages/protocol/src/query.ts`.
 //! Espacio = Y, `OR`/`|` = O, `-` = NO, comillas para espacios; claves ext, size/tam,
-//! alloc/asig, age/edad, path/ruta, name/nombre, re, type/tipo, attr/atrib. Sin `type:` sólo archivos.
+//! alloc/asig, age/edad, path/ruta, name/nombre, re, type/tipo, attr/atrib, files/archivos. Sin `type:` sólo archivos.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -22,6 +22,8 @@ pub struct Target<'a> {
     pub mtime: f64,
     /// Bits de `flag` (attr:).
     pub flags: u16,
+    /// Archivos dentro del nodo (recursivo; 0 en archivos) para files:.
+    pub files: f64,
     pub path_lower: &'a str,
 }
 
@@ -54,6 +56,8 @@ enum P {
     Size(Cmp),
     Alloc(Cmp),
     Age(Cmp),
+    /// files: archivos dentro del nodo.
+    Files(Cmp),
     Path(String),
     NameWild(Regex),
     NameSub(String),
@@ -87,6 +91,8 @@ const UNIT: &[(&str, f64)] = &[
     ("t", 1099511627776.0),
 ];
 const AGE: &[(&str, f64)] = &[("d", 86400.0), ("w", 7.0 * 86400.0), ("mo", 30.0 * 86400.0), ("y", 365.0 * 86400.0)];
+/// Recuentos (files:): k = 1000 y m = 1000², no potencias de 2.
+const COUNT: &[(&str, f64)] = &[("", 1.0), ("k", 1000.0), ("m", 1_000_000.0)];
 
 fn key_of(k: &str) -> Option<&'static str> {
     Some(match k {
@@ -99,6 +105,7 @@ fn key_of(k: &str) -> Option<&'static str> {
         "re" => "re",
         "type" | "tipo" => "type",
         "attr" | "atrib" => "attr",
+        "files" | "archivos" => "files",
         _ => return None,
     })
 }
@@ -242,6 +249,7 @@ impl Query {
                         "size" => P::Size(compare(&v, UNIT)?),
                         "alloc" => P::Alloc(compare(&v, UNIT)?),
                         "age" => P::Age(compare(&v, AGE)?),
+                        "files" => P::Files(compare(&v, COUNT)?),
                         "path" => {
                             needs_path = true;
                             P::Path(v.to_lowercase())
@@ -314,6 +322,7 @@ impl Pred {
             P::Size(c) => c.test(t.size),
             P::Alloc(c) => c.test(t.alloc),
             P::Age(c) => c.test(now - t.mtime),
+            P::Files(c) => c.test(t.files),
             P::Path(s) => t.path_lower.contains(s.as_str()),
             P::NameWild(r) | P::Re(r) => r.is_match(t.name),
             P::NameSub(s) => t.name_lower.contains(s.as_str()),
@@ -350,6 +359,7 @@ mod tests {
         mtime: f64,
         path: String,
         flags: u16,
+        files: f64,
     }
     fn t(name: &str, size: f64, dir: bool, mtime: Option<f64>, path: Option<&str>) -> T {
         let ext = if name.contains('.') { name.rsplit('.').next().unwrap().to_lowercase() } else { String::new() };
@@ -362,6 +372,7 @@ mod tests {
             mtime: mtime.unwrap_or_else(now_secs),
             path: path.map(|p| p.to_string()).unwrap_or(format!("C:\\x\\{name}")).to_lowercase(),
             flags: if dir { flag::DIR } else { 0 },
+            files: 0.0,
         }
     }
     /// Como `t` con bits de `flag` añadidos.
@@ -380,6 +391,7 @@ mod tests {
             alloc: x.size,
             mtime: x.mtime,
             flags: x.flags,
+            files: x.files,
             path_lower: &x.path,
         };
         Query::compile(q).matches(&target, now_secs())
@@ -468,5 +480,37 @@ mod tests {
         assert_eq!(err("-atrib:dir").get("value"), Some(&crate::types::Param::Str("dir".into())));
         assert_eq!(err("attr:").get("value"), Some(&crate::types::Param::Str("".into())));
         assert_eq!(err("attr:cloud,").code, "query.invalidValue");
+    }
+
+    #[test]
+    fn files_key() {
+        // Carpeta con `n` archivos dentro (recursivo)
+        let d = |n: f64| {
+            let mut x = t("d", 1.0, true, None, None);
+            x.files = n;
+            x
+        };
+        let file = t("a.txt", 5.0, false, None, None);
+        // Misma sintaxis que size: (sin operador = >=), alias en español y mayúsculas
+        assert!(m("type:dir files:=0", &d(0.0)) && !m("type:dir files:=0", &d(1.0)));
+        assert!(m("type:dir archivos:>100", &d(101.0)) && !m("type:dir archivos:>100", &d(100.0)));
+        assert!(m("type:dir FILES:10", &d(10.0)) && !m("type:dir files:10", &d(9.0)));
+        assert!(m("type:dir files:<=3", &d(3.0)) && !m("type:dir files:<3", &d(3.0)));
+        // Unidades k = 1000 y m = 1000² (no 1024); decimales con punto o coma
+        assert!(m("type:dir files:10..1k", &d(1000.0)) && !m("type:dir files:10..1k", &d(1001.0)));
+        assert!(m("type:dir files:>=1,5k", &d(1500.0)) && !m("type:dir files:>=1.5k", &d(1499.0)));
+        assert!(m("type:dir files:>=2m", &d(2_000_000.0)) && !m("type:dir files:>=2m", &d(1_999_999.0)));
+        // Negación y O
+        assert!(m("-files:1 type:dir", &d(0.0)) && !m("-files:1 type:dir", &d(5.0)));
+        let q = "type:dir files:=0 OR type:file ext:txt";
+        assert!(m(q, &file) && m(q, &d(0.0)) && !m(q, &d(2.0)));
+        // Sin type:dir sólo archivos, que tienen 0
+        assert!(m("files:=0", &file) && !m("files:>0", &file) && !m("files:=0", &d(0.0)));
+        // Valor no válido: query.invalidValue con el valor
+        let err = |q: &str| Query::compile(q).error.unwrap();
+        for (q, v) in [("files:zz", "zz"), ("archivos:>1g", "1g"), ("files:1kb", "1kb"), ("files:", ""), ("files:1..2..3", "1..2..3")] {
+            let e = err(q);
+            assert_eq!((e.code.as_str(), e.get("value")), ("query.invalidValue", Some(&crate::types::Param::Str(v.into()))), "{q}");
+        }
     }
 }

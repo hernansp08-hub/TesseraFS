@@ -68,3 +68,16 @@ test('demo de Linux: rutas con «/», motor de recorrido y aviso de otros sistem
   const hist = await b.historyList();
   expect(hist.every(h => h.path === '/' && h.engine === 'walk')).toBe(true);
 });
+
+test('demo: enlaces rotos, carpetas vacías (files:) y caché declarada', async () => {
+  const b = new DemoBackend();
+  const res = await b.scan({ path: 'C:\\', engine: 'auto' }, () => { });
+  const broken = await b.brokenLinks(res.rootId, 10);
+  expect(broken.total).toBe(2);
+  expect(broken.rows.map(r => r.name)).toEqual(['config-compartida.json', 'Juegos (disco viejo)']); // ordenados por ruta
+  // Las uniones también son carpetas sin archivos: -attr:reparse las deja fuera de las vacías
+  const empty = await b.search({ query: 'type:dir files:=0 -attr:reparse', root: res.rootId, limit: 50 });
+  expect(empty.rows.map(r => r.name).sort()).toEqual(['Nueva carpeta', 'Nueva carpeta (2)', 'old']);
+  const tags = await b.search({ query: 're:^CACHEDIR\\.TAG$', root: res.rootId, limit: 10 });
+  expect(tags.rows.map(r => r.path)).toContain('C:\\Users\\usuario\\AppData\\Local\\restic\\e4b1c9a07d\\CACHEDIR.TAG');
+});

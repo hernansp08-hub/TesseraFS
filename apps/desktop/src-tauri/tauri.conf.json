@@ -44,7 +44,8 @@
       "nsis": {
         "installMode": "currentUser",
         "languages": ["English", "Spanish", "PortugueseBR", "French", "German"],
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "./windows/hooks.nsh"
       },
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
     }

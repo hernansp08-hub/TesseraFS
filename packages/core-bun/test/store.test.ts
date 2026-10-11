@@ -134,6 +134,26 @@ test('store: attr: usa las banderas de cada nodo (archivos y, con type:dir, carp
   expect(names('attr:system')).toEqual(['sys.dat', 'boot.ini']);
 });
 
+test('store: files: cuenta los archivos de dentro (recursivo; 0 en archivos)', () => {
+  const { st, root, users } = sample();
+  const names = (q: string, r = root) => st.search(q, r, 100).rows.map(x => x.name);
+  // Users: big.iso, .gitignore y sub\deep.dll; Windows: 3; sub: 1
+  expect(names('type:dir files:3')).toEqual(['Users', 'Windows']);
+  expect(names('type:dir archivos:=1')).toEqual(['sub']);
+  expect(names('type:dir files:2..3 -name:win')).toEqual(['Users']);
+  expect(names('-files:2 type:dir')).toEqual(['sub']);
+  expect(names('type:dir files:>=1k')).toEqual([]);
+  expect(names('type:dir files:1', users)).toEqual(['sub']);
+  // sin type:dir sólo archivos, que tienen 0
+  expect(st.search('files:=0', root, 0).total).toBe(6);
+  expect(st.search('files:>0', root, 0).total).toBe(0);
+  expect(st.search('files:zz', root, 10).error).toMatchObject({ code: 'query.invalidValue', params: { value: 'zz' } });
+  // tras quitar un archivo, el recuento de sus carpetas baja
+  st.remove(9); // sub\deep.dll
+  expect(names('type:dir files:3')).toEqual(['Windows']);
+  expect(names('type:dir files:=0')).toEqual(['sub']);
+});
+
 test('store: estadísticas por extensión', () => {
   const { st, root } = sample();
   const ex = st.extStats(root);

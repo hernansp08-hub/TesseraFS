@@ -319,6 +319,7 @@ export class Store implements SliceSource {
       get alloc() { return s.al[cur]; },
       get mtime() { return s.mt[cur]; },
       get flags() { return s.fl[cur] & 0xFF; }, // attr: (sin el bit interno DEAD)
+      get files() { return s.nf[cur]; }, // files: archivos dentro (recursivo; 0 en archivos)
       path: () => s.path(cur),
     };
     // montículo mínimo de tamaño `limit` con los mayores

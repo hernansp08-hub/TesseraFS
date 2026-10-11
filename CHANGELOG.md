@@ -8,6 +8,13 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 - `TesseraFS-X.Y.Z-instalador-win-x64.exe`: se instala sólo para tu usuario (sin pedir administrador), con acceso en el menú Inicio, en los cinco idiomas de la app; se actualiza instalando encima y se desinstala desde Configuración › Aplicaciones.
 - Desinstalar nunca borra el historial de escaneos.
 - Los zips de escritorio y portable siguen disponibles para usar sin instalar.
+- **Analizar con TesseraFS** en el clic derecho de carpetas, del fondo de una carpeta y de unidades (sólo para tu usuario; en Windows 11, dentro de «Mostrar más opciones»). La app abre directamente esa carpeta; también con `tesserafs-desktop <ruta>`.
+
+### Descubrir y orden
+- Botón **Descubrir** junto al filtro: búsquedas preparadas (lo grande, lo reciente, lo viejo, carpetas con muchos archivos, vacíos, enlaces, enlaces duros, dispersos, ocultos, nube, comprimidos) y **búsquedas guardadas** con nombre.
+- Clave nueva `files:` (`archivos:`): archivos dentro de una carpeta, p. ej. `type:dir files:=0`.
+- Liberar espacio: tarjetas de **enlaces rotos**, **carpetas vacías** y **archivos vacíos**, y **cachés declaradas** con `CACHEDIR.TAG`.
+- En Windows, la pestaña explica qué hace el **Sensor de almacenamiento** y cómo abrirlo.
 
 ## [0.9.0] - 2026-10-11
 

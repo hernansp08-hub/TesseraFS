@@ -88,6 +88,20 @@ flowchart TD
 > [!WARNING]
 > No añadas `/ResetBase` a la orden de DISM si no sabes lo que hace: libera algo más, pero impide desinstalar las actualizaciones ya instaladas.
 
+## Orden: vacíos, enlaces rotos y cachés declaradas
+
+Al final de la lista hay tarjetas que no liberan espacio (o muy poco), pero ayudan a ordenar:
+
+| Tarjeta | Qué muestra | Cómo actuar |
+|---|---|---|
+| **Enlaces rotos** | Enlaces simbólicos y uniones cuyo destino ya no existe. Se comprueban en el momento | **Marcar todos** los manda a [Para borrar](guia.md#borrar-varias-cosas-a-la-vez-para-borrar); en la papelera sólo va el enlace |
+| **Carpetas vacías** | Carpetas sin ningún archivo dentro, salvo las del sistema, las de programas instalados, las de Git y `node_modules`, y los enlaces | **Ver todos** abre la lista en Archivos para revisarla y marcar lo que sobre: algunos programas cuentan con sus carpetas vacías |
+| **Archivos vacíos (0 bytes)** | Lo mismo con archivos sin contenido | Revisa antes: hay archivos vacíos a propósito (bloqueos, `.gitkeep`) |
+| **Caché declarada** | Carpetas con un archivo [`CACHEDIR.TAG`](https://bford.info/cachedir/): el programa que las creó declara que son una caché regenerable (lo hacen Cargo, restic, Borg, mypy y otros) | Cierra ese programa y bórrala. No se repite si la carpeta ya tiene su propia tarjeta |
+
+> [!TIP]
+> **En Windows**, la pestaña recuerda también el **Sensor de almacenamiento**: vacía la Papelera y Descargas según su antigüedad, borra temporales y deja OneDrive sólo en línea pasados unos días, cuando queda poco espacio o según una programación. Se abre con `start ms-settings:storagesense` (o Configuración › Sistema › Almacenamiento). TesseraFS no lo activa ni lo cambia: te deja decidir cada cosa.
+
 ## En Linux
 
 En Linux, la pestaña usa sus propias reglas. Las de desarrollo (`target`, `node_modules`, `.venv`, cachés de npm, pnpm, Bun, NuGet y Go fuera de `~/.cache`), los modelos de IA y los juegos de Steam funcionan igual que en Windows.

@@ -217,8 +217,30 @@ function buildLinux() {
   const boot = sub(root, 'boot'); file(boot, 'vmlinuz-6.14.0-33-generic', 15 * MB); file(boot, 'initrd.img-6.14.0-33-generic', 72 * MB);
   file(boot, 'vmlinuz-6.11.0-29-generic', 14 * MB); file(boot, 'initrd.img-6.11.0-29-generic', 68 * MB);
   file(root, 'swap.img', 4 * GB, T1 - 3600); F(root, 'tmp', .4, P.cache, 2); F(root, 'etc', .03, P.cache, 2);
-  sub(root, 'proc'); sub(root, 'sys'); sub(root, 'dev'); sub(root, 'run');
+  for (const nm of ['proc', 'sys', 'dev', 'run']) sub(root, nm).reparse = true; // puntos de montaje: no se recorren
   return root;
+}
+// Orden en la demo (sin números aleatorios, al final: el resto de la muestra no cambia): carpetas y archivos vacíos,
+// una caché que se declara con CACHEDIR.TAG y enlaces cuyo destino ya no existe
+function addTidy(root, linux) {
+  const at = (...names) => names.reduce((p, nm) => p.kids.find(k => k.name === nm) || dir(p, nm), root);
+  const t = d => T1 - d * 86400;
+  const broken = (p, name, isDir) => { const n = isDir ? dir(p, name) : file(p, name, 0, t(400)); n.reparse = true; n.broken = true; };
+  if (linux) {
+    const me = ['home', 'usuario'];
+    dir(at(...me, 'Documentos'), 'Nueva carpeta'); dir(at(...me, 'Documentos'), 'Sin título'); dir(at(...me, 'proyectos', 'tessera-web', 'src'), 'old');
+    file(at(...me, 'Documentos'), 'notas.txt', 0, t(90)); file(at(...me, 'proyectos', 'lamina-rs'), 'TODO.md', 0, t(30));
+    const mypy = at(...me, 'proyectos', 'notas-ia', '.mypy_cache'); file(mypy, 'CACHEDIR.TAG', 43, t(20));
+    [['3.12', 96 * MB], ['3.13', 54 * MB]].forEach(([v, s]) => file(dir(mypy, v), 'cache.db', s, t(5)));
+    broken(at(...me, 'proyectos'), 'enlace-al-disco-viejo', true); broken(at(...me, '.local', 'bin'), 'script-antiguo', false);
+  } else {
+    const me = ['Users', 'usuario'];
+    dir(at(...me, 'Documents'), 'Nueva carpeta'); dir(at(...me, 'Documents'), 'Nueva carpeta (2)'); dir(at('apps', 'tessera-web', 'src'), 'old');
+    file(at(...me, 'Documents'), 'notas.txt', 0, t(90)); file(at('apps', 'lamina-rs'), 'TODO.md', 0, t(30));
+    const restic = at(...me, 'AppData', 'Local', 'restic', 'e4b1c9a07d'); file(restic, 'CACHEDIR.TAG', 43, t(20));
+    [['data', 820 * MB], ['index', 310 * MB], ['snapshots', 2 * MB]].forEach(([d, s]) => file(dir(restic, d), 'pack-' + d + '.bin', s, t(3)));
+    broken(at(...me, 'Documents'), 'Juegos (disco viejo)', true); broken(at('apps', 'scripts'), 'config-compartida.json', false);
+  }
 }
 function postProcessLinux(root) {
   for (const n of N) if (n.name.startsWith('.')) n.hidden = true;
@@ -231,6 +253,7 @@ function postProcessLinux(root) {
   file(at(...me, 'Descargas'), 'tesserafs_0.9.0_amd64.AppImage', 92 * MB, t(1));
   file(at(...me, 'Descargas'), 'code_1.104.0-1758_amd64.deb', 108 * MB, t(30));
   for (let i = first; i < N.length; i++) N[i].copy = true;
+  addTidy(root, true);
 }
 function walk(n, f) { const st = [n]; while (st.length) { const x = st.pop(); f(x); if (x.isDir) for (const k of x.kids) st.push(k); } }
 const HIDDEN = new Set(['ProgramData', 'Recovery', 'System Volume Information', '$Recycle.Bin', 'AppData', '.git', 'PerfLogs', 'pagefile.sys', 'swapfile.sys', 'DumpStack.log']);
@@ -240,6 +263,7 @@ function postProcess(root) {
   walk(win.kids.find(k => k.name === 'System32'), n => { if (!n.isDir) n.comp = R() < .22; });
   for (const n of N) if (HIDDEN.has(n.name)) n.hidden = true;
   addCopies(root);
+  addTidy(root, false);
 }
 // Copias para la búsqueda de duplicados de la demo. Van al final y sin números aleatorios: el resto de la muestra no cambia.
 function addCopies(root) {

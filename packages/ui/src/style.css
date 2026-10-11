@@ -273,6 +273,19 @@ body.resizing iframe,body.resizing canvas{pointer-events:none}
 .menu button{display:flex;justify-content:space-between;gap:14px;width:100%;padding:7px 10px;border:0;border-radius:5px;background:none;text-align:left;font-size:13px;cursor:pointer}
 .menu button:hover,.menu button:focus-visible{background:var(--accent-soft);outline:none}
 .menu button span{color:var(--muted);font:11.5px var(--f-data)}
+.menu button span{max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu-row{display:flex;align-items:center;gap:2px}
+.menu-row>button:first-child{flex:1;min-width:0}
+.menu .menu-x{width:auto;flex:none;padding:7px 9px;color:var(--muted)}
+.menu-note{margin:0;padding:4px 10px 8px;font-size:12px;color:var(--muted)}
+.menu-form{display:flex;gap:6px;padding:6px 8px 8px}
+.menu-form input{flex:1;min-width:0}
+.menu .menu-form button{width:auto;flex:none;padding:0 10px}
+.cl-tip{margin:0 0 12px;padding:10px 12px;border:1px dashed var(--line-2);border-radius:8px;font-size:12.5px;line-height:1.5}
+.cl-tip p{margin:0}
+.cl-list{margin:6px 0 0;padding:0;list-style:none;font-size:11.5px}
+.cl-list li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cl-list li.more{color:var(--muted)}
 .menu button.on{font-weight:600}
 .menu .danger{color:var(--bad)}
 .menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}

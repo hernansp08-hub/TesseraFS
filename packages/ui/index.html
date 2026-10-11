@@ -34,6 +34,7 @@
         <svg class="i" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
         <input id="q" type="search" data-i18n-placeholder="header.filter.placeholder" data-i18n-aria="header.filter.placeholder" autocomplete="off" spellcheck="false">
         <kbd data-i18n="key.ctrlK">Ctrl K</kbd>
+        <button class="icon-btn sm" id="discoverBtn" type="button" aria-haspopup="menu" data-i18n-title="discover.title" data-i18n-aria="discover.title"><svg class="i" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m10.6 5.4-1.5 3.7-3.7 1.5 1.5-3.7z"/></svg></button>
         <button class="icon-btn sm" id="qHelpBtn" type="button" aria-expanded="false" aria-controls="qHelp" data-i18n-title="header.filter.help">?</button>
       </label>
       <div class="qhelp" id="qHelp" hidden>
@@ -46,6 +47,7 @@
         <button type="button" data-q="-ext:dll size:>500m"><code>-ext:dll size:&gt;500m</code><span data-i18n="help.ex.notDll"></span></button>
         <button type="button" data-q="path:Downloads ext:msi,exe,iso"><code>path:Downloads ext:msi,exe,iso</code><span data-i18n="help.ex.downloads"></span></button>
         <button type="button" data-q="re:^VT[._]"><code>re:^VT[._]</code><span data-i18n="help.ex.regex"></span></button>
+        <button type="button" data-q="type:dir files:=0"><code>type:dir files:=0</code><span data-i18n="help.ex.emptyDirs"></span></button>
       </div>
     </div>
     <div class="top-tools">

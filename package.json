@@ -16,6 +16,7 @@
     "test": "bun test",
     "release": "bun scripts/release.ts",
     "package": "bun scripts/package.ts",
+    "manifests": "bun scripts/manifests.ts",
     "i18n:check": "bun scripts/i18n-check.ts"
   }
 }

@@ -12,6 +12,8 @@ interface DNode {
   id: number; name: string; parent: DNode | null; isDir: boolean; size: number; alloc: number; files: number; dirs: number;
   mtime: number; ext: string; kids: DNode[] | null; mk: DNode[] | null; comp: boolean; hl: boolean; hidden: boolean; depth: number; copy?: boolean;
   cloud?: boolean; online?: boolean;
+  /** Enlace simbólico o unión (FLAG.REPARSE); `broken`: su destino ya no existe. */
+  reparse?: boolean; broken?: boolean;
 }
 
 const GB = 1024 ** 3;
@@ -51,7 +53,7 @@ export class DemoBackend implements Backend {
     const { N, root } = buildSample(this.os); this.N = N; this.root = root; this.ready = true;
   }
   private flags(n: DNode) {
-    return (n.isDir ? FLAG.DIR : 0) | (n.hidden ? FLAG.HIDDEN : 0) | (n.hl ? FLAG.HARDLINK : 0) | (n.comp ? FLAG.COMPRESSED : 0) | (n.cloud ? FLAG.CLOUD : 0);
+    return (n.isDir ? FLAG.DIR : 0) | (n.hidden ? FLAG.HIDDEN : 0) | (n.hl ? FLAG.HARDLINK : 0) | (n.comp ? FLAG.COMPRESSED : 0) | (n.cloud ? FLAG.CLOUD : 0) | (n.reparse ? FLAG.REPARSE : 0);
   }
   private row(n: DNode): NodeRow {
     const r: NodeRow = { id: n.id, parentId: n.parent ? n.parent.id : -1, name: n.parent ? n.name : this.rootName, isDir: n.isDir, size: n.size, alloc: n.alloc,
@@ -131,7 +133,7 @@ export class DemoBackend implements Backend {
     while (st.length) {
       const n = st.pop()!;
       if (n.kids) for (const k of n.kids) st.push(k);
-      const t = { name: n.name, ext: n.ext, isDir: n.isDir, size: n.size, alloc: n.alloc, mtime: n.mtime, flags: this.flags(n), path: () => this.path(n) };
+      const t = { name: n.name, ext: n.ext, isDir: n.isDir, size: n.size, alloc: n.alloc, mtime: n.mtime, flags: this.flags(n), files: n.files, path: () => this.path(n) };
       if (n.parent && q.match(t)) { hits.push(n); bytes += n.size; }
     }
     hits.sort((a, b) => b.size - a.size);
@@ -215,6 +217,12 @@ export class DemoBackend implements Backend {
     } finally { this.scanning = false; }
     this.cmp = null;
     return { row: this.row(n), before: n.size, entries: total, elapsedMs: performance.now() - t0, warnings: [] };
+  }
+  async brokenLinks(root: number, limit: number) {
+    const hits: DNode[] = [], st = [this.node(root)];
+    while (st.length) { const n = st.pop()!; if (n.kids) st.push(...n.kids); if (n.broken) hits.push(n); }
+    const rows = hits.map(n => ({ ...this.row(n), path: this.path(n) })).sort((a, b) => a.path.localeCompare(b.path));
+    return { total: rows.length, totalBytes: rows.reduce((s, r) => s + r.size, 0), rows: rows.slice(0, limit) };
   }
   async refresh(): Promise<never> { throw fail('refresh.unavailable', 'Quick update is not available'); }
 

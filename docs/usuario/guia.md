@@ -151,6 +151,8 @@ La pastilla junto al botón Escanear indica qué modo se usó: **MFT** o **Recor
 
 En el selector de unidad, escribe una ruta en **Analizar una carpeta** (por ejemplo, `C:\Users\tu-usuario\Downloads`) y pulsa **Analizar**. Con permisos de administrador, la edición de escritorio también usa la MFT para carpetas sueltas; la portable las recorre siempre en modo normal.
 
+**Desde el Explorador:** con el instalador, el clic derecho en una carpeta, en el fondo de una carpeta abierta o en una unidad tiene **Analizar con TesseraFS**, que abre la app escaneando ese sitio. En Windows 11 está en **Mostrar más opciones** (o Mayús+F10). Se instala sólo para tu usuario y la desinstalación lo quita. También vale desde una terminal: `tesserafs-desktop.exe "D:\Proyectos"` (en Linux, `tesserafs-desktop /ruta`).
+
 ---
 
 ## 3. La pantalla de un vistazo
@@ -317,6 +319,12 @@ attr:cloud alloc:>0           archivos de OneDrive descargados en este equipo
 ```
 
 La referencia completa y un recetario están en **[Filtros](filtros.md)**. El botón **?** junto al campo muestra ejemplos que se aplican con un clic.
+
+### Descubrir y búsquedas guardadas
+
+El botón de la brújula, junto al campo, abre **Descubrir**: búsquedas preparadas que se aplican con un clic (lo de más de 1 GB, lo cambiado esta semana, lo grande y viejo, carpetas con más de 10.000 archivos, carpetas y archivos vacíos, enlaces, enlaces duros, archivos dispersos, ocultos y, en Windows, los de la nube y los comprimidos).
+
+Debajo están **tus búsquedas guardadas**: escribe un filtro, abre Descubrir, ponle nombre y pulsa **Guardar**. La × de cada una la quita. Se guardan en este equipo, en la propia app.
 
 ---
 

@@ -63,7 +63,8 @@ Tipos en [`packages/protocol/src/types.ts`](../packages/protocol/src/types.ts). 
 | Volver a escanear una carpeta | `rescan {id, onProgress: Channel<ScanProgress>}` | `POST /api/rescan` `{id}` + eventos SSE del escaneo | `RescanResult`; se cancela con `cancel_scan` / `POST /api/cancel` |
 | Actualizar con el diario USN | `refresh {onProgress: Channel<ScanProgress>}` | `POST /api/refresh` (siempre `refresh.unavailable` en la portable) | `RefreshResult` |
 | Elevación | `elevation` / `relaunch_elevated` | `GET /api/elevation` / `POST /api/relaunch-elevated` | `ElevationInfo` |
-| Sistema | `system` | `GET /api/system` (siempre Windows en la portable) | `SystemInfo {os, sep, actions}`: la interfaz adapta rutas, textos y acciones (en Linux no hay `properties` ni `freeUp`) |
+| Sistema | `system` | `GET /api/system` (siempre Windows en la portable) | `SystemInfo {os, sep, actions, launchPath?}`: la interfaz adapta rutas, textos y acciones (en Linux no hay `properties` ni `freeUp`); con `launchPath` (la carpeta pasada al abrir la app) la escanea al arrancar |
+| Enlaces rotos | `broken_links {root, limit}` | `POST /api/broken-links` `{root, limit}` | `SearchResponse`: enlaces simbólicos y uniones bajo `root` cuyo destino ya no existe, comprobados en el momento, ordenados por ruta |
 
 Historial: cada resumen son dos archivos en `%LOCALAPPDATA%\TesseraFS\history`, con el mismo formato en las dos ediciones:
 
@@ -114,6 +115,7 @@ Implementado en [`packages/protocol/src/query.ts`](../packages/protocol/src/quer
 - `age:<30d` modificado hace menos de 30 días · `age:>1y` (alias `edad:`). Unidades d w mo y.
 - `path:node_modules` subcadena de la ruta completa (alias `ruta:`) · `name:VT*` comodín sobre el nombre (alias `nombre:`)
 - `re:^VT[._]` expresión regular sobre el nombre · `type:dir|file` (alias `tipo:carpeta|archivo`)
+- `files:=0` archivos dentro (alias `archivos:`; recursivo, 0 en archivos), con la misma sintaxis de comparación que `size:` y unidades `k` (mil) y `m` (millón).
 - `attr:cloud` atributos (alias `atrib:`), varios con comas = cualquiera: `cloud`/`nube`, `hidden`/`oculto`, `system`/`sistema`, `compressed`/`comprimido`, `hardlink`/`enlace`, `sparse`/`disperso`, `reparse`/`reanalisis`. Usa los bits de `FLAG`.
 - Palabra suelta: comodín si lleva `*` o `?`; si no, subcadena del nombre. Todo sin distinguir mayúsculas.
 - Sin `type:`, sólo se devuelven archivos.

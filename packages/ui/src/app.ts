@@ -15,7 +15,11 @@ type TRow = { row: NodeRow; depth: number; more?: undefined } | { more: number; 
 // Los resaltados guardan datos, no textos: la etiqueta se compone al pintar, en el idioma activo
 type HL = { type: 'cat'; id: string } | { type: 'ext'; ext: string } | { type: 'age'; bin: number }
   | { type: 'search'; ids: Set<number>; query: string; count: number };
-interface CleanCard { row: NodeRow; path: string; rule: Rule; title: Key; cmd?: string; count?: number; rows?: SearchRow[] }
+interface CleanCard {
+  row: NodeRow; path: string; rule: Rule; title: Key; cmd?: string; count?: number; rows?: SearchRow[];
+  /** Tarjetas de resumen (rule.list): cuántos hay en total y algunos ejemplos. */
+  total?: number; sample?: SearchRow[];
+}
 /** «¿Qué es esto?» del panel de detalle: una regla de limpieza que lo describe, o una carpeta conocida. */
 type Known = { rule: Rule; title: Key; cmd?: string } | { id: string };
 /** Elemento de la cesta «Para borrar». `error`: por qué no se pudo mover la última vez. */
@@ -703,7 +707,41 @@ const qHelp = $('qHelp'), qHelpBtn = $('qHelpBtn');
 qHelpBtn.addEventListener('click', e => { e.preventDefault(); qHelp.hidden = !qHelp.hidden; qHelpBtn.setAttribute('aria-expanded', String(!qHelp.hidden)); });
 qHelp.addEventListener('click', e => { const b = (e.target as HTMLElement).closest('[data-q]') as HTMLElement; if (!b) return; q.value = b.dataset.q!; qHelp.hidden = true; runQuery(); });
 
+// ---------- Descubrir: búsquedas preparadas y las guardadas por el usuario ----------
+/** [clave del texto, consulta, sólo en Windows] */
+const DISCOVER: [string, string, boolean?][] = [
+  ['discover.big', 'size:>1g'], ['discover.recent', 'age:<7d size:>10m'], ['discover.oldBig', 'age:>2y size:>100m'],
+  ['discover.manyFiles', 'type:dir files:>10k'], ['discover.emptyDirs', 'type:dir files:=0'], ['discover.emptyFiles', 'size:=0'],
+  ['discover.links', 'type:dir attr:reparse OR attr:reparse'], ['discover.hardlinks', 'attr:hardlink'], ['discover.sparse', 'attr:sparse'],
+  ['discover.hidden', 'attr:hidden,system'], ['discover.cloud', 'attr:cloud', true], ['discover.compressed', 'attr:compressed', true],
+];
+interface SavedSearch { name: string; q: string }
+const SAVED_KEY = 'tesserafs-searches';
+function savedSearches(): SavedSearch[] {
+  try { const v = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]'); return Array.isArray(v) ? v.filter(s => s && typeof s.q === 'string') : []; } catch { return []; }
+}
+function storeSearches(list: SavedSearch[]) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch { /* sin almacenamiento: sólo esta sesión */ } }
+function discoverHTML() {
+  const saved = savedSearches(), cur = q.value.trim();
+  return `<div class="menu-h">${tx('discover.title')}</div>`
+    + DISCOVER.filter(([, , win]) => !win || SYS.os === 'windows')
+      .map(([k, query]) => `<button type="button" role="menuitem" data-m="q" data-q="${esc(query)}">${tx(k as MessageKey)}<span>${esc(query)}</span></button>`).join('')
+    + `<hr><div class="menu-h">${tx('discover.saved')}</div>`
+    + (saved.length ? saved.map((s, i) => `<div class="menu-row"><button type="button" role="menuitem" data-m="q" data-q="${esc(s.q)}">${esc(s.name)}<span>${esc(s.q)}</span></button>`
+      + `<button type="button" class="menu-x" data-m="del" data-i="${i}" title="${tx('discover.delete')}" aria-label="${tx('discover.delete')}">×</button></div>`).join('')
+      : `<p class="menu-note">${tx('discover.none')}</p>`)
+    + (cur ? `<form id="saveSearchForm" class="menu-form"><input id="saveSearchName" maxlength="60" placeholder="${tx('discover.name')}" aria-label="${tx('discover.name')}"><button class="btn sm" type="submit">${tx('discover.save')}</button></form>` : '');
+}
+$('discoverBtn').addEventListener('click', e => {
+  e.preventDefault();
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openMenu(discoverHTML(), r.left - 200, r.bottom + 6, 'discover');
+});
+
 // ---------- Liberar espacio: reglas explicadas ejecutadas como filtros ----------
+const STORAGE_SENSE = 'start ms-settings:storagesense';
+/** Pone una consulta en el filtro, la ejecuta y muestra sus resultados en Archivos. */
+function setQuery(query: string) { q.value = query; closeMenus(); runQuery(); setTab('files'); q.focus({ preventScroll: true }); }
 const hasChild = async (id: number, names: string[]) => {
   const res = await B.children({ id, offset: 0, limit: 200, sort: 'name', desc: false });
   return res.rows.some(c => names.includes(c.name.toLowerCase()));
@@ -712,9 +750,26 @@ const riskName = (r: Risk) => tk('clean.risk.' + r);
 const keyText = (k: Key) => tk(k[0], k[1]);
 async function loadClean() {
   if (!S.root) return;
-  const cards: CleanCard[] = [];
+  const cards: CleanCard[] = [], root = S.root, rootPath = S.scan?.rootPath ?? '';
+  const seen: string[] = []; // rutas que ya tienen tarjeta: la caché declarada no se repite ni se anida
   for (const rule of rulesFor(SYS.os)) {
-    const res = await B.search({ query: rule.q, root: S.root.id, limit: 200 }).catch(() => null); if (!res || res.error) continue;
+    if (rule.list) {
+      const res = await (rule.list === 'links' ? B.brokenLinks(root.id, 500) : B.search({ query: rule.q, root: root.id, limit: 500 })).catch(() => null);
+      if (!res || res.error || !res.total) continue;
+      cards.push({ row: { ...root, size: res.totalBytes }, path: rootPath, rule, title: titleOf(rule, res.rows[0]), total: res.total,
+        sample: res.rows.slice(0, 6), rows: rule.list === 'links' ? res.rows : undefined });
+      continue;
+    }
+    const res = await B.search({ query: rule.q, root: root.id, limit: 200 }).catch(() => null); if (!res || res.error) continue;
+    if (rule.parent) {
+      for (const r of res.rows.slice(0, 60)) {
+        const dir = await rowOf(r.parentId).catch(() => null); if (!dir || dir.parentId < 0) continue;
+        const path = parentPath(r.path), t = { ...dir, path };
+        if ((rule.ok && !rule.ok(t)) || (rule.min && dir.size < rule.min) || seen.some(s => isUnder(path, s) || isUnder(s, path))) continue;
+        seen.push(path); cards.push({ row: dir, path, rule, title: titleOf(rule, t) });
+      }
+      continue;
+    }
     let rows = res.rows.filter(r => (!rule.ok || rule.ok(r)) && (!rule.min || rule.group || (rule.useAlloc ? r.alloc : r.size) >= rule.min));
     if (rule.needs) { const keep: SearchRow[] = []; for (const r of rows.slice(0, 40)) if (await hasChild(r.id, rule.needs).catch(() => false)) keep.push(r); rows = keep; }
     if (rule.group) {
@@ -723,9 +778,9 @@ async function loadClean() {
         const size = list.reduce((s, r) => s + r.size, 0); if (rule.min && size < rule.min) continue;
         const parent = await rowOf(list[0].parentId).catch(() => null); if (!parent) continue;
         const path = await pathOf(parent.id).catch(() => parentPath(list[0].path));
-        cards.push({ row: { ...parent, size }, path, rule, title: titleOf(rule, list[0]), cmd: cmdOf(rule, list[0]), count: list.length, rows: list });
+        seen.push(path); cards.push({ row: { ...parent, size }, path, rule, title: titleOf(rule, list[0]), cmd: cmdOf(rule, list[0]), count: list.length, rows: list });
       }
-    } else for (const r of rows) cards.push({ row: rule.useAlloc ? { ...r, size: r.alloc } : r, path: r.path, rule, title: titleOf(rule, r), cmd: cmdOf(rule, r) });
+    } else for (const r of rows) { seen.push(r.path); cards.push({ row: rule.useAlloc ? { ...r, size: r.alloc } : r, path: r.path, rule, title: titleOf(rule, r), cmd: cmdOf(rule, r) }); }
   }
   const order = { ok: 0, warn: 1, bad: 2 }; cards.sort((a, b) => order[a.rule.risk] - order[b.rule.risk] || b.row.size - a.row.size);
   S.clean = cards; $('cleanCount').textContent = String(cards.length);
@@ -738,19 +793,28 @@ async function renderClean() {
   el.innerHTML = `<div class="clean-sum">`
     + (['ok', 'warn', 'bad'] as Risk[]).map(k => `<div><span class="risk ${k}">${esc(riskName(k))}</span><b>${fmtB(sum(k))}</b><small>${esc(tk('clean.sum.' + k))}</small></div>`).join('')
     + `</div>`
+    // Windows también limpia solo: qué hace el Sensor de almacenamiento y cómo abrirlo
+    + (SYS.os === 'windows' ? `<div class="cl-tip"><p>${html('clean.storageSense')}</p><div class="cmd"><code>${STORAGE_SENSE}</code><button class="icon-btn sm" type="button" data-copy-text="${STORAGE_SENSE}" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div></div>` : '')
     + (L.length ? '' : `<div class="cl-loading">${tx('clean.none')}</div>`)
-    + L.map((c, i) => `<article class="cl"><div><h3>${esc(keyText(c.title))}</h3><code class="cl-path">${esc(c.path)}</code><p>${esc(tk(`clean.${c.rule.id}.why`))}${c.count ? ' ' + tx('clean.fileCount', { count: c.count }) : ''}</p>`
+    + L.map((c, i) => `<article class="cl"><div><h3>${esc(keyText(c.title))}</h3>${c.total == null ? `<code class="cl-path">${esc(c.path)}</code>` : ''}<p>${esc(tk(`clean.${c.rule.id}.why`))}${c.count ? ' ' + tx('clean.fileCount', { count: c.count }) : ''}</p>`
+      + (c.sample ? `<ul class="cl-list">${c.sample.map(r => `<li><code title="${esc(r.path)}">${esc(r.path)}</code></li>`).join('')}${c.total! > c.sample.length ? `<li class="more">${tx('clean.more', { count: c.total! - c.sample.length })}</li>` : ''}</ul>` : '')
       + (c.cmd ? `<div class="cmd"><code>${esc(c.cmd)}</code><button class="icon-btn sm" type="button" data-copy="${i}" title="${tx('clean.copyCommand')}">${ICON_COPY}</button></div>` : '')
       + (c.rule.how ? `<p class="how">${esc(tk(howKey(c.rule)))}</p>` : '')
-      + `</div><div class="cl-side"><span class="cl-size">${fmtB(c.row.size)}</span><span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span><button class="btn sm" type="button" data-loc="${i}">${tx('clean.locate')}</button>`
+      + `</div><div class="cl-side"><span class="cl-size">${c.total != null ? tx('clean.itemCount', { count: c.total }) : fmtB(c.row.size)}</span><span class="risk ${c.rule.risk}">${esc(riskName(c.rule.risk))}</span>`
+      + (c.rule.list === 'query' ? `<button class="btn sm" type="button" data-view="${i}">${tx('clean.viewAll')}</button>`
+        : c.rule.list ? '' : `<button class="btn sm" type="button" data-loc="${i}">${tx('clean.locate')}</button>`)
       // Lo que gestiona Windows no se marca; en las tarjetas agrupadas se marcan los archivos, no su carpeta
       + (c.rule.action === 'freeUp' ? `<button class="btn sm primary" type="button" data-free="${i}">${tx('clean.freeUp')}</button>`
-        : c.rule.risk === 'bad' ? '' : `<button class="btn sm${cardMarked(c) ? ' on' : ''}" type="button" data-mark="${i}" aria-pressed="${cardMarked(c)}">${tx(cardMarked(c) ? 'mark.remove' : c.rows ? 'clean.markFiles' : 'clean.mark')}</button>`)
+        : c.rule.risk === 'bad' || c.rule.list === 'query' ? '' : `<button class="btn sm${cardMarked(c) ? ' on' : ''}" type="button" data-mark="${i}" aria-pressed="${cardMarked(c)}">${tx(cardMarked(c) ? 'mark.remove' : c.rule.list ? 'clean.markAll' : c.rows ? 'clean.markFiles' : 'clean.mark')}</button>`)
       + `</div></article>`).join('');
 }
 $('cleanBody').addEventListener('click', async e => {
   const t = e.target as HTMLElement, cp = t.closest('[data-copy]') as HTMLElement;
   if (cp) { copyText(S.clean![+cp.dataset.copy!].cmd!, 'toast.commandCopied'); return; }
+  const ct = t.closest('[data-copy-text]') as HTMLElement;
+  if (ct) { copyText(ct.dataset.copyText!, 'toast.commandCopied'); return; }
+  const vw = t.closest('[data-view]') as HTMLElement;
+  if (vw) { setQuery(S.clean![+vw.dataset.view!].rule.q); return; }
   const mk = t.closest('[data-mark]') as HTMLElement;
   if (mk) {
     const c = S.clean![+mk.dataset.mark!], rows: NodeRow[] = c.rows || [c.row], on = cardMarked(c);
@@ -1264,7 +1328,13 @@ $('volBtn').addEventListener('click', e => {
     r.left, r.bottom + 6, 'vol');
 });
 menu.addEventListener('submit', e => {
-  e.preventDefault(); const v = ($('folderIn') as HTMLInputElement).value.trim(); if (!v) return;
+  e.preventDefault();
+  if ((e.target as HTMLElement).id === 'saveSearchForm') {
+    const query = q.value.trim(), name = ($('saveSearchName') as HTMLInputElement).value.trim() || query; if (!query) return;
+    storeSearches([...savedSearches().filter(s => s.q !== query), { name, q: query }]);
+    closeMenus(); toast(t('toast.searchSaved', { name })); return;
+  }
+  const v = ($('folderIn') as HTMLInputElement).value.trim(); if (!v) return;
   closeMenus(); analyzeFolder(v);
 });
 menu.addEventListener('click', e => {
@@ -1273,6 +1343,11 @@ menu.addEventListener('click', e => {
   if (kind === 'vol') { if (m === 'vol') { S.vol = S.vols[+b.dataset.v!]; S.target = S.vol.path; renderVolume(); startScan(); } return; }
   if (kind === 'lang') { setPreference(b.dataset.v!); return; }
   if (kind === 'export') { runExport(m); return; }
+  if (kind === 'discover') {
+    if (m === 'q') setQuery(b.dataset.q!);
+    else if (m === 'del') storeSearches(savedSearches().filter((_, i) => i !== +b.dataset.i!));
+    return;
+  }
   rowOf(+menu.dataset.id!).then(r => {
     switch (m) {
       case 'open': case 'reveal': case 'properties': doAction(m, r); break;
@@ -1624,6 +1699,12 @@ export async function startApp(backend: Backend) {
   renderEdition(); applyTheme(); updateSortHead(); renderInspector(); renderComposition();
   try { S.vols = await B.volumes(); } catch (e) { toast(t('toast.volumesFailed', { error: msgText(e) })); }
   S.vol = S.vols.find(isSystemVolume) || S.vols[0] || null; if (S.vol) S.target = S.vol.path;
+  // «Analizar con TesseraFS» del Explorador o `tesserafs-desktop <ruta>`: esa carpeta, en su unidad
+  const launch = SYS.launchPath;
+  if (launch) {
+    S.target = launch;
+    S.vol = S.vols.filter(v => isUnder(launch, v.path)).sort((a, b) => b.path.length - a.path.length)[0] || S.vol;
+  }
   renderVolume();
   B.elevation().then(el => {
     const btn = $('elevBtn'); btn.hidden = el.elevated || !el.canElevate;
@@ -1632,6 +1713,6 @@ export async function startApp(backend: Backend) {
       try { await B.relaunchElevated(); } catch (e) { mapState(null); toast(msgText(e)); }
     };
   }).catch(() => { });
-  if (B.kind === 'demo') startScan();
+  if (B.kind === 'demo' || launch) startScan();
   else showDrives();
 }

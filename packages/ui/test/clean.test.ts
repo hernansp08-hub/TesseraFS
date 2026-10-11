@@ -108,6 +108,25 @@ describe('reglas de limpieza', () => {
   });
 });
 
+describe('orden: vacíos, enlaces rotos y caché declarada', () => {
+  test('las tarjetas de resumen y la caché declarada existen en los dos sistemas', () => {
+    for (const rs of [RULES, LINUX_RULES]) {
+      expect(rs.find(r => r.id === 'brokenLinks')?.list).toBe('links');
+      expect(rs.find(r => r.id === 'emptyFolders')?.list).toBe('query');
+      expect(rs.find(r => r.id === 'emptyFiles')?.q).toContain('-attr:reparse');
+      expect(rs.at(-1)?.id).toBe('cacheTag'); // la última: no repite carpetas que ya tienen tarjeta
+    }
+  });
+  test('la caché declarada no propone carpetas del sistema', () => {
+    const tag = RULES.find(r => r.id === 'cacheTag')!, ltag = LINUX_RULES.find(r => r.id === 'cacheTag')!;
+    expect(tag.ok!({ name: 'cache', path: 'C:\\Users\\ana\\AppData\\Local\\restic\\x', isDir: true, ext: '' })).toBe(true);
+    expect(tag.ok!({ name: 'x', path: 'C:\\Windows\\Temp\\x', isDir: true, ext: '' })).toBe(false);
+    expect(ltag.ok!({ name: '.mypy_cache', path: '/home/ana/proyecto/.mypy_cache', isDir: true, ext: '' })).toBe(true);
+    expect(ltag.ok!({ name: 'restic', path: '/home/ana/.cache/restic', isDir: true, ext: '' })).toBe(false); // ya la cubre ~/.cache
+    expect(titleOf(tag, { name: 'x', path: 'C:\\Users\\ana\\AppData\\Local\\restic\\e4b1', isDir: true, ext: '' })).toEqual(['clean.cacheTag.title', { name: 'restic › e4b1' }]);
+  });
+});
+
 describe('carpetas conocidas', () => {
   test.each([
     ['C:\\Windows', 'windows'],

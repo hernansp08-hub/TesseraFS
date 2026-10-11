@@ -12,6 +12,7 @@ import { EngineError, engineError, errorText, msg, type MessageCode, type Messag
 import { freeUp } from './cloud.ts';
 import { findDuplicates } from './dup.ts';
 import { clearHistory, compareHistory, deleteHistory, exportFile, exportedFile, listHistory, saveHistory } from './history.ts';
+import { brokenLinks } from './links.ts';
 import { mftScan } from './mft.ts';
 import { Store } from './store.ts';
 import { checkRoot, walkScan, type WalkOutcome } from './walk.ts';
@@ -393,6 +394,20 @@ export class TesseraEngine {
   }
 
   extStats(root: number): ExtStat[] { return this.need(root).extStats(root); }
+
+  /**
+   * Enlaces rotos bajo `root` (links.ts), ordenados por ruta. Mira cada enlace en el disco cediendo el hilo de vez en
+   * cuando (el servidor sigue respondiendo); si mientras tanto se carga otro escaneo, error.invalidNode (o
+   * error.noScan si aún no hay árbol). Sin escaneo o con un nodo no válido, lanza como search.
+   */
+  async brokenLinks(root: number, limit: number): Promise<SearchResponse> {
+    const s = this.need(root);
+    const verify = () => {
+      if (!this.store) throw engineError('error.noScan');
+      if (this.store !== s) throw engineError('error.invalidNode', { id: root });
+    };
+    return brokenLinks(s, root, limit, { log: this.opts.log, verify });
+  }
   nodePath(id: number): string { return this.need(id).path(id); }
   nodeInfo(id: number): NodeRow { return this.need(id).row(id); }
 

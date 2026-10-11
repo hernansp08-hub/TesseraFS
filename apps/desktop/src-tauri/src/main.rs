@@ -11,7 +11,7 @@ use tauri::ipc::{Channel, Response};
 use tauri::Manager;
 use tauri::{AppHandle, State, WebviewWindowBuilder};
 use tessera_core::{
-    export, msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult, ElevationInfo, EngineChoice,
+    export, launch, links, msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult, ElevationInfo, EngineChoice,
     EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, RefreshResult, RescanResult, Scan, ScanOptions, ScanProgress, ScanResult,
     SearchResponse, SortKey, SystemInfo, VolumeInfo,
 };
@@ -33,6 +33,8 @@ struct AppState {
     /// tiene el árbol bajo lectura y esperar la escritura bloquearía el resto de lecturas.
     /// Este cerrojo también ordena los cambios de `dup_busy`.
     dup_trashed: Mutex<Vec<(u64, u32)>>,
+    /// Carpeta pedida al abrir (`SystemInfo.launchPath`, ver [`launch::launch_path`]); no cambia.
+    launch_path: Option<String>,
 }
 
 type St<'a> = State<'a, Arc<AppState>>;
@@ -70,10 +72,11 @@ fn check(s: &Scan, id: u32) -> Res<()> {
     }
 }
 
-/// Sistema, separador de rutas y acciones disponibles (la interfaz oculta las demás).
+/// Sistema, separador de rutas, acciones disponibles (la interfaz oculta las demás) y la carpeta
+/// pedida al abrir, si la hay.
 #[tauri::command]
-fn system() -> SystemInfo {
-    tessera_core::system_info()
+fn system(st: St<'_>) -> SystemInfo {
+    SystemInfo { launch_path: st.launch_path.clone(), ..tessera_core::system_info() }
 }
 
 #[tauri::command]
@@ -177,6 +180,34 @@ async fn children(st: St<'_>, id: u32, offset: u32, limit: u32, sort: Option<Sor
 #[tauri::command]
 async fn search(st: St<'_>, query: String, root: u32, limit: u32) -> Res<SearchResponse> {
     with_scan(&st, move |s| Ok(ops::search(&s.tree, &query, root, limit))).await
+}
+
+/// Enlaces rotos bajo `root` (ver [`links`]), ordenados por ruta. El árbol se lee bajo lectura sólo para
+/// tomar los candidatos y para las filas: el disco se mira sin cerrojo (las consultas, la papelera y un
+/// escaneo nuevo no esperan). Un nodo no válido viaja en `SearchResponse.error`, como en `search`; si
+/// mientras tanto se cargó otro escaneo, también `error.invalidNode`.
+#[tauri::command]
+async fn broken_links(st: St<'_>, root: u32, limit: u32) -> Res<SearchResponse> {
+    let st = st.inner().clone();
+    blocking(move || {
+        let (items, generation) = {
+            let g = st.scan.read().map_err(poisoned)?;
+            let s = g.as_ref().ok_or_else(msg::no_scan)?;
+            match links::candidates(&s.tree, root) {
+                Ok(items) => (items, st.generation.load(SeqCst)),
+                Err(e) => return Ok(SearchResponse { error: Some(e), ..Default::default() }),
+            }
+        };
+        let broken = links::check(&items);
+        let g = st.scan.read().map_err(poisoned)?;
+        let s = g.as_ref().ok_or_else(msg::no_scan)?;
+        if st.generation.load(SeqCst) != generation {
+            return Ok(SearchResponse { error: Some(msg::invalid_node(root)), ..Default::default() });
+        }
+        // Lo enviado a la papelera o vuelto a escanear mientras tanto ya no está vivo y no sale
+        Ok(links::response(&s.tree, broken, limit))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -383,9 +414,11 @@ fn elevation() -> ElevationInfo {
     sys::elevation()
 }
 
+/// Relanza como administrador; la ventana nueva vuelve a la carpeta pedida al abrir, si la había.
 #[tauri::command]
-async fn relaunch_elevated(app: AppHandle) -> Res<()> {
-    tauri::async_runtime::spawn_blocking(|| sys::relaunch_elevated("")).await.map_err(join_error)??;
+async fn relaunch_elevated(app: AppHandle, st: St<'_>) -> Res<()> {
+    let args = st.launch_path.as_deref().map(launch::quote_arg).unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || sys::relaunch_elevated(&args)).await.map_err(join_error)??;
     app.exit(0);
     Ok(())
 }
@@ -397,8 +430,10 @@ fn main() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
+    // «Analizar con TesseraFS» (Explorador) o `tesserafs-desktop <ruta>`: sólo si es una carpeta que existe
+    let launch_path = launch::launch_path(std::env::args_os().skip(1));
     tauri::Builder::default()
-        .manage(Arc::new(AppState::default()))
+        .manage(Arc::new(AppState { launch_path, ..AppState::default() }))
         .setup(|app| {
             let cfg = app.config().app.windows.first().cloned().ok_or("Missing window configuration")?;
             #[cfg_attr(not(windows), allow(unused_mut))]
@@ -423,6 +458,7 @@ fn main() {
             children,
             search,
             ext_stats,
+            broken_links,
             node_path,
             node_info,
             action,

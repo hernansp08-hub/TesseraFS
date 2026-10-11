@@ -20,6 +20,11 @@ pub const ATTR_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
 
 pub const TAG_WOF: u32 = 0x8000_0017;
 pub const TAG_APPEXECLINK: u32 = 0x8000_001B;
+/// Unión (junction) o punto de montaje de un volumen.
+pub const TAG_MOUNT_POINT: u32 = 0xA000_0003;
+pub const TAG_SYMLINK: u32 = 0xA000_000C;
+/// Enlace simbólico de WSL: Windows no lo sigue (ver [`crate::links`]).
+pub const TAG_LX_SYMLINK: u32 = 0xA000_001D;
 
 /// Bits de `flags` a partir de atributos y etiqueta de reparse.
 pub fn flags_of(attrs: u32, tag: u32) -> u16 {

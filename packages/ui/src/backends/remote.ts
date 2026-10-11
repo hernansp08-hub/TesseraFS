@@ -58,6 +58,7 @@ export class TauriBackend implements Backend {
   elevation() { return this.call<ElevationInfo>('elevation'); }
   relaunchElevated() { return this.call<void>('relaunch_elevated'); }
   system() { return this.call<SystemInfo>('system'); }
+  brokenLinks(root: number, limit: number) { return this.call<SearchResponse>('broken_links', { root, limit }); }
 }
 
 export class HttpBackend implements Backend {
@@ -133,4 +134,5 @@ export class HttpBackend implements Backend {
   elevation() { return this.get<ElevationInfo>('/api/elevation'); }
   async relaunchElevated() { await this.post('/api/relaunch-elevated', {}); }
   system() { return this.get<SystemInfo>('/api/system'); }
+  brokenLinks(root: number, limit: number) { return this.post<SearchResponse>('/api/broken-links', { root, limit }); }
 }

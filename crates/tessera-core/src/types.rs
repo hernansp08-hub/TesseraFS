@@ -349,6 +349,9 @@ pub struct SystemInfo {
     pub sep: String,
     /// Acciones disponibles aquí; la interfaz oculta las demás.
     pub actions: Vec<ActionKind>,
+    /// Carpeta o unidad pedida al abrir la app (ver [`crate::launch`]); la pone el escritorio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_path: Option<String>,
 }
 
 // ---------- Duplicados (ver crate::dup) ----------
@@ -603,13 +606,18 @@ mod tests {
 
     #[test]
     fn system_info_and_other_mounts_json() {
-        let s = SystemInfo { os: Os::Linux, sep: "/".into(), actions: vec![ActionKind::Open, ActionKind::Reveal, ActionKind::Trash] };
+        let s = SystemInfo { os: Os::Linux, sep: "/".into(), actions: vec![ActionKind::Open, ActionKind::Reveal, ActionKind::Trash], launch_path: None };
         assert_eq!(serde_json::to_value(&s).unwrap(), serde_json::json!({ "os": "linux", "sep": "/", "actions": ["open", "reveal", "trash"] }));
-        let w = SystemInfo { os: Os::Windows, sep: "\\".into(), actions: vec![ActionKind::Properties, ActionKind::FreeUp] };
+        let w = SystemInfo { os: Os::Windows, sep: "\\".into(), actions: vec![ActionKind::Properties, ActionKind::FreeUp], launch_path: None };
         assert_eq!(serde_json::to_string(&w).unwrap(), r#"{"os":"windows","sep":"\\","actions":["properties","freeUp"]}"#);
+        // launchPath sólo si se pidió una carpeta al abrir
+        let l = SystemInfo { launch_path: Some("C:\\Datos".into()), ..w.clone() };
+        assert_eq!(serde_json::to_value(&l).unwrap()["launchPath"], "C:\\Datos");
+        assert_eq!(serde_json::from_value::<SystemInfo>(serde_json::to_value(&w).unwrap()).unwrap(), w);
         assert_eq!(serde_json::to_value(Os::Macos).unwrap(), "macos");
         let here = crate::system_info();
         assert_eq!(here.sep, std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(here.launch_path, None);
         assert!(here.actions.contains(&ActionKind::Open) && here.actions.contains(&ActionKind::Trash));
         assert_eq!(here.actions.contains(&ActionKind::FreeUp), cfg!(windows));
         let paths: Vec<String> = ["/home", "/boot", "/mnt/c", "/srv", "/media/usb", "/opt"].iter().map(|s| s.to_string()).collect();

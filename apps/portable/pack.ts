@@ -29,15 +29,24 @@ const bunExe = process.execPath;
 copyFileSync(bunExe, join(out, 'bun.exe'));
 
 // 3) lanzadores y README (todos los idiomas de la interfaz, claves readme.* de packages/i18n)
+// Los argumentos pasan tal cual: una ruta (TesseraFS.cmd "C:\carpeta") es la carpeta que se escanea al abrir.
 writeFileSync(join(out, 'TesseraFS.cmd'), crlf(`@echo off
 rem Lanzador de TesseraFS portable: bun.exe ejecuta tesserafs.js; la ventana es Microsoft Edge.
+rem Una ruta como argumento (TesseraFS.cmd "C:\\carpeta") se escanea al abrir.
 start "" /min "%~dp0bun.exe" "%~dp0tesserafs.js" %*
 `));
 writeFileSync(join(out, 'TesseraFS.vbs'), crlf(`' Lanzador opcional sin consola. Microsoft está retirando VBScript y muchas empresas lo bloquean:
-' si no funciona, usa TesseraFS.cmd.
+' si no funciona, usa TesseraFS.cmd. Una ruta como argumento se escanea al abrir.
 Set fso = CreateObject("Scripting.FileSystemObject")
 d = fso.GetParentFolderName(WScript.ScriptFullName)
-CreateObject("WScript.Shell").Run """" & d & "\\bun.exe"" """ & d & "\\tesserafs.js""", 0, False
+a = ""
+For Each x In WScript.Arguments
+  ' entre comillas; una barra invertida final se duplica para que "C:\\" llegue entero
+  y = x
+  If Right(y, 1) = "\\" Then y = y & "\\"
+  a = a & " """ & y & """"
+Next
+CreateObject("WScript.Shell").Run """" & d & "\\bun.exe"" """ & d & "\\tesserafs.js""" & a, 0, False
 `));
 const version: string = JSON.parse(readFileSync(join(here, '..', '..', 'package.json'), 'utf8')).version;
 writeFileSync(join(out, 'README.txt'), readmeText('portable', version));

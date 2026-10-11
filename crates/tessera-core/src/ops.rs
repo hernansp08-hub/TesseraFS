@@ -120,6 +120,7 @@ pub fn search(t: &Tree, query: &str, root: u32, limit: u32) -> SearchResponse {
             alloc: t.alloc(id) as f64,
             mtime: t.mtime(id) as f64,
             flags: t.flags(id),
+            files: t.files(id) as f64,
             path_lower: path,
         };
         if q.matches(&target, now) {
@@ -235,6 +236,12 @@ mod tests {
         // attr: usa los bits de flag del nodo
         assert_eq!(search(&t, "attr:hidden", 0, 10).rows[0].node.name, "README");
         assert_eq!(search(&t, "-atrib:oculto", 0, 10).total, 4);
+        // files: cuenta los archivos de dentro (recursivo); los archivos tienen 0
+        let names = |q: &str| search(&t, q, 0, 10).rows.into_iter().map(|r| r.node.name).collect::<Vec<_>>();
+        assert_eq!(names("type:dir files:3"), ["node_modules"]);
+        assert_eq!(names("type:dir archivos:>3"), Vec::<String>::new());
+        assert_eq!(search(&t, "files:=0", 0, 10).total, 5);
+        assert_eq!(search(&t, "files:zz", 0, 10).error.unwrap().code, "query.invalidValue");
         let r = search(&t, "type:dir", 0, 10);
         assert_eq!(r.total, 1);
         assert_eq!(r.rows[0].path, "C:\\node_modules");

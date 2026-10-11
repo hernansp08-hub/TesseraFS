@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use tessera_core::types::flag;
-use tessera_core::{ops, scan, ActionKind, EngineChoice, ScanOptions, Tree};
+use tessera_core::{links, ops, scan, ActionKind, EngineChoice, ScanOptions, Tree};
 
 struct TempDir(PathBuf);
 impl TempDir {
@@ -83,6 +83,75 @@ fn walk_counts_links_and_junctions() {
     // Búsqueda con ruta completa
     let r = ops::search(t, "path:deep", 0, 10);
     assert_eq!(r.total, 2);
+}
+
+/// Unión (junction) con `mklink /J` (no necesita administrador).
+fn junction(link: &Path, target: &Path) -> bool {
+    std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn broken_links_are_checked_on_disk() {
+    let d = TempDir::new("enlaces");
+    d.file("destino/x.txt", 10);
+    std::fs::create_dir_all(d.0.join("borrado")).unwrap();
+    std::fs::create_dir_all(d.0.join("sub")).unwrap();
+    assert!(junction(&d.0.join("bueno"), &d.0.join("destino")), "mklink /J");
+    let roto_path = d.0.join("sub").join("roto");
+    assert!(junction(&roto_path, &d.0.join("borrado")));
+    // Su destino desaparece: queda rota (lo de dentro de la carpeta temporal y nada más)
+    std::fs::remove_dir(d.0.join("borrado")).unwrap();
+    // Enlaces simbólicos (con administrador o el modo de desarrollador): a un archivo y a una carpeta que no
+    // existen, a un archivo que sí y un bucle
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let sym = symlink_file(d.0.join("no-existe.txt"), d.0.join("sim-roto")).is_ok();
+    if sym {
+        symlink_dir(d.0.join("no-existe"), d.0.join("sim-carpeta")).unwrap();
+        symlink_file(d.0.join("destino").join("x.txt"), d.0.join("sim-bueno")).unwrap();
+        symlink_file(d.0.join("bucle-b"), d.0.join("bucle-a")).unwrap();
+        symlink_file(d.0.join("bucle-a"), d.0.join("bucle-b")).unwrap();
+    } else {
+        eprintln!("broken_links_are_checked_on_disk: sin permiso para crear enlaces simbólicos; sólo uniones");
+    }
+
+    let s = run(&d.0);
+    let t = &s.tree;
+    let snapshot = |t: &Tree| (0..t.len() as u32).map(|i| (t.live(i), t.size(i), t.files(i), t.flags(i))).collect::<Vec<_>>();
+    let before = snapshot(t);
+    let roto = find(t, &roto_path);
+    assert_eq!(t.flags(roto) & (flag::DIR | flag::REPARSE), flag::DIR | flag::REPARSE);
+    let rel = |r: &tessera_core::SearchResponse| r.rows.iter().map(|x| x.path[d.0.as_os_str().len() + 1..].to_string()).collect::<Vec<_>>();
+    let r = links::broken_links(t, 0, 10);
+    assert!(r.error.is_none());
+    // Ordenados por ruta; la unión buena y el enlace al archivo que existe no salen
+    let want: &[&str] = if sym { &["bucle-a", "bucle-b", "sim-carpeta", "sim-roto", "sub\\roto"] } else { &["sub\\roto"] };
+    assert_eq!(rel(&r), want);
+    assert_eq!(r.total, want.len() as u64);
+    assert_eq!(r.total_bytes, r.rows.iter().map(|x| x.node.size).sum::<u64>());
+    assert_eq!(r.rows.last().unwrap().node.id, roto);
+    assert!(r.rows.iter().all(|x| x.node.flags & flag::REPARSE != 0));
+    // `limit`: total de todos, filas las primeras
+    let r1 = links::broken_links(t, 0, 1);
+    assert_eq!((r1.total, r1.rows.len(), rel(&r1)[0].as_str()), (r.total, 1, want[0]));
+    assert_eq!(links::broken_links(t, 0, 0).rows.len(), 0);
+    // Bajo una subcarpeta, y el propio nodo si es un enlace
+    assert_eq!(rel(&links::broken_links(t, find(t, &d.0.join("sub")), 10)), ["sub\\roto"]);
+    assert_eq!(links::broken_links(t, roto, 10).total, 1);
+    assert_eq!(links::broken_links(t, find(t, &d.0.join("bueno")), 10).total, 0);
+    assert_eq!(links::broken_links(t, 999_999, 10).error.unwrap().code, "error.invalidNode");
+    // Se mira en el momento: el destino vuelve a existir → ya no está rota
+    std::fs::create_dir_all(d.0.join("borrado")).unwrap();
+    assert_eq!(links::broken_links(t, find(t, &d.0.join("sub")), 10).total, 0);
+    // Ni el árbol ni el disco cambian
+    assert_eq!(snapshot(t), before);
+    assert!(std::fs::symlink_metadata(&roto_path).is_ok_and(|m| m.file_type().is_symlink() || m.is_dir()));
+    assert!(d.0.join("destino/x.txt").exists());
 }
 
 #[test]

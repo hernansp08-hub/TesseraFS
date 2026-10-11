@@ -12,4 +12,6 @@ export { walkScan, setWalkWorkerUrl, DirReader, WALK_WORKER_FLAG } from './walk.
 export { mftScan } from './mft.ts';
 export { freeUp, freeUpAttrs, freeUpCandidates, win32AttrIo, FREE_UP_SETTABLE, type AttrIo } from './cloud.ts';
 export { findDuplicates, extendedPath, DUP_PREFIX, DUP_CHUNK, DUP_MAX_LIMIT, DUP_DEFAULT_LIMIT, DUP_HASH, type DupOptions } from './dup.ts';
+export { brokenLinks, isBrokenLink, isBrokenError, checksTag, findData, LINK_MAX_CHECKS, type BrokenLinksOptions } from './links.ts';
+export { launchArg, launchPath, quoteArg, stripQuotes } from './launch.ts';
 export * as win32 from './win32.ts';

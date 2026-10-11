@@ -1,5 +1,6 @@
 // Edición portable: servidor HTTP local (sólo 127.0.0.1, token aleatorio) + ventana de Microsoft Edge
 // en modo app. Sin binarios propios: sólo bun.exe (firmado) y este script.
+//   <ruta>        carpeta o unidad que la interfaz escanea al abrir (SystemInfo.launchPath; TesseraFS.cmd "C:\carpeta")
 //   --no-window   sólo servidor; imprime URL y token (pruebas)
 //   --debug       deja la consola visible y registra en ella
 //   --threads=N   workers del recorrido (0 = un solo hilo)
@@ -8,7 +9,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ActionKind, DupProgress, EngineChoice, ScanProgress, SortKey } from '../../../packages/protocol/src/index.ts';
-import { TesseraEngine, defaultThreads, errorResponse, msg, runElevated, setWalkWorkerUrl, win32 } from '../../../packages/core-bun/src/index.ts';
+import { TesseraEngine, defaultThreads, errorResponse, launchPath, msg, quoteArg, runElevated, setWalkWorkerUrl, win32 } from '../../../packages/core-bun/src/index.ts';
 import { embeddedUi } from './ui-macro.ts' with { type: 'macro' };
 
 // en un objeto para que el minificador no copie la cadena en cada uso
@@ -43,6 +44,8 @@ async function main() {
   const threadsArg = args.find(a => a.startsWith('--threads='));
   const threads = threadsArg ? Math.max(0, Number(threadsArg.slice(10)) | 0) : defaultThreads();
   const log = (...m: unknown[]) => { if (debug || noWindow) console.log('[tesserafs]', ...m); };
+  // carpeta pedida al abrir: el primer argumento que no empieza por «-», sólo si es una carpeta que existe
+  const launch = launchPath(args);
 
   // en el bundle, este mismo archivo hace de worker del recorrido
   if (import.meta.path.endsWith('.js')) setWalkWorkerUrl(import.meta.url);
@@ -224,6 +227,16 @@ async function main() {
       case 'GET /api/search':
         return json(engine.search({ query: q.get('q') ?? '', root: num(q.get('root'), engine.result?.rootId ?? 0), limit: Math.min(num(q.get('limit'), 500), 100000) }));
       case 'GET /api/ext': return json(engine.extStats(num(q.get('root'), engine.result?.rootId ?? 0)));
+      case 'POST /api/broken-links': {
+        server.timeout(req, 0); // mira cada enlace en el disco
+        const b = await req.json().catch(() => null) as { root?: unknown; limit?: unknown } | null;
+        if (!b || typeof b.root !== 'number') return fail(msg('error.invalidNode', { id: String(b?.root ?? '') }), 400);
+        const limit = typeof b.limit === 'number' && Number.isFinite(b.limit) ? Math.min(b.limit, 100000) : 500;
+        const t0 = performance.now();
+        const r = await engine.brokenLinks(b.root, limit);
+        log(`broken links ${b.root}: ${r.total} in ${Math.round(performance.now() - t0)} ms`);
+        return json(r);
+      }
       case 'GET /api/path': return json(engine.nodePath(num(q.get('id'), -1)));
       case 'GET /api/node': return json(engine.nodeInfo(num(q.get('id'), -1)));
       case 'POST /api/action': {
@@ -234,10 +247,11 @@ async function main() {
       }
       case 'GET /api/elevation': return json(engine.elevation());
       // La portable sólo existe para Windows
-      case 'GET /api/system': return json({ os: 'windows', sep: '\\', actions: ['open', 'reveal', 'properties', 'trash', 'freeUp'] });
+      case 'GET /api/system': return json({ os: 'windows', sep: '\\', actions: ['open', 'reveal', 'properties', 'trash', 'freeUp'], ...(launch ? { launchPath: launch } : {}) });
       case 'POST /api/relaunch-elevated': {
         if (engine.elevated) return fail(msg('elevation.failed', { error: 'already running as administrator' }), 409);
-        const params = [Bun.main, ...args.filter(a => a !== '--hidden-child')].map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ');
+        // las opciones tal cual y, en vez de la ruta recibida, la ya normalizada: la ventana elevada vuelve a esa carpeta
+        const params = [Bun.main, ...args.filter(a => a.startsWith('-') && a !== '--hidden-child'), ...(launch ? [launch] : [])].map(quoteArg).join(' ');
         const err = runElevated(process.execPath, params, process.cwd(), debug ? 1 : 0);
         // 1223 = el usuario canceló el UAC; el texto de FormatMessage ya llega en el idioma de Windows
         if (err) return fail(msg('elevation.failed', { error: win32.winErrorText(err) }), err === 1223 ? 409 : 500);
@@ -274,6 +288,7 @@ async function main() {
 
   const appUrl = `http://127.0.0.1:${server.port}/`;
   log(`motor: ${threads} workers · ${engine.elevated ? 'administrador (MFT)' : 'sin administrador (recorrido)'}`);
+  if (launch) log(`carpeta pedida al abrir: ${launch}`);
   if (noWindow) {
     console.log(`URL: ${appUrl}`);
     console.log(`Token: ${token}`);

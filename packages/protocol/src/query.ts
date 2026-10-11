@@ -10,6 +10,7 @@ export interface QueryTarget {
   alloc: number;
   mtime: number;   // segundos Unix
   flags?: number;  // bits de FLAG (attr:); sin ellos, 0
+  files?: number;  // archivos dentro (recursivo; 0 en archivos) para files:; sin ellos, 0
   path(): string;  // ruta completa; se llama sólo si hace falta
 }
 
@@ -30,9 +31,11 @@ function fail(code: string, message: string, params: Record<string, string>): ne
 
 const UNIT: Record<string, number> = { '': 1, b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3, t: 1024 ** 4 };
 const AGE: Record<string, number> = { d: 86400, w: 7 * 86400, mo: 30 * 86400, y: 365 * 86400 };
+const COUNT: Record<string, number> = { '': 1, k: 1000, m: 1000 ** 2 };
 const KEYS: Record<string, string> = {
   ext: 'ext', size: 'size', tam: 'size', alloc: 'alloc', asig: 'alloc', age: 'age', edad: 'age',
   path: 'path', ruta: 'path', name: 'name', nombre: 'name', re: 're', type: 'type', tipo: 'type', attr: 'attr', atrib: 'attr',
+  files: 'files', archivos: 'files',
 };
 /** Valores de attr: (con alias en español); varios separados por comas = cualquiera de ellos. */
 const ATTRS: Record<string, number> = {
@@ -89,6 +92,7 @@ export function compileQuery(q: string): CompiledQuery {
           case 'size': { const c = compare(v, UNIT); p = t => c(t.size); break; }
           case 'alloc': { const c = compare(v, UNIT); p = t => c(t.alloc); break; }
           case 'age': { const c = compare(v, AGE); p = (t, now) => c(now - t.mtime); break; }
+          case 'files': { const c = compare(v, COUNT); p = t => c(t.files ?? 0); break; }
           case 'path': { const s = v.toLowerCase(); p = t => t.path().toLowerCase().includes(s); break; }
           case 'name': { const r = /[*?]/.test(v) ? wildcard(v) : null, s = v.toLowerCase(); p = t => r ? r.test(t.name) : t.name.toLowerCase().includes(s); break; }
           case 're': { const r = new RegExp(v, 'i'); p = t => r.test(t.name); break; }

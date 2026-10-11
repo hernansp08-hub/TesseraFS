@@ -105,6 +105,11 @@ export interface SystemInfo {
   sep: '\\' | '/';
   /** Acciones disponibles aquí (Windows: todas; Linux: open, reveal, trash); la interfaz oculta las demás. */
   actions: ActionKind[];
+  /**
+   * Carpeta o unidad pedida al abrir la app («Analizar con TesseraFS» en el menú del Explorador, o
+   * `tesserafs-desktop <ruta>`): la interfaz la escanea al arrancar en vez de mostrar las unidades.
+   */
+  launchPath?: string;
 }
 
 // ---------- Duplicados ----------
@@ -244,4 +249,10 @@ export interface Backend {
   elevation(): Promise<ElevationInfo>;
   relaunchElevated(): Promise<void>;
   system(): Promise<SystemInfo>;
+  /**
+   * Enlaces rotos bajo `root`: enlaces simbólicos, uniones (junctions) y carpetas montadas cuyo destino ya no
+   * existe. Sólo los puntos de reanálisis que sustituyen un nombre (no OneDrive, WOF, deduplicación ni alias de
+   * aplicaciones). Comprueba cada destino en el momento; ordenados por ruta, `total` = todos los rotos.
+   */
+  brokenLinks(root: number, limit: number): Promise<SearchResponse>;
 }

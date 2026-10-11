@@ -10,6 +10,8 @@
 //! - [`rescan`] vuelve a escanear una carpeta del árbol cargado y actualiza con el diario USN ([`usn`]).
 //! - [`action`] abre, muestra, envía a la papelera o libera espacio de OneDrive ([`freeup`]); en Linux,
 //!   sólo abrir, mostrar y papelera ([`system_info`]).
+//! - [`links::broken_links`] busca enlaces simbólicos, uniones y carpetas montadas cuyo destino ya no existe.
+//! - [`launch`] lee la carpeta pedida al abrir la app (`SystemInfo.launchPath`).
 
 pub mod attrs;
 pub mod build;
@@ -17,6 +19,8 @@ pub mod dup;
 pub mod export;
 pub mod freeup;
 pub mod history;
+pub mod launch;
+pub mod links;
 pub mod mft;
 pub mod msg;
 pub mod names;
@@ -65,14 +69,15 @@ pub fn native_path(tree: &Tree, id: u32) -> NativePath {
 }
 
 /// La plataforma para la interfaz: sistema, separador de rutas y acciones disponibles (Windows: open,
-/// reveal, properties, trash y freeUp; Linux: open, reveal y trash).
+/// reveal, properties, trash y freeUp; Linux: open, reveal y trash). Sin `launch_path`: lo añade quien
+/// conoce los argumentos del proceso (el escritorio, con [`launch::launch_path`]).
 pub fn system_info() -> SystemInfo {
     use ActionKind::*;
     if cfg!(windows) {
-        SystemInfo { os: Os::Windows, sep: "\\".into(), actions: vec![Open, Reveal, Properties, Trash, FreeUp] }
+        SystemInfo { os: Os::Windows, sep: "\\".into(), actions: vec![Open, Reveal, Properties, Trash, FreeUp], launch_path: None }
     } else {
         let os = if cfg!(target_os = "macos") { Os::Macos } else { Os::Linux };
-        SystemInfo { os, sep: "/".into(), actions: vec![Open, Reveal, Trash] }
+        SystemInfo { os, sep: "/".into(), actions: vec![Open, Reveal, Trash], launch_path: None }
     }
 }
 

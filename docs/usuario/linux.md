@@ -36,6 +36,8 @@ Comprueba las descargas con `sha256sum -c SHA256SUMS.txt --ignore-missing`.
 > [!IMPORTANT]
 > No abras la aplicación con `sudo`: las aplicaciones gráficas con root pueden dejar archivos de tu usuario con otro dueño. Si necesitas ver carpetas protegidas (`/root`, los datos de Docker…), usa la línea de comandos con `sudo`.
 
+Para abrir la app directamente en una carpeta: `tesserafs-desktop /ruta/a/la/carpeta`.
+
 ## Liberar espacio en Linux
 
 La pestaña **Liberar espacio** tiene reglas propias de Linux: la caché de tu carpeta personal, los paquetes descargados por APT/DNF/pacman, los registros de journald, Docker y Podman, versiones antiguas de snap, Flatpak, máquinas virtuales, instantáneas de Timeshift y la papelera, además de las de desarrollo (`target`, `node_modules`, `.venv`). Detalles en [Liberar espacio](liberar-espacio.md#en-linux).
