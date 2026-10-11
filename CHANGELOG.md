@@ -4,6 +4,11 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+### Instalador para Windows
+- `TesseraFS-X.Y.Z-instalador-win-x64.exe`: se instala sólo para tu usuario (sin pedir administrador), con acceso en el menú Inicio, en los cinco idiomas de la app; se actualiza instalando encima y se desinstala desde Configuración › Aplicaciones.
+- Desinstalar nunca borra el historial de escaneos.
+- Los zips de escritorio y portable siguen disponibles para usar sin instalar.
+
 ## [0.9.0] - 2026-10-11
 
 ### Linux

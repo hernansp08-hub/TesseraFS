@@ -9,6 +9,7 @@ const ROOT = join(import.meta.dir, '..');
 
 /** Paquetes que se publican, en el orden de la tabla de descargas, con su descripción. */
 const ASSETS: [RegExp, (f: string) => string][] = [
+  [/-instalador-win-x64\.exe$/, () => 'Windows, lo recomendado: instalador. Acceso en el menú Inicio, se desinstala desde Configuración y actualiza encima de la versión anterior. No pide administrador.'],
   [/-escritorio-win-x64\.zip$/, () => 'Windows: un único `tesserafs-desktop.exe` (y `tessera-cli.exe`), el más rápido'],
   [/-portable-win-x64\.zip$/, () => 'Windows de empresa: sólo ejecuta programas firmados (`bun.exe` y Edge). Abre `TesseraFS.cmd`.'],
   [/-linux-x86_64\.AppImage$/, f => `Linux, cualquier distribución reciente: \`chmod +x ${f}\` y ábrelo. No instala nada.`],
@@ -35,13 +36,13 @@ export function sumsAndNotes(dir: string, version: string): string[] {
   const cl = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
   const start = cl.indexOf(`## [${version}]`);
   const section = start < 0 ? '' : cl.slice(cl.indexOf('\n', start) + 1, (cl.indexOf('\n## [', start + 1) + 1 || cl.length)).trim();
-  const win = files.some(f => f.endsWith('.zip')), linux = files.some(f => /\.(AppImage|deb)$/.test(f));
+  const win = files.some(f => /\.(zip|exe)$/.test(f)), linux = files.some(f => /\.(AppImage|deb)$/.test(f));
   const notes = [
     '## Descargas', '',
     '| Archivo | Para |', '|---|---|',
     ...files.map(f => `| \`${f}\` (${mb(join(dir, f))}) | ${ASSETS[kindOf(f)][1](f)} |`),
     '', 'Comprueba las descargas con `SHA256SUMS.txt`.', '',
-    ...(win ? ['> [!NOTE]', '> Windows: descomprime y ejecuta, no hay instalación. El ejecutable aún no está firmado: SmartScreen puede pedir confirmación (Más información › Ejecutar de todas formas).', ''] : []),
+    ...(win ? ['> [!NOTE]', '> Windows: el instalador se instala sólo para tu usuario, sin pedir administrador; los zips no se instalan (descomprime y ejecuta). Aún no están firmados: SmartScreen puede pedir confirmación (Más información › Ejecutar de todas formas).', ''] : []),
     ...(linux ? ['> [!NOTE]', '> Linux: x86_64 con WebKitGTK 4.1 (Ubuntu 22.04 o posterior, Debian 12, Fedora 37…). Guía: docs/usuario/linux.md.', ''] : []),
     '## Cambios', '', section || '- Ver CHANGELOG.md', '',
     '## Code signing policy', '',

@@ -48,7 +48,7 @@ Las dos comparten la misma interfaz y dan los mismos resultados.
 
 ## Empezar
 
-**Usar:** descarga el zip de la edición que prefieras desde **[Releases](../../releases/latest)**, desbloquéalo (Propiedades › Desbloquear), descomprímelo y ábrelo; no hay instalación. Todo se explica en la **[Guía de usuario](docs/usuario/guia.md#descargar)**.
+**Usar:** descarga desde **[Releases](../../releases/latest)** el instalador de Windows (sin administrador), uno de los zips (sin instalar nada) o, en Linux, la AppImage o el `.deb`. Todo se explica en la **[Guía de usuario](docs/usuario/guia.md#descargar)** y en **[TesseraFS en Linux](docs/usuario/linux.md)**.
 
 **Compilar** (Windows 10/11, [Bun](https://bun.sh) ≥ 1.3, [Rust](https://rustup.rs) estable):
 

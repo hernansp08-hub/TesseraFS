@@ -42,8 +42,11 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
-      }
+        "installMode": "currentUser",
+        "languages": ["English", "Spanish", "PortugueseBR", "French", "German"],
+        "installerIcon": "icons/icon.ico"
+      },
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
     }
   }
 }

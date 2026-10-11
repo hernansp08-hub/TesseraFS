@@ -72,7 +72,9 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: paquetes-windows
-          path: dist/release/*/*.zip
+          path: |
+            dist/release/*/*.exe
+            dist/release/*/*.zip
           retention-days: 7
 
   linux:

@@ -1,5 +1,6 @@
 // Empaqueta la versión actual para el sistema donde se ejecuta y, con --publish, crea la release en GitHub.
 // Windows:
+//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-instalador-win-x64.exe   instalador NSIS de la app de escritorio (por usuario, sin administrador)
 //   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-escritorio-win-x64.zip   tesserafs-desktop.exe + tessera-cli.exe + README multilingüe + licencias
 //   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-portable-win-x64.zip     carpeta portable (bun.exe firmado + tesserafs.js) + licencias
 // Linux (x86_64):
@@ -35,8 +36,8 @@ const out = (cmd: string[]) => Bun.spawnSync(cmd, { cwd: ROOT }).stdout.toString
 // ---------- 1. Compilar ----------
 if (!skipBuild) {
   run(['bun', 'packages/ui/build.ts']);
-  // En Linux, Tauri genera también los paquetes (AppImage y .deb); en Windows sólo el exe
-  run(['bunx', 'tauri', 'build', ...(LINUX ? ['--bundles', 'appimage,deb'] : ['--no-bundle'])], join(ROOT, 'apps', 'desktop'));
+  // Tauri compila el exe y genera los paquetes: en Linux, AppImage y .deb; en Windows, el instalador NSIS
+  run(['bunx', 'tauri', 'build', '--bundles', LINUX ? 'appimage,deb' : 'nsis'], join(ROOT, 'apps', 'desktop'));
   run(['cargo', 'build', '--release', '-p', 'tessera-cli']);
   if (!LINUX) run(['bun', 'apps/portable/pack.ts']);
 }
@@ -92,6 +93,12 @@ if (LINUX) {
   addLicenses(cliDir, rustNotices('tessera-cli', 'tessera-cli'));
   run([TAR, '-czf', join(OUT, `${cliName}-linux-x64.tar.gz`), '-C', stage, cliName]);
 } else {
+  // Instalador: target/release/bundle/nsis/TesseraFS_X.Y.Z_x64-setup.exe
+  const nsis = join(ROOT, 'target', 'release', 'bundle', 'nsis');
+  const setup = existsSync(nsis) ? readdirSync(nsis).find(n => n.endsWith('-setup.exe') && n.includes(version)) : undefined;
+  if (!setup) die(`No existe el instalador de ${version} en ${nsis}`);
+  cpSync(join(nsis, setup!), join(OUT, `TesseraFS-${version}-instalador-win-x64.exe`));
+
   const exe = join(ROOT, 'target', 'release', 'tesserafs-desktop.exe');
   const cli = join(ROOT, 'target', 'release', 'tessera-cli.exe');
   const portable = join(ROOT, 'apps', 'portable', 'dist', 'TesseraFS-portable');

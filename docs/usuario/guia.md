@@ -57,13 +57,18 @@ flowchart TD
 
 ### Descargar
 
-Cada versión se publica en la página **Releases** del repositorio con dos zips:
+Cada versión se publica en la página **Releases** del repositorio:
 
 | Archivo | Edición |
 |---|---|
-| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` (≈3,5 MB) | Escritorio |
+| `TesseraFS-X.Y.Z-instalador-win-x64.exe` (≈3 MB) | Escritorio, con instalador: **lo recomendado** |
+| `TesseraFS-X.Y.Z-escritorio-win-x64.zip` (≈5 MB) | Escritorio, sin instalar (incluye `tessera-cli.exe`) |
 | `TesseraFS-X.Y.Z-portable-win-x64.zip` (≈37 MB) | Portable |
 | `SHA256SUMS.txt` | Sumas para comprobar que la descarga está íntegra |
+
+**Con el instalador:** ábrelo y sigue los pasos. Se instala sólo para tu usuario (en `%LOCALAPPDATA%\TesseraFS`), sin pedir administrador, con acceso en el menú Inicio. Para actualizar, instala la versión nueva encima. Se desinstala desde Configuración › Aplicaciones; tu historial de escaneos se conserva.
+
+**Con un zip:**
 
 1. Descarga el zip de tu edición.
 2. **Desbloquéalo antes de descomprimir:** clic derecho › Propiedades › marca **Desbloquear** › Aceptar. Windows marca todo lo descargado de internet y, sin este paso, cada archivo extraído hereda la marca: más avisos al abrirlo.
