@@ -66,6 +66,8 @@ Cada versión se publica en la página **Releases** del repositorio:
 | `TesseraFS-X.Y.Z-portable-win-x64.zip` (≈37 MB) | Portable |
 | `SHA256SUMS.txt` | Sumas para comprobar que la descarga está íntegra |
 
+**Con Scoop:** `scoop bucket add tesserafs https://github.com/hernansp08-hub/scoop-tesserafs` y después `scoop install tesserafs` (instala la edición de escritorio y deja `tessera-cli` en el PATH; se actualiza con `scoop update tesserafs`).
+
 **Con el instalador:** ábrelo y sigue los pasos. Se instala sólo para tu usuario (en `%LOCALAPPDATA%\TesseraFS`), sin pedir administrador, con acceso en el menú Inicio. Para actualizar, instala la versión nueva encima. Se desinstala desde Configuración › Aplicaciones; tu historial de escaneos se conserva.
 
 **Con un zip:**

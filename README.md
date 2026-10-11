@@ -50,6 +50,8 @@ Las dos comparten la misma interfaz y dan los mismos resultados.
 
 **Usar:** descarga desde **[Releases](../../releases/latest)** el instalador de Windows (sin administrador), uno de los zips (sin instalar nada) o, en Linux, la AppImage o el `.deb`. Todo se explica en la **[Guía de usuario](docs/usuario/guia.md#descargar)** y en **[TesseraFS en Linux](docs/usuario/linux.md)**.
 
+Con [Scoop](https://scoop.sh): `scoop bucket add tesserafs https://github.com/hernansp08-hub/scoop-tesserafs` y `scoop install tesserafs`. En winget está en revisión.
+
 **Compilar** (Windows 10/11, [Bun](https://bun.sh) ≥ 1.3, [Rust](https://rustup.rs) estable):
 
 ```bash

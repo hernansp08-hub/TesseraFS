@@ -115,12 +115,15 @@ Las versiones con sufijo (`-beta.1`) se publican como *prerelease*.
 
 ### Gestores de paquetes (winget, Scoop, AUR)
 
+> [!IMPORTANT]
+> Los commits en esos repositorios deben ir con la dirección anónima de GitHub, como los de este. Los que se crean con la API de GitHub (o editando en la web) usan el correo de la cuenta salvo que se indique otro autor.
+
 Después de publicar una versión, `bun run manifests` genera en `dist/manifiestos/vX.Y.Z/` los manifiestos con las sumas de la propia release (las lee de `SHA256SUMS.txt` en GitHub). No envía nada: cada gestor se actualiza desde tu cuenta.
 
 | Gestor | Qué se genera | Cómo se publica |
 |---|---|---|
-| **winget** | `winget/manifests/t/TesseraFS/TesseraFS/X.Y.Z/` (versión, instalador NSIS por usuario y descripción) | Un *pull request* a [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) con esa carpeta (o `wingetcreate submit`). Lo revisan sus validadores; después: `winget install TesseraFS.TesseraFS` |
-| **Scoop** | `scoop/tesserafs.json` (zip de escritorio, con `tessera-cli` en el PATH de Scoop y acceso directo) | En un *bucket* propio (un repositorio con ese archivo: `scoop bucket add tesserafs <url>`) o con un *pull request* a ScoopInstaller/Extras. Tiene `autoupdate`, así que las versiones siguientes se actualizan solas |
+| **winget** | `winget/manifests/t/TesseraFS/TesseraFS/X.Y.Z/` (versión, instalador NSIS por usuario y descripción) | Un *pull request* a [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) desde la bifurcación `hernansp08-hub/winget-pkgs`, en una rama `TesseraFS.TesseraFS-X.Y.Z` (o `wingetcreate submit`). La primera vez hay que aceptar el acuerdo de colaboración (CLA) que pide su bot. Lo revisan sus validadores; después: `winget install TesseraFS.TesseraFS` |
+| **Scoop** | `scoop/tesserafs.json` (zip de escritorio, con `tessera-cli` en el PATH de Scoop y acceso directo) | *Bucket* propio: [hernansp08-hub/scoop-tesserafs](https://github.com/hernansp08-hub/scoop-tesserafs), con el manifiesto en `bucket/tesserafs.json`. En cada versión se sube el nuevo. Se instala con `scoop bucket add tesserafs https://github.com/hernansp08-hub/scoop-tesserafs` y `scoop install tesserafs` |
 | **AUR** | `aur/tesserafs-bin/PKGBUILD` y `.SRCINFO` (a partir del `.deb` y del CLI de Linux) | Con una cuenta de AUR y una clave SSH: `git clone ssh://aur@aur.archlinux.org/tesserafs-bin.git`, copiar los dos archivos, `git commit` y `git push` |
 
 ### Publicar desde tu equipo (alternativa)
