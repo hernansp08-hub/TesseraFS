@@ -72,6 +72,20 @@ pub fn read_errors(count: u64, samples: &[String]) -> EngineMessage {
     sample_param(EngineMessage::new("scan.readErrors", with_samples(m, samples)).param("count", count), samples)
 }
 
+/// Linux: sistemas de archivos montados dentro de la carpeta escaneada que no se recorrieron (sin contar
+/// los pseudo-sistemas como proc o tmpfs). `paths`: hasta 5 rutas separadas por ", ".
+pub fn other_mounts(count: u64, paths: &[String]) -> EngineMessage {
+    let list = paths.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    let (n, were, them) = if count == 1 {
+        ("1 mounted file system".to_string(), "was", "it")
+    } else {
+        (format!("{count} mounted file systems"), "were", "them")
+    };
+    EngineMessage::new("scan.otherMounts", format!("{n} {were} not included (analyze {them} separately): {list}"))
+        .param("count", count)
+        .param("paths", list)
+}
+
 // ---- Avisos de la búsqueda de duplicados (DupResult.warnings) ----
 
 pub fn dup_read_errors(count: u64) -> EngineMessage {
@@ -115,6 +129,7 @@ pub fn cancelled() -> EngineMessage {
     EngineMessage::new("error.cancelled", "Scan cancelled")
 }
 
+/// También las acciones que la plataforma no tiene (en Linux, `properties` y `freeUp`).
 pub fn unsupported_platform() -> EngineMessage {
     EngineMessage::new("error.unsupportedPlatform", "Only available on Windows")
 }

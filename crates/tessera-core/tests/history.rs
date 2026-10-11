@@ -1,7 +1,6 @@
 //! Pruebas del historial, la comparación y la exportación sobre carpetas temporales creadas aquí mismo.
 //! El historial y la exportación van siempre a carpetas temporales (TESSERA_HISTORY_DIR y
-//! TESSERA_EXPORT_DIR): nunca se toca el historial real ni las Descargas del usuario.
-#![cfg(windows)]
+//! TESSERA_EXPORT_DIR): nunca se toca el historial real ni las Descargas del usuario. Windows y Linux.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -56,13 +55,22 @@ fn run(p: &Path) -> Scan {
     scan(&p.to_string_lossy(), EngineChoice::Walk, &ScanOptions::default(), &|_| {}, &cancel).unwrap()
 }
 
+/// Ruta como la escribe el árbol: en Windows con `\` y sin distinguir mayúsculas; en Linux, tal cual.
+fn norm(p: &str) -> String {
+    if cfg!(windows) {
+        p.replace('/', "\\").to_lowercase()
+    } else {
+        p.to_string()
+    }
+}
+
 fn find(t: &Tree, path: &Path) -> u32 {
-    let want = path.to_string_lossy().replace('/', "\\").to_lowercase();
-    (0..t.len() as u32).find(|&i| t.live(i) && t.path(i).to_lowercase() == want).unwrap_or_else(|| panic!("no está {want}"))
+    let want = norm(&path.to_string_lossy());
+    (0..t.len() as u32).find(|&i| t.live(i) && norm(&t.path(i)) == want).unwrap_or_else(|| panic!("no está {want}"))
 }
 
 fn same(a: &str, b: &Path) -> bool {
-    a.to_lowercase() == b.to_string_lossy().replace('/', "\\").to_lowercase()
+    norm(a) == norm(&b.to_string_lossy())
 }
 
 /// docs/report.pdf 2 MiB · docs/notes.txt 10 KB · old/archive.bin 2 MiB · keep/small.txt 100 B ·
@@ -269,9 +277,13 @@ fn export_files() {
     let outside = env.export.0.join("fuera.txt");
     std::fs::write(&outside, b"x").unwrap();
     let missing = dir.join("no-existe.csv");
-    let climb = format!("{}\\..\\fuera.txt", dir.display());
-    let sibling = format!("{}2\\x.csv", dir.display());
-    for p in [outside.to_string_lossy().into_owned(), missing.to_string_lossy().into_owned(), climb, sibling, dir.to_string_lossy().into_owned(), "informe.csv".into(), String::new(), "C:\\Windows\\notepad.exe".into()] {
+    let s = std::path::MAIN_SEPARATOR;
+    let climb = format!("{}{s}..{s}fuera.txt", dir.display());
+    let sibling = format!("{}2{s}x.csv", dir.display());
+    let foreign = if cfg!(windows) { "C:\\Windows\\notepad.exe" } else { "/etc/hostname" };
+    // En Linux, otra mayúscula es otra carpeta
+    let upper = if cfg!(windows) { String::new() } else { r.path.replace("/TesseraFS/", "/tesserafs/") };
+    for p in [outside.to_string_lossy().into_owned(), missing.to_string_lossy().into_owned(), climb, sibling, dir.to_string_lossy().into_owned(), "informe.csv".into(), String::new(), foreign.into(), upper] {
         let err = export::reveal_export(&p).unwrap_err();
         assert_eq!(err.code, "export.notFound", "{p}");
         assert_eq!(err.get("path"), Some(&Param::Str(p.clone())));

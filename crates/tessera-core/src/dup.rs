@@ -4,7 +4,8 @@
 //! En los archivos de hasta 64 KiB el hash del prefijo ya es el del contenido completo. Quedan fuera
 //! los enlaces duros (borrar uno no libera nada), los archivos sólo en la nube (leerlos los
 //! descargaría) y los puntos de reanálisis. Cada archivo se abre por su ruta UTF-16 exacta con
-//! `\\?\`, compartiendo lectura, escritura y borrado, y se lee en bloques de 1 MiB en un pool fijo.
+//! `\\?\`, compartiendo lectura, escritura y borrado (en Linux, por su ruta normal), y se lee en bloques
+//! de 1 MiB en un pool fijo.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -301,7 +302,15 @@ fn open(t: &Tree, id: u32) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-#[cfg(not(windows))]
+/// Linux: por la ruta normal, sin seguir un enlace en el último componente y sin bloquearse si en su
+/// lugar hay ahora un fifo.
+#[cfg(unix)]
+fn open(t: &Tree, id: u32) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(t.path(id))
+}
+
+#[cfg(not(any(windows, unix)))]
 fn open(t: &Tree, id: u32) -> std::io::Result<std::fs::File> {
     std::fs::File::open(t.path(id))
 }

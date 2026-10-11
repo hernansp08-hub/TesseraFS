@@ -88,6 +88,28 @@ flowchart TD
 > [!WARNING]
 > No añadas `/ResetBase` a la orden de DISM si no sabes lo que hace: libera algo más, pero impide desinstalar las actualizaciones ya instaladas.
 
+## En Linux
+
+En Linux, la pestaña usa sus propias reglas. Las de desarrollo (`target`, `node_modules`, `.venv`, cachés de npm, pnpm, Bun, NuGet y Go fuera de `~/.cache`), los modelos de IA y los juegos de Steam funcionan igual que en Windows.
+
+| Nivel | Candidato | Cómo liberarlo |
+|---|---|---|
+| 🟢 | **Caché de usuario** (`~/.cache`, desde 500 MB) | Mira dentro con **Ubicar** y borra lo de las aplicaciones que ya no uses, o vacíala con las aplicaciones cerradas. Para una herramienta concreta, su orden: `pip cache purge`, `uv cache clean`, `yarn cache clean` |
+| 🟢 | **Paquetes descargados** por APT, DNF, pacman o zypper | `sudo apt clean`, `sudo dnf clean all`, `sudo paccache -rk1`, `sudo zypper clean --all` |
+| 🟢 | **Registros del sistema** (`/var/log/journal`, desde 300 MB) | `sudo journalctl --vacuum-size=200M` |
+| 🟢 | **Volcados de fallos** (`/var/lib/systemd/coredump`) | `coredumpctl list` los muestra; `sudo rm /var/lib/systemd/coredump/*` los borra |
+| 🟢 | **Papelera** (`~/.local/share/Trash`) | `gio trash --empty`, o vacíala desde el gestor de archivos |
+| 🟢 | **Caché de sombreadores** de Steam | Bórrala con los juegos cerrados |
+| 🟡 | **Discos de máquinas virtuales** (`qcow2`, `vdi`, `vmdk`, `vhd`, `vhdx`) | Borra las máquinas desde su programa; para encoger un `qcow2`, `qemu-img convert -O qcow2` con la máquina apagada |
+| 🟡 | **Docker y Podman** (`/var/lib/docker`, `~/.local/share/containers`) | `docker system prune -a` o `podman system prune -a`. Sin root, TesseraFS puede no ver todo `/var/lib/docker` |
+| 🟡 | **Flatpak** (`/var/lib/flatpak`, `~/.local/share/flatpak`) | `flatpak uninstall --unused` quita los entornos que ya no usa ninguna aplicación |
+| 🟡 | **Versiones de snap** (`/var/lib/snapd/snaps`) | `sudo snap set system refresh.retain=2`; las desactivadas, con `snap list --all` y `sudo snap remove NOMBRE --revision=REV` |
+| 🟡 | **Instantáneas de Timeshift** | Desde Timeshift: nunca borres la carpeta a mano |
+| 🟡 | **Descargas** (`iso`, `zip`, `deb`, `rpm`, `AppImage`… en Descargas) | Lo que ya instalaste sobra |
+| 🔴 | **Archivo de intercambio** (`/swap.img`, `/swapfile`) | `swapon --show` muestra su tamaño. Para cambiarlo hay que desactivarlo primero; nunca lo borres en uso |
+
+**¿Qué es esto?** también explica las carpetas del sistema: `/usr`, `/var`, `/var/log`, `/var/cache`, `/var/lib`, `/opt`, `/boot`, `/tmp`, `/snap`, `/home`, `~/.local/share`, `~/.config` y los modelos de Ollama.
+
 ## Trucos
 
 > [!TIP]

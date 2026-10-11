@@ -22,6 +22,7 @@ flowchart LR
 | [Filtros](usuario/filtros.md) | La sintaxis completa de búsqueda y un recetario de consultas útiles |
 | [Liberar espacio](usuario/liberar-espacio.md) | Qué propone la app, qué significa cada nivel de riesgo y cómo borrar con seguridad |
 | [Preguntas frecuentes](usuario/preguntas-frecuentes.md) | Por qué los totales no coinciden con el Explorador, antivirus, permisos y problemas comunes |
+| [TesseraFS en Linux](usuario/linux.md) | Instalar la AppImage, el `.deb` o la línea de comandos, y qué cambia respecto a Windows |
 | [Línea de comandos](usuario/linea-de-comandos.md) | `tessera-cli`: lo más grande en tabla, CSV o JSON, avisos de poco espacio y tareas programadas |
 
 ## Para desarrolladores

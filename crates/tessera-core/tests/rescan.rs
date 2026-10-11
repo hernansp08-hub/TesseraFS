@@ -1,16 +1,14 @@
 //! Pruebas de volver a escanear una carpeta y de `refresh` sobre carpetas temporales creadas aquí mismo.
 //! La lectura real del diario USN necesita administrador: esa prueba es `#[ignore]` y, sin elevación,
 //! no hace nada. El resto de `refresh` (FRN, resolución, conjunto mínimo, injerto) se prueba con
-//! registros sintéticos hechos con los FRN reales de las carpetas temporales.
-#![cfg(windows)]
+//! registros sintéticos hechos con los FRN reales de las carpetas temporales (sólo en Windows; en Linux
+//! no hay diario y `refresh` responde `refresh.unavailable`).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Mutex, RwLock};
 
-use tessera_core::rescan::walk_jobs;
-use tessera_core::usn::{path_frn, UsnChanges, UsnCursor, UsnRecord};
-use tessera_core::{ops, refresh, rescan, rescan_shared, scan, slice, EngineChoice, History, Param, Progress, Scan, ScanOptions, ScanPhase, ScanProgress, SortKey, Tree};
+use tessera_core::{ops, refresh, rescan, rescan_shared, scan, slice, EngineChoice, History, Param, Scan, ScanOptions, ScanPhase, ScanProgress, SortKey, Tree};
 
 const MIB: usize = 1 << 20;
 
@@ -29,7 +27,7 @@ impl TempDir {
     }
     fn path(&self, rel: &str) -> String {
         let p = if rel.is_empty() { self.0.clone() } else { self.0.join(rel) };
-        p.to_string_lossy().replace('/', "\\")
+        p.to_string_lossy().replace('/', std::path::MAIN_SEPARATOR_STR)
     }
 }
 impl Drop for TempDir {
@@ -44,9 +42,18 @@ fn run(p: &Path, keep_frn: bool) -> Scan {
     scan(&p.to_string_lossy(), EngineChoice::Walk, &opts, &|_| {}, &cancel).unwrap()
 }
 
+/// Ruta para comparar: en Windows con `\` y sin distinguir mayúsculas; en Linux, tal cual.
+fn norm(p: &str) -> String {
+    if cfg!(windows) {
+        p.replace('/', "\\").to_lowercase()
+    } else {
+        p.to_string()
+    }
+}
+
 fn find(t: &Tree, path: &str) -> u32 {
-    let want = path.replace('/', "\\").to_lowercase();
-    (0..t.len() as u32).find(|&i| t.live(i) && t.path(i).to_lowercase() == want).unwrap_or_else(|| panic!("no está {want}"))
+    let want = norm(path);
+    (0..t.len() as u32).find(|&i| t.live(i) && norm(&t.path(i)) == want).unwrap_or_else(|| panic!("no está {want}"))
 }
 
 fn names(t: &Tree, id: u32) -> Vec<String> {
@@ -234,8 +241,24 @@ fn rescan_on_the_shared_scan() {
     assert_eq!(rescan_shared(&lock, 0, &ScanOptions::default(), &|_| {}, &cancel).unwrap_err().code, "rescan.root");
 }
 
+/// Linux: sin diario, `canRefresh` es `false` y `refresh` responde `refresh.unavailable`; el árbol no guarda FRN.
+#[cfg(not(windows))]
+#[test]
+fn refresh_is_unavailable_without_a_journal() {
+    let d = fixture("sin-diario");
+    let mut s = run(&d.0, false);
+    assert_eq!(s.result.can_refresh, Some(false));
+    assert!(!s.tree.has_frn());
+    let cancel = AtomicBool::new(false);
+    assert_eq!(refresh(&mut s, &ScanOptions::default(), &|_| {}, &cancel).unwrap_err().code, "refresh.unavailable");
+}
+
+#[cfg(windows)]
 #[test]
 fn folder_frns_and_refresh_plumbing() {
+    use tessera_core::rescan::walk_jobs;
+    use tessera_core::usn::{path_frn, UsnChanges, UsnCursor, UsnRecord};
+    use tessera_core::Progress;
     let d = fixture("frn");
     let mut s = run(&d.0, true);
     let t = &s.tree;
@@ -307,6 +330,7 @@ fn folder_frns_and_refresh_plumbing() {
 
 /// Necesita administrador: `cargo test -p tessera-core --release -- --ignored usn_refresh` en una consola
 /// elevada. Sin elevación no hace nada.
+#[cfg(windows)]
 #[test]
 #[ignore]
 fn usn_refresh_elevated() {

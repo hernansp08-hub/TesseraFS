@@ -96,6 +96,17 @@ export interface ActionResult { ok: boolean; code?: string; params?: Record<stri
 
 export interface ElevationInfo { elevated: boolean; canElevate: boolean }
 
+// ---------- Sistema ----------
+export type Os = 'windows' | 'linux' | 'macos';
+/** Dónde corre el motor: la interfaz adapta las rutas, los textos y las acciones que ofrece. */
+export interface SystemInfo {
+  os: Os;
+  /** Separador de rutas: '\\' en Windows, '/' en el resto. */
+  sep: '\\' | '/';
+  /** Acciones disponibles aquí (Windows: todas; Linux: open, reveal, trash); la interfaz oculta las demás. */
+  actions: ActionKind[];
+}
+
 // ---------- Duplicados ----------
 /**
  * Busca archivos con el mismo contenido bajo `root`, en tres pasadas: tamaño (sin leer nada), los primeros
@@ -232,4 +243,5 @@ export interface Backend {
   refresh(onProgress: (p: ScanProgress) => void): Promise<RefreshResult>;
   elevation(): Promise<ElevationInfo>;
   relaunchElevated(): Promise<void>;
+  system(): Promise<SystemInfo>;
 }

@@ -49,6 +49,9 @@ flowchart TD
     A -->|"No lo sé"| T["Prueba la de escritorio;<br/>si se bloquea, usa la portable"]
 ```
 
+> [!NOTE]
+> **¿Usas Linux?** La edición de escritorio también existe para Linux (AppImage, `.deb` y línea de comandos). Qué cambia y cómo instalarla: **[TesseraFS en Linux](linux.md)**.
+
 > [!TIP]
 > La edición portable no lleva ningún ejecutable propio. Sólo usa `bun.exe`, firmado por su editor, y Edge, que ya viene con Windows. Por eso suele funcionar donde el antivirus corporativo bloquea otros programas.
 

@@ -16,6 +16,9 @@
 //! Limitaciones: los enlaces duros sólo se detectan dentro de lo vuelto a escanear (si el mismo archivo
 //! tiene otro nombre fuera de la carpeta, su espacio asignado vuelve a contar); los nodos muertos ocupan
 //! memoria hasta el próximo escaneo completo.
+//!
+//! En Linux `rescan` usa el recorrido de Unix ([`crate::walk_unix`]); no hay diario, así que `refresh`
+//! responde siempre `refresh.unavailable` (`ScanResult.canRefresh` es `false`).
 
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -33,10 +36,13 @@ use crate::usn::{minimal_set, UsnChanges, UsnCursor, MAX_FOLDERS};
 pub struct RescanJob {
     pub id: u32,
     pub path: String,
+    #[cfg_attr(not(windows), allow(dead_code))]
     wide: Vec<u16>,
     /// Sistema de archivos del volumen, en mayúsculas.
+    #[cfg_attr(not(windows), allow(dead_code))]
     fs: String,
     /// Guardar el FRN de las carpetas nuevas (el árbol lo tiene).
+    #[cfg_attr(not(windows), allow(dead_code))]
     frn: bool,
     /// Punto de reanálisis (junction, symlink…): no se sigue, la carpeta queda como está.
     link: bool,
@@ -55,15 +61,27 @@ pub struct Walked {
     denied_samples: Vec<String>,
     errors: u64,
     error_samples: Vec<String>,
+    /// Linux: sistemas de archivos montados dentro que no se recorrieron (sin los pseudo-sistemas).
+    other_mounts: Vec<String>,
 }
 
 impl Walked {
     fn unchanged() -> Self {
-        Walked { tree: None, gone: false, root_flags: None, entries: 0, denied: 0, denied_samples: Vec::new(), errors: 0, error_samples: Vec::new() }
+        Walked {
+            tree: None,
+            gone: false,
+            root_flags: None,
+            entries: 0,
+            denied: 0,
+            denied_samples: Vec::new(),
+            errors: 0,
+            error_samples: Vec::new(),
+            other_mounts: Vec::new(),
+        }
     }
 
     /// Sin permiso para listar la propia carpeta: queda vacía y con el aviso, como en el escaneo.
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     fn denied(path: &str) -> Self {
         let mut r = RawTree::with_capacity(1);
         r.push(NONE, b"", 0, 0, 0, flag::DIR);
@@ -71,13 +89,13 @@ impl Walked {
         Walked { tree, denied: 1, denied_samples: vec![path.to_string()], ..Walked::unchanged() }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     fn gone() -> Self {
         Walked { gone: true, ..Walked::unchanged() }
     }
 }
 
-/// `scan.accessDenied` / `scan.readErrors` de varias lecturas juntas.
+/// `scan.accessDenied` / `scan.readErrors` / `scan.otherMounts` de varias lecturas juntas.
 fn warnings_of(walked: &[Walked]) -> Vec<EngineMessage> {
     let mut v = Vec::new();
     let denied: u64 = walked.iter().map(|w| w.denied).sum();
@@ -89,6 +107,10 @@ fn warnings_of(walked: &[Walked]) -> Vec<EngineMessage> {
     if errors > 0 {
         let samples: Vec<String> = walked.iter().flat_map(|w| w.error_samples.iter().cloned()).take(20).collect();
         v.push(msg::read_errors(errors, &samples));
+    }
+    let mounts: Vec<String> = walked.iter().flat_map(|w| w.other_mounts.iter().cloned()).collect();
+    if !mounts.is_empty() {
+        v.push(msg::other_mounts(mounts.len() as u64, &mounts));
     }
     v
 }
@@ -210,23 +232,61 @@ impl RescanJob {
             denied_samples: out.denied_samples,
             errors: out.errors,
             error_samples: out.error_samples,
+            other_mounts: Vec::new(),
+        })
+    }
+
+    /// Como en Windows, con el recorrido de Unix (no cruza a otros sistemas de archivos y avisa de ellos).
+    #[cfg(unix)]
+    fn walk(&self, pool: &rayon::ThreadPool, opts: &ScanOptions, prog: &Progress, cancel: &AtomicBool, gone_ok: bool) -> Result<Walked, EngineMessage> {
+        if cancel.load(Relaxed) {
+            return Err(msg::cancelled());
+        }
+        if self.link {
+            return Ok(Walked::unchanged());
+        }
+        let rh = match crate::walk_unix::open_root(&self.path) {
+            Ok(h) => h,
+            Err(e) => match e.raw_os_error() {
+                Some(libc::EACCES | libc::EPERM) => return Ok(Walked::denied(&self.path)),
+                Some(libc::ENOENT | libc::ENOTDIR) if gone_ok => return Ok(Walked::gone()),
+                _ => return Err(msg::cannot_open(&self.path, &crate::sys::io_error_text(&e))),
+            },
+        };
+        let wo = crate::scan::walk_options(pool.current_num_threads(), opts);
+        let out = crate::walk_unix::walk_in(pool, rh, &self.path, &wo, prog, cancel)?;
+        let path = self.path.clone();
+        let tree = pool.install(|| crate::build::build(out.raw, path, &[])).map_err(|e| msg::internal(&e))?;
+        Ok(Walked {
+            entries: tree.files(0) as u64 + tree.dirs(0) as u64,
+            tree: Some(tree),
+            gone: false,
+            root_flags: None,
+            denied: out.denied,
+            denied_samples: out.denied_samples,
+            errors: out.errors,
+            error_samples: out.error_samples,
+            other_mounts: out.other_mounts,
         })
     }
 }
 
 /// Lee cada carpeta con el motor de recorrido, en orden y con un único pool (el progreso se acumula en
 /// `prog`). Con `gone_ok`, una carpeta que ya no existe se quitará del árbol en vez de dar error.
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 pub fn walk_jobs(jobs: &[RescanJob], opts: &ScanOptions, prog: &Progress, cancel: &AtomicBool, gone_ok: bool) -> Result<Vec<Walked>, EngineMessage> {
     if jobs.is_empty() {
         return Ok(Vec::new());
     }
     let threads = if opts.threads == 0 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) } else { opts.threads };
+    #[cfg(windows)]
     let pool = crate::walk::pool(threads)?;
+    #[cfg(unix)]
+    let pool = crate::walk_unix::pool(threads)?;
     jobs.iter().map(|j| j.walk(&pool, opts, prog, cancel, gone_ok)).collect()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 pub fn walk_jobs(jobs: &[RescanJob], _opts: &ScanOptions, _prog: &Progress, _cancel: &AtomicBool, _gone_ok: bool) -> Result<Vec<Walked>, EngineMessage> {
     if jobs.is_empty() {
         Ok(Vec::new())
@@ -459,6 +519,11 @@ mod tests {
         assert_eq!(v[1].get("count"), Some(&crate::types::Param::Int(3)));
         assert_eq!(v[0].get("sample"), Some(&crate::types::Param::Str("a-d, b-d".into())));
         assert!(warnings_of(&[Walked::unchanged()]).is_empty());
+        let m = |p: &str| Walked { other_mounts: vec![p.to_string()], ..Walked::unchanged() };
+        let v = warnings_of(&[m("/srv/a"), Walked::unchanged(), m("/srv/b")]);
+        assert_eq!(v.len(), 1);
+        assert_eq!((v[0].code.as_str(), v[0].get("count")), ("scan.otherMounts", Some(&crate::types::Param::Int(2))));
+        assert_eq!(v[0].get("paths"), Some(&crate::types::Param::Str("/srv/a, /srv/b".into())));
     }
 
     #[test]

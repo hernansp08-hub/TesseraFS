@@ -8,6 +8,11 @@ import de from '../locales/de.json';
 
 export type MessageKey = keyof typeof en;
 export type Params = Record<string, string | number | Date>;
+/**
+ * Parámetros comunes a todos los mensajes. `os` (windows, linux, macos) permite variar un texto según el sistema:
+ * `{os, select, windows {Papelera de reciclaje} other {Papelera}}`. La interfaz lo fija al conocer el sistema.
+ */
+export const GLOBAL_PARAMS: Params = { os: 'windows' };
 type Catalog = Record<string, string>;
 
 export interface LocaleInfo { code: string; name: string; dir: 'ltr' | 'rtl' }
@@ -105,7 +110,7 @@ export class I18n {
     if (src == null) return key;
     let mf = this.cache.get(key);
     if (!mf) { mf = new IntlMessageFormat(src, this.intl, undefined, { ignoreTag: true }); this.cache.set(key, mf); }
-    return String(mf.format(params as never));
+    return String(mf.format({ ...GLOBAL_PARAMS, ...params } as never));
   }
 
   /** HTML seguro: escapa todo salvo <b>, <code>, <kbd> y <br> del propio mensaje. */

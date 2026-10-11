@@ -10,4 +10,3 @@ export const fmtS = (ms: number) => i18n.seconds(ms);
 export const fmtD = (t: number) => i18n.date(t);
 export const ageText = (mtime: number, now = Date.now() / 1000) => i18n.relative(mtime, now);
 export const esc = (s: unknown) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-export const joinPath = (base: string, name: string) => base.endsWith('\\') ? base + name : base + '\\' + name;

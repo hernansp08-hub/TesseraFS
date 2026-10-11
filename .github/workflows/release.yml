@@ -1,6 +1,7 @@
 # Publica una versión al subir su etiqueta (git push --follow-tags tras "bun run release").
-# Lanzado a mano (Actions › Publicar versión › Run workflow) hace una prueba: compila y empaqueta
-# la rama elegida y deja los zips como artefacto del flujo, sin publicar nada.
+# Windows y Linux se compilan, prueban y empaquetan en paralelo; «Publicar» junta los paquetes de los dos y crea la
+# release con sus sumas y notas (scripts/publish.ts). Lanzado a mano (Actions › Publicar versión › Run workflow)
+# hace una prueba: compila y empaqueta la rama elegida y deja los paquetes como artefactos, sin publicar nada.
 name: Publicar versión
 
 on:
@@ -21,8 +22,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  empaquetar:
-    name: Compilar, probar y empaquetar
+  windows:
+    name: Windows — compilar, probar y empaquetar
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -65,22 +66,97 @@ jobs:
         continue-on-error: true
         run: cargo test -p tessera-core --release --test rescan -- --ignored usn_refresh_elevated --nocapture
 
-      - name: Empaquetar y publicar la release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bun run package --publish
-
-      - name: Empaquetar (prueba, sin publicar)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      - name: Empaquetar
         run: bun run package
 
-      - name: Guardar los zips como artefacto del flujo
-        uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
-          name: tesserafs-${{ github.ref_name }}
-          path: |
-            dist/release/*/*.zip
-            dist/release/*/SHA256SUMS.txt
-            dist/release/*/NOTAS.md
+          name: paquetes-windows
+          path: dist/release/*/*.zip
           retention-days: 7
+
+  linux:
+    name: Linux — compilar, probar y empaquetar
+    # 22.04: la glibc más antigua con WebKitGTK 4.1; lo compilado aquí funciona en distribuciones posteriores
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dependencias del sistema (WebKitGTK y herramientas de Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config curl wget file patchelf libxdo-dev libssl-dev libdbus-1-dev \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dependencias del workspace
+        run: bun install --frozen-lockfile
+
+      - name: Dependencias de la app de escritorio (CLI de Tauri)
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Construir la interfaz
+        run: bun run ui:build
+
+      # El motor de la portable (packages/core-bun) es sólo de Windows: sus pruebas van en el trabajo de Windows
+      - name: Pruebas de TypeScript
+        run: bun test packages/ui packages/i18n packages/protocol
+
+      - name: Pruebas de Rust
+        run: cargo test --workspace --release
+
+      # Las herramientas de AppImage son a su vez AppImages: sin FUSE en el runner, se ejecutan descomprimidas
+      - name: Empaquetar
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: bun run package
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: paquetes-linux
+          path: |
+            dist/release/*/*.AppImage
+            dist/release/*/*.deb
+            dist/release/*/*.tar.gz
+          retention-days: 7
+
+  publicar:
+    name: Publicar la release
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: paquetes-*
+          path: dist/artefactos
+          merge-multiple: true
+
+      # Todos los paquetes, vengan o no dentro de su carpeta vX.Y.Z, a dist/release/vX.Y.Z
+      - name: Juntar los paquetes
+        run: |
+          v=$(jq -r .version package.json)
+          mkdir -p "dist/release/v$v"
+          find dist/artefactos -type f -exec mv {} "dist/release/v$v/" \;
+          ls -l "dist/release/v$v"
+
+      - name: Sumas, notas y release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/publish.ts

@@ -233,6 +233,8 @@ async function main() {
         return json(engine.action(b.kind as ActionKind, b.id));
       }
       case 'GET /api/elevation': return json(engine.elevation());
+      // La portable sólo existe para Windows
+      case 'GET /api/system': return json({ os: 'windows', sep: '\\', actions: ['open', 'reveal', 'properties', 'trash', 'freeUp'] });
       case 'POST /api/relaunch-elevated': {
         if (engine.elevated) return fail(msg('elevation.failed', { error: 'already running as administrator' }), 409);
         const params = [Bun.main, ...args.filter(a => a !== '--hidden-child')].map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ');

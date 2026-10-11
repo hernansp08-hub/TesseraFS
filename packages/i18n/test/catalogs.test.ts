@@ -50,8 +50,10 @@ describe('catálogos', () => {
   });
 
   test.each(ALL)('%s: mismos argumentos que el inglés', (locale, cat) => {
+    // `os` es global (GLOBAL_PARAMS): cada idioma lo usa sólo si su texto cambia según el sistema
+    const own = (s: Set<string>) => [...s].filter(a => !a.startsWith('os:')).sort();
     const bad = KEYS.filter(k => {
-      const a = [...args(ast(en[k], 'en'))].sort(), b = [...args(ast(cat[k], locale))].sort();
+      const a = own(args(ast(en[k], 'en'))), b = own(args(ast(cat[k], locale)));
       return a.join() !== b.join();
     });
     expect(bad).toEqual([]);

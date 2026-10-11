@@ -34,7 +34,7 @@ pub struct Tree {
     pub(crate) names: Vec<u8>,
     /// Extensiones internadas; la 0 es "".
     pub(crate) exts: Vec<String>,
-    /// Ruta completa de la raíz ("C:\\" o "C:\\Windows").
+    /// Ruta completa de la raíz ("C:\\", "C:\\Windows" o, en Linux, "/" o "/home/ana").
     pub(crate) root_path: String,
     /// Nodos quitados (papelera) y carpetas cuyo orden de hijos hay que recalcular.
     pub(crate) removed: HashSet<u32>,
@@ -255,12 +255,18 @@ impl Tree {
         v
     }
 
+    /// Separador de las rutas del árbol: `\\` si la raíz es de Windows, `/` si es POSIX (Linux).
+    pub fn sep(&self) -> char {
+        names::sep_of(&self.root_path)
+    }
+
     /// Ruta completa (UTF-8, con U+FFFD si el nombre no es UTF-16 válido).
     pub fn path(&self, id: u32) -> String {
+        let sep = self.sep();
         let mut s = self.root_path.clone();
         for a in self.chain(id) {
-            if !s.ends_with('\\') {
-                s.push('\\');
+            if !s.ends_with(sep) {
+                s.push(sep);
             }
             s.push_str(&self.name(a));
         }
@@ -269,10 +275,11 @@ impl Tree {
 
     /// Ruta exacta en UTF-16 (sin terminador), para la API de Windows.
     pub fn path_wide(&self, id: u32) -> Vec<u16> {
+        let sep = self.sep() as u16;
         let mut w: Vec<u16> = self.root_path.encode_utf16().collect();
         for a in self.chain(id) {
-            if w.last() != Some(&(b'\\' as u16)) {
-                w.push(b'\\' as u16);
+            if w.last() != Some(&sep) {
+                w.push(sep);
             }
             names::push_wide(&mut w, self.name_bytes(a));
         }

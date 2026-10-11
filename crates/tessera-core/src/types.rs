@@ -331,6 +331,26 @@ pub struct ElevationInfo {
     pub can_elevate: bool,
 }
 
+/// Sistema operativo (`SystemInfo.os`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Os {
+    Windows,
+    Linux,
+    Macos,
+}
+
+/// La plataforma, para la interfaz (comando `system`, ver [`crate::system_info`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemInfo {
+    pub os: Os,
+    /// Separador de rutas: `\` en Windows, `/` en el resto.
+    pub sep: String,
+    /// Acciones disponibles aquí; la interfaz oculta las demás.
+    pub actions: Vec<ActionKind>,
+}
+
 // ---------- Duplicados (ver crate::dup) ----------
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -579,6 +599,26 @@ mod tests {
         assert_eq!(a["message"], "2 files set to online-only; 3.0 MB will be freed shortly");
         let a = serde_json::to_value(ActionResult::fail(msg::nothing_to_free())).unwrap();
         assert_eq!((a["ok"].clone(), a["code"].clone(), a.get("params")), (false.into(), "action.nothingToFree".into(), None));
+    }
+
+    #[test]
+    fn system_info_and_other_mounts_json() {
+        let s = SystemInfo { os: Os::Linux, sep: "/".into(), actions: vec![ActionKind::Open, ActionKind::Reveal, ActionKind::Trash] };
+        assert_eq!(serde_json::to_value(&s).unwrap(), serde_json::json!({ "os": "linux", "sep": "/", "actions": ["open", "reveal", "trash"] }));
+        let w = SystemInfo { os: Os::Windows, sep: "\\".into(), actions: vec![ActionKind::Properties, ActionKind::FreeUp] };
+        assert_eq!(serde_json::to_string(&w).unwrap(), r#"{"os":"windows","sep":"\\","actions":["properties","freeUp"]}"#);
+        assert_eq!(serde_json::to_value(Os::Macos).unwrap(), "macos");
+        let here = crate::system_info();
+        assert_eq!(here.sep, std::path::MAIN_SEPARATOR_STR);
+        assert!(here.actions.contains(&ActionKind::Open) && here.actions.contains(&ActionKind::Trash));
+        assert_eq!(here.actions.contains(&ActionKind::FreeUp), cfg!(windows));
+        let paths: Vec<String> = ["/home", "/boot", "/mnt/c", "/srv", "/media/usb", "/opt"].iter().map(|s| s.to_string()).collect();
+        let m = msg::other_mounts(6, &paths);
+        assert_eq!(m.code, "scan.otherMounts");
+        assert_eq!(m.get("count"), Some(&Param::Int(6)));
+        assert_eq!(m.get("paths"), Some(&Param::Str("/home, /boot, /mnt/c, /srv, /media/usb".into())));
+        assert_eq!(m.message, "6 mounted file systems were not included (analyze them separately): /home, /boot, /mnt/c, /srv, /media/usb");
+        assert_eq!(msg::other_mounts(1, &paths[..1]).message, "1 mounted file system was not included (analyze it separately): /home");
     }
 
     #[test]

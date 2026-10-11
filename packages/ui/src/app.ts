@@ -6,9 +6,10 @@ import {
 } from '@tessera/protocol';
 import { layout, raster, type Layout, type Tile } from './render';
 import { AGE_BINS, CATEGORIES, REST_COLOR, ageBin, ageColor, ageName, catName, categoryById, categoryOf, extColor, rgb, setExtRanking, type ColorMode, type RGB } from './colors';
-import { GB, MB, ageText, esc, fmtB, fmtD, fmtN, fmtP, fmtS, joinPath } from './format';
+import { GB, MB, ageText, esc, fmtB, fmtD, fmtN, fmtP, fmtS } from './format';
+import { SYS, baseName, can, folderHint, isSystemVolume, isUnder, joinPath, parentPath, pathKey, setSystem, trimSep, volTag } from './platform';
 import { LOCALES, PSEUDO, html, i18n, msgText, onLocaleChange, preference, setPreference, systemLocale, t, tk, translateDom, type MessageKey } from './i18n';
-import { RULES, cmdOf, howKey, knownId, ruleMatches, titleOf, type Key, type Risk, type Rule } from './clean';
+import { cmdOf, howKey, knownIdFor, ruleMatches, rulesFor, titleOf, type Key, type Risk, type Rule } from './clean';
 
 type TRow = { row: NodeRow; depth: number; more?: undefined } | { more: number; remaining: number; depth: number; row?: undefined };
 // Los resaltados guardan datos, no textos: la etiqueta se compone al pintar, en el idioma activo
@@ -229,7 +230,7 @@ function drawMarked() {
 function slicePath(n: SliceNode) {
   const names: string[] = []; for (let x: SliceNode | null = n; x && x.parent; x = x.parent) names.push(x.name);
   const base = S.pathCache.get(zoomRow()!.id) || '';
-  const rel = names.reverse().join('\\'); return !rel ? base : base.endsWith('\\') ? base + rel : base + '\\' + rel;
+  const rel = names.reverse().join(SYS.sep); return !rel ? base : joinPath(base, rel);
 }
 function sliceRow(n: SliceNode): NodeRow {
   return remember({ id: n.id, parentId: n.parent ? n.parent.id : zoomRow()!.parentId, name: n.name, isDir: n.isDir, size: n.size, alloc: n.alloc,
@@ -241,7 +242,7 @@ function tipHTML(h: { n: SliceNode; rest: boolean; head: boolean }) {
     + `<div class="t-path">${esc(slicePath(n))}</div><div class="t-grid"><span>${tx('tip.totalSize')}</span><b>${fmtB(n.restSize)}</b><span>${tx('tip.ofMap')}</span><b>${fmtP(n.restSize / base)}</b></div>`
     + `<div class="t-hint">${tx('tip.small.hint')}</div>`;
   const c = n.isDir ? null : categoryOf(n.ext);
-  return `<div class="t-name"><i class="sw" style="background:${rgb(nodeColor(n.ext, n.isDir, n.mtime))}"></i><b>${esc(n.name)}${n.isDir ? '\\' : ''}</b></div>`
+  return `<div class="t-name"><i class="sw" style="background:${rgb(nodeColor(n.ext, n.isDir, n.mtime))}"></i><b>${esc(n.name)}${n.isDir ? SYS.sep : ''}</b></div>`
     + `<div class="t-path">${esc(n.parent ? slicePath(n.parent) : slicePath(n))}</div>`
     + `<div class="t-grid"><span>${tx('tip.size')}</span><b>${fmtB(n.size)}</b><span>${tx('tip.ofMap')}</span><b>${fmtP(n.size / base)}</b>`
     + (n.isDir ? `<span>${tx('tip.contents')}</span><b>${tx('tip.files', { count: n.files })}</b>` : `<span>${tx('tip.type')}</span><b>${esc(catName(c!))}${n.ext ? ' · .' + esc(n.ext) : ''}</b>`)
@@ -546,15 +547,15 @@ export function renderInspector() {
   const canZoom = r.id !== zoomRow()?.id;
   const acts = S.confirmTrash
     ? `<div class="confirm"><p>${tx('insp.confirmTrash', { name: r.name, size: fmtB(r.size) })}</p><div><button class="btn sm" type="button" data-act="cancel">${tx('insp.cancel')}</button><button class="btn sm danger solid" type="button" data-act="trash-ok">${tx('insp.trashConfirm')}</button></div></div>`
-    : `<div class="actions"><button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button><button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button>`
+    : `<div class="actions">${can('reveal') ? `<button class="btn sm" type="button" data-act="reveal">${tx('insp.reveal')}</button>` : ''}<button class="btn sm" type="button" data-act="zoom"${canZoom ? '' : ' disabled'}>${tx('insp.zoom')}</button>`
       + `<button class="btn sm${S.marked.has(r.id) ? ' on' : ''}" type="button" data-act="mark" aria-pressed="${S.marked.has(r.id)}"${r.parentId >= 0 ? '' : ' disabled'}>${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}</button>`
       + (r.isDir ? `<button class="btn sm" type="button" data-act="rescan" title="${tx('menu.rescan')}">${tx('insp.rescan')}</button>` : '')
       + (canFreeUp(r) ? `<button class="btn sm" type="button" data-act="freeUp" title="${tx('menu.freeUp.title')}">${tx('menu.freeUp')}</button>` : '')
-      + `<button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button></div>`;
+      + (can('trash') ? `<button class="btn sm danger" type="button" data-act="trash"${r.parentId >= 0 ? '' : ' disabled'}>${tx('insp.trash')}</button>` : '') + `</div>`;
   const inMarked = markedAncestor(r);
   el.innerHTML = `<div class="insp-top"><span class="sw lg" style="background:${rgb(rowColor(r))}"></span><div class="insp-id"><div class="insp-kind">${esc(kind)}</div><h2 class="insp-name" title="${esc(r.name)}">${esc(nameOf(r))}</h2></div></div>`
     + `<div class="insp-size"><span class="big">${fmtB(r.size)}</span><span class="sub">${S.root ? tx('insp.ofScanned', { value: fmtP(r.size / (S.root.size || 1)) }) : ''}</span></div>`
-    + `<div class="insp-path"><code>${path ? esc(path).replace(/\\/g, '\\<wbr>') : '…'}</code><button class="icon-btn sm" type="button" data-act="copy" title="${tx('insp.copyPath')}">${ICON_COPY}</button></div>`
+    + `<div class="insp-path"><code>${path ? esc(path).split(SYS.sep).join(SYS.sep + '<wbr>') : '…'}</code><button class="icon-btn sm" type="button" data-act="copy" title="${tx('insp.copyPath')}">${ICON_COPY}</button></div>`
     + `<dl class="kv"><div><dt title="${tx('insp.onDisk.title')}">${tx('insp.onDisk')}</dt><dd>${fmtB(r.alloc)}</dd></div>`
     + `<div><dt>${tx('insp.ofFolder')}</dt><dd>${r.parentId >= 0 ? fmtP(r.size / (ps || 1)) : '—'}</dd></div>`
     + (r.isDir ? `<div><dt>${tx('insp.files')}</dt><dd>${fmtN(r.files)}</dd></div><div><dt>${tx('insp.folders')}</dt><dd>${fmtN(r.dirs)}</dd></div>`
@@ -574,12 +575,12 @@ export function renderInspector() {
 // Se calcula una vez por elemento: alguna regla pregunta al motor por los hijos (CACHEDIR.TAG de Rust).
 async function knownFor(r: NodeRow, path: string): Promise<Known | null> {
   const tg = { name: r.name, path, isDir: r.isDir, ext: r.ext, size: r.size, alloc: r.alloc, flags: r.flags };
-  for (const rule of RULES) {
+  for (const rule of rulesFor(SYS.os)) {
     if (!ruleMatches(rule, tg)) continue;
     if (rule.needs && !(await hasChild(r.id, rule.needs).catch(() => false))) continue;
     return { rule, title: titleOf(rule, tg), cmd: cmdOf(rule, tg) };
   }
-  const id = knownId(path);
+  const id = knownIdFor(path, SYS.os);
   return id ? { id } : null;
 }
 function knownHTML(r: NodeRow, path: string | undefined): string {
@@ -605,7 +606,7 @@ const savedOnDisk = (r: NodeRow) => r.size >= 1024 ** 2 && r.alloc < r.size * .9
  * Hay algo de la nube descargado: un archivo o una carpeta con FLAG.CLOUD que ocupa disco. Sin «Archivos a petición»,
  * OneDrive no marca nada (todo está siempre descargado) y no se ofrece.
  */
-const canFreeUp = (r: NodeRow) => r.alloc > 0 && !!(r.flags & FLAG.CLOUD);
+const canFreeUp = (r: NodeRow) => can('freeUp') && r.alloc > 0 && !!(r.flags & FLAG.CLOUD);
 /**
  * Deja los archivos de la nube descargados como «sólo en línea» (siguen en OneDrive y vuelven a bajar al abrirlos).
  * El proveedor los vacía en segundo plano: pasados unos segundos se vuelve a escanear la carpeta para verlo.
@@ -656,7 +657,6 @@ $('insp').addEventListener('click', e => {
 
 // ---------- Archivos más grandes y resultados del filtro ----------
 const filesBody = $('filesBody');
-const parentPath = (p: string) => { const i = p.lastIndexOf('\\'); return i > 2 ? p.slice(0, i) : p.slice(0, 3); };
 function fileRowHTML(i: number) {
   const r = S.files[i], sel = S.sel?.id === r.id, icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(rowColor(r))}"></i>`;
   return `<div class="row${sel ? ' sel' : ''}${markClass(r)}" role="row" data-i="${i}"><span class="c-name">${icon}<span class="nm" data-fit="name" title="${esc(r.name)}">${esc(r.name)}</span></span>`
@@ -713,7 +713,7 @@ const keyText = (k: Key) => tk(k[0], k[1]);
 async function loadClean() {
   if (!S.root) return;
   const cards: CleanCard[] = [];
-  for (const rule of RULES) {
+  for (const rule of rulesFor(SYS.os)) {
     const res = await B.search({ query: rule.q, root: S.root.id, limit: 200 }).catch(() => null); if (!res || res.error) continue;
     let rows = res.rows.filter(r => (!rule.ok || rule.ok(r)) && (!rule.min || rule.group || (rule.useAlloc ? r.alloc : r.size) >= rule.min));
     if (rule.needs) { const keep: SearchRow[] = []; for (const r of rows.slice(0, 40)) if (await hasChild(r.id, rule.needs).catch(() => false)) keep.push(r); rows = keep; }
@@ -857,7 +857,7 @@ async function markCopies() {
 /** Tras mover cosas a la papelera: quita de los resultados lo que estaba en esas rutas. */
 function pruneDups(paths: string[]) {
   const r = D.result; if (!r || !paths.length) return;
-  const gone = paths.map(lc), dead = (p: string) => { const l = lc(p); return gone.some(g => l === g || l.startsWith(g + '\\')); };
+  const dead = (p: string) => paths.some(g => isUnder(p, g));
   const waste = (gs: DupGroup[]) => gs.reduce((s, g) => s + (g.files.length - 1) * g.size, 0), before = waste(r.groups), n0 = r.groups.length;
   r.groups = r.groups.map(g => ({ ...g, files: g.files.filter(f => !dead(f.path)) })).filter(g => g.files.length > 1);
   r.wasted = Math.max(0, r.wasted - (before - waste(r.groups))); r.totalGroups = Math.max(0, r.totalGroups - (n0 - r.groups.length));
@@ -940,15 +940,15 @@ function changeRowHTML(r: ChangeRow) {
     + `<span class="num ch-was">${r.prev === null ? '' : esc(fmtB(r.prev)) + ' → '}${esc(fmtB(r.size))}</span><span class="num delta ${d >= 0 ? 'up' : 'down'}">${esc(signedB(d))}</span></div>`;
 }
 function removedRowHTML(r: RemovedRow) {
-  const i = r.path.lastIndexOf('\\'), icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(REST_COLOR)}"></i>`;
-  return `<div class="ch-row gone">${icon}<span class="dp-name"><span class="nm">${esc(r.path.slice(i + 1))}</span><code title="${esc(r.path)}">${esc(r.path.slice(0, Math.max(3, i)))}</code></span>`
+  const i = r.path.lastIndexOf(SYS.sep), icon = r.isDir ? FOLDER : `<i class="sw" style="background:${rgb(REST_COLOR)}"></i>`;
+  return `<div class="ch-row gone">${icon}<span class="dp-name"><span class="nm">${esc(r.path.slice(i + 1))}</span><code title="${esc(r.path)}">${esc(parentPath(r.path))}</code></span>`
     + `<span class="num ch-was">${esc(fmtB(r.size))}</span><span class="num delta down">${esc(signedB(-r.size))}</span></div>`;
 }
 async function renderChanges() {
   const el = $('changesBody');
   if (!S.root || !S.scan) { el.innerHTML = `<div class="cl-loading">${tx('changes.noScan')}</div>`; return; }
   if (!H.loaded) { H.loaded = true; H.entries = await B.historyList().catch(() => []); }
-  const root = lc(S.scan.rootPath), mine = H.entries.filter(e => lc(e.path) === root && e.id !== H.savedId), c = H.cmp;
+  const root = pathKey(S.scan.rootPath), mine = H.entries.filter(e => pathKey(e.path) === root && e.id !== H.savedId), c = H.cmp;
   let h = `<p class="dp-intro">${tx('changes.intro')}</p>`;
   if (c) {
     const d = c.after.bytes - c.before.bytes;
@@ -1099,7 +1099,7 @@ async function buildReport(): Promise<string> {
       [...cats.entries()].sort((a, b) => b[1].size - a[1].size).map(([id, g]) => { const c = categoryById(id);
         return [`<span class="sw" style="background:${rgb(c.color)}"></span>${esc(catName(c))}`, esc(fmtN(g.count)), esc(fmtB(g.size)), pct(g.size / total) + bar(g.size / total, rgb(c.color))]; }))
     + `<h2>${tx('report.topFolders')}</h2>` + table([t('tree.col.name'), t('tree.col.size'), '%'],
-      kids.rows.map(r => [`${esc(r.name)}${r.isDir ? '\\' : ''}`, esc(fmtB(r.size)), pct(r.size / total) + bar(r.size / total, '#5a7fd6')]))
+      kids.rows.map(r => [`${esc(r.name)}${r.isDir ? SYS.sep : ''}`, esc(fmtB(r.size)), pct(r.size / total) + bar(r.size / total, '#5a7fd6')]))
     + `<h2>${tx('report.topFiles')}</h2>` + table([t('tree.col.name'), t('tree.col.size'), t('tree.col.modified')],
       top.rows.map(r => [`${esc(r.name)}<small>${esc(parentPath(r.path))}</small>`, esc(fmtB(r.size)), esc(fmtD(r.mtime))]));
   if (S.clean?.length) {
@@ -1149,10 +1149,11 @@ $('exportBtn').addEventListener('click', e => {
 // ---------- Cesta «Para borrar» ----------
 // Se marca con Ctrl+clic (mapa y listas), Espacio (listas), el panel de detalle, el menú o las tarjetas de limpieza.
 // No se cuenta dos veces: marcar una carpeta quita lo marcado dentro de ella, y lo que ya está dentro de una carpeta marcada no se añade.
-const lc = (p: string) => p.toLowerCase().replace(/\\+$/, '');
+/** `p` está dentro de la carpeta `dir` (no es ella misma). */
+const inside = (p: string, dir: string) => pathKey(p) !== pathKey(dir) && isUnder(p, dir);
 function markedAncestor(r: NodeRow): Marked | null {
   const p = S.pathCache.get(r.id);
-  if (p) { const lp = lc(p); for (const m of S.marked.values()) if (m.row.isDir && m.row.id !== r.id && lp.startsWith(lc(m.path) + '\\')) return m; return null; }
+  if (p) { for (const m of S.marked.values()) if (m.row.isDir && m.row.id !== r.id && inside(p, m.path)) return m; return null; }
   for (let id = r.parentId; id >= 0; id = S.rowCache.get(id)?.parentId ?? -1) { const m = S.marked.get(id); if (m) return m; }
   return null;
 }
@@ -1163,9 +1164,8 @@ async function toggleMark(r: NodeRow, quiet = false) {
   if (r.parentId < 0) return; // la raíz del escaneo no se borra
   if (S.marked.has(r.id)) { S.marked.delete(r.id); if (!quiet) afterMarksChanged(); return; }
   const path = await pathOf(r.id).catch(() => ''); if (!path) return;
-  const lp = lc(path);
-  for (const m of S.marked.values()) if (m.row.isDir && lp.startsWith(lc(m.path) + '\\')) { if (!quiet) toast(t('basket.alreadyIn', { name: m.row.name })); return; }
-  if (r.isDir) for (const [id, m] of S.marked) if (lc(m.path).startsWith(lp + '\\')) S.marked.delete(id);
+  for (const m of S.marked.values()) if (m.row.isDir && inside(path, m.path)) { if (!quiet) toast(t('basket.alreadyIn', { name: m.row.name })); return; }
+  if (r.isDir) for (const [id, m] of S.marked) if (inside(m.path, path)) S.marked.delete(id);
   S.marked.set(r.id, { row: remember(r), path });
   S.basketConfirm = false;
   if (!quiet) afterMarksChanged();
@@ -1245,22 +1245,22 @@ function openMenu(html: string, x: number, y: number, kind: string, id = -1) {
 function nodeMenu(r: NodeRow, x: number, y: number) {
   openMenu(`<div class="menu-h">${esc(S.pathCache.get(r.id) || r.name)}</div>`
     + `<button type="button" role="menuitem" data-m="open">${tx(r.isDir ? 'menu.openFolder' : 'menu.open')}</button>`
-    + `<button type="button" role="menuitem" data-m="reveal">${tx('menu.reveal')}</button>`
+    + (can('reveal') ? `<button type="button" role="menuitem" data-m="reveal">${tx('menu.reveal')}</button>` : '')
     + `<button type="button" role="menuitem" data-m="copy">${tx('menu.copyPath')}</button>`
     + `<button type="button" role="menuitem" data-m="zoom">${tx('menu.zoom')}</button>`
     + `<button type="button" role="menuitem" data-m="tree">${tx('menu.locate')}</button><hr>`
     + (r.parentId >= 0 ? `<button type="button" role="menuitem" data-m="mark">${tx(S.marked.has(r.id) ? 'mark.remove' : 'mark.add')}<span>${tx('key.space')}</span></button>` : '')
     + (r.isDir ? `<button type="button" role="menuitem" data-m="rescan">${tx('menu.rescan')}<span>${r.parentId < 0 || (zoomRow()?.id === r.id) ? tx('key.f5') : ''}</span></button>` : '')
     + (canFreeUp(r) ? `<button type="button" role="menuitem" data-m="freeUp">${tx('menu.freeUp')}</button>` : '')
-    + `<button type="button" role="menuitem" data-m="properties">${tx('menu.properties')}</button>`
-    + `<button type="button" role="menuitem" data-m="trash" class="danger">${tx('menu.trash')}<span>${tx('key.delete')}</span></button>`, x, y, 'node', r.id);
+    + (can('properties') ? `<button type="button" role="menuitem" data-m="properties">${tx('menu.properties')}</button>` : '')
+    + (can('trash') ? `<button type="button" role="menuitem" data-m="trash" class="danger">${tx('menu.trash')}<span>${tx('key.delete')}</span></button>` : ''), x, y, 'node', r.id);
 }
-function volLabel(v: VolumeInfo) { return `${v.path.replace(/\\$/, '')} ${v.label || t('header.drive.local')}`; }
+function volLabel(v: VolumeInfo) { return `${trimSep(v.path)} ${v.label || t('header.drive.local')}`; }
 $('volBtn').addEventListener('click', e => {
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
   openMenu(`<div class="menu-h">${tx('menu.drives')}</div>`
     + S.vols.map((v, i) => `<button type="button" role="menuitem" data-m="vol" data-v="${i}"${S.vol === v ? ' class="on"' : ''}>${esc(volLabel(v))}<span>${esc(v.fs)} · ${fmtB(v.total)}</span></button>`).join('')
-    + `<hr><div class="menu-h">${tx('menu.analyzeFolder')}</div><form id="folderForm"><input id="folderIn" placeholder="C:\\Users\\…" value="${esc(S.target)}" aria-label="${tx('menu.folderPath')}"><button class="btn sm" type="submit">${tx('menu.analyze')}</button></form>`,
+    + `<hr><div class="menu-h">${tx('menu.analyzeFolder')}</div><form id="folderForm"><input id="folderIn" placeholder="${esc(folderHint())}" value="${esc(S.target)}" aria-label="${tx('menu.folderPath')}"><button class="btn sm" type="submit">${tx('menu.analyze')}</button></form>`,
     r.left, r.bottom + 6, 'vol');
 });
 menu.addEventListener('submit', e => {
@@ -1333,9 +1333,9 @@ new MutationObserver(() => renderMap()).observe(document.documentElement, { attr
 
 // ---------- Unidad, escaneo y barra de estado ----------
 function renderVolume() {
-  const v = S.vol, folder = !v || S.target.replace(/\\$/, '').toUpperCase() !== v.path.replace(/\\$/, '').toUpperCase();
-  $('volLetter').textContent = v ? v.path.slice(0, 2) : '—';
-  $('volName').textContent = folder ? S.target.split('\\').filter(Boolean).pop() || S.target : (v!.label || t('header.drive.local'));
+  const v = S.vol, folder = !v || pathKey(S.target) !== pathKey(v.path);
+  $('volLetter').textContent = v ? volTag(v) : '—';
+  $('volName').textContent = folder ? baseName(S.target) : (v!.label || t('header.drive.local'));
   if (v && v.total) {
     const used = (v.total - v.free) / v.total;
     $('volPct').textContent = ' ' + i18n.percent(used, 0); ($('volMeter') as HTMLElement).style.width = (used * 100).toFixed(1) + '%';
@@ -1359,7 +1359,7 @@ const MOSAIC_ORDER = (() => { const a = [...Array(MOSAIC).keys()]; let s = 7; fo
 let scanCard: { phase: HTMLElement; pct: HTMLElement; bar: HTMLElement; entries: HTMLElement; bytes: HTMLElement; time: HTMLElement; path: HTMLElement; tiles: HTMLElement[]; lit: number; expected: number } | null = null;
 function expectedBytes() {
   const v = S.vol; if (!v || !v.total) return 0;
-  return S.target.replace(/\\$/, '').toUpperCase() === v.path.replace(/\\$/, '').toUpperCase() ? v.total - v.free : 0;
+  return pathKey(S.target) === pathKey(v.path) ? v.total - v.free : 0;
 }
 function openScanCard() {
   const el = $('mapState'), cols = CATEGORIES.map(c => rgb(c.color)), expected = expectedBytes();
@@ -1448,14 +1448,14 @@ function drivesHTML() {
   const cards = S.vols.map((v, i) => {
     const used = v.total ? (v.total - v.free) / v.total : 0;
     return `<button class="drive-card${S.vol === v ? ' on' : ''}" type="button" data-vol="${i}">`
-      + `<span class="dc-letter">${esc(v.path.replace(/\\$/, ''))}</span>`
+      + `<span class="dc-letter">${esc(volTag(v))}</span>`
       + `<span class="dc-body"><span class="dc-name"><b>${esc(v.label || t('header.drive.local'))}</b><small>${esc(v.fs)}${v.total ? ' · ' + esc(i18n.percent(used, 0)) : ''}</small></span>`
       + `<span class="meter"><i class="used" style="width:${(used * 100).toFixed(1)}%;background:${used > .85 ? 'var(--warn)' : 'var(--accent)'}"></i></span>`
       + (v.total ? `<small>${tx('header.drive.free', { free: fmtB(v.free), total: fmtB(v.total) })}</small>` : '') + `</span></button>`;
   }).join('');
   return `<h2>${tx('state.choose.title')}</h2><p>${tx('state.choose.body')}</p>`
     + (cards ? `<div class="drive-grid">${cards}</div>` : `<p class="note">${tx('drives.empty')}</p>`)
-    + `<form class="drive-folder" data-form="folder"><input name="path" placeholder="C:\\Users\\…" value="${esc(S.target)}" aria-label="${tx('menu.folderPath')}" spellcheck="false"><button class="btn sm" type="submit">${tx('menu.analyze')}</button></form>`;
+    + `<form class="drive-folder" data-form="folder"><input name="path" placeholder="${esc(folderHint())}" value="${esc(S.target)}" aria-label="${tx('menu.folderPath')}" spellcheck="false"><button class="btn sm" type="submit">${tx('menu.analyze')}</button></form>`;
 }
 function showDrives() { mapState(drivesHTML); $('mapState').classList.add('drives'); }
 function analyzeFolder(v: string) {
@@ -1618,10 +1618,12 @@ function relocalize() {
 }
 export async function startApp(backend: Backend) {
   B = backend;
+  try { setSystem(await B.system()); } catch { /* motor sin `system`: se supone Windows */ }
+  document.documentElement.dataset.os = SYS.os;
   translateDom(); onLocaleChange(relocalize);
   renderEdition(); applyTheme(); updateSortHead(); renderInspector(); renderComposition();
   try { S.vols = await B.volumes(); } catch (e) { toast(t('toast.volumesFailed', { error: msgText(e) })); }
-  S.vol = S.vols.find(v => /^C:/i.test(v.path)) || S.vols[0] || null; if (S.vol) S.target = S.vol.path;
+  S.vol = S.vols.find(isSystemVolume) || S.vols[0] || null; if (S.vol) S.target = S.vol.path;
   renderVolume();
   B.elevation().then(el => {
     const btn = $('elevBtn'); btn.hidden = el.elevated || !el.canElevate;

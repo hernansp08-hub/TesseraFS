@@ -75,24 +75,29 @@ Otras formas de `release`: `patch`, `minor`, `major`, `minor --pre=beta` (→ `0
 ```mermaid
 flowchart LR
     R["bun run release auto<br/>commit + etiqueta vX.Y.Z"] --> P["git push --follow-tags"]
-    P --> A{{"GitHub Actions<br/>.github/workflows/release.yml<br/>windows-latest"}}
-    A --> C["¿Etiqueta = versión<br/>de package.json?"]
-    C --> T["bun test<br/>cargo test"]
-    T --> B["bun run package --publish<br/>interfaz · exe · portable"]
-    B --> G["Release vX.Y.Z<br/>zips + SHA256SUMS + notas"]
+    P --> W{{"Windows<br/>windows-latest"}}
+    P --> L{{"Linux<br/>ubuntu-22.04"}}
+    W --> WT["¿Etiqueta = versión?<br/>bun test · cargo test"]
+    WT --> WB["bun run package<br/>zips de escritorio y portable"]
+    L --> LT["bun test · cargo test"]
+    LT --> LB["bun run package<br/>AppImage · .deb · CLI"]
+    WB --> J["Publicar<br/>bun scripts/publish.ts"]
+    LB --> J
+    J --> G["Release vX.Y.Z<br/>paquetes + SHA256SUMS + notas"]
 ```
 
 | Paso | Detalle |
 |---|---|
 | Comprobación | La etiqueta (`v0.3.0`) debe coincidir con la versión de `package.json`; si no, el flujo se detiene |
 | Herramientas | Bun **1.3.14** fijado en el flujo (es el `bun.exe` que viaja en la portable) y Rust estable, con caché de compilación |
-| Pruebas | `bun test` y `cargo test --workspace --release`. Si fallan, **no se publica nada** |
-| Publicación | `bun run package --publish`. Si la release ya existe, reemplaza sus archivos y notas, así que el flujo se puede relanzar |
-| Duración y coste | Unos 15–25 min con caché. En un repositorio privado consume minutos de Actions (los de Windows cuentan doble) |
+| Pruebas | Windows: `bun test` y `cargo test --workspace --release`. Linux: las de la interfaz, i18n y protocolo (el motor portable es sólo de Windows) y `cargo test`. Si fallan en cualquiera de los dos, **no se publica nada** |
+| Paquetes | Cada sistema ejecuta `bun run package` y guarda sus paquetes como artefacto |
+| Publicación | El trabajo «Publicar» junta los paquetes de los dos y ejecuta `bun scripts/publish.ts`: sumas, notas y release. Si la release ya existe, reemplaza sus archivos y notas, así que el flujo se puede relanzar |
+| Duración y coste | Unos 15–25 min con caché, con Windows y Linux en paralelo. En un repositorio privado consume minutos de Actions (los de Windows cuentan doble; los de Linux, sencillos) |
 
 Sigue el progreso en la pestaña **Actions** del repositorio o con `gh run watch`.
 
-**Probar sin publicar:** en *Actions › Publicar versión › Run workflow* (o `gh workflow run release.yml`), el flujo compila y empaqueta la rama elegida. Los zips quedan como artefacto del flujo durante 7 días, sin crear ninguna release.
+**Probar sin publicar:** en *Actions › Publicar versión › Run workflow* (o `gh workflow run release.yml`), el flujo compila y empaqueta la rama elegida. Los paquetes quedan como artefactos del flujo durante 7 días, sin crear ninguna release.
 
 ### Qué se publica
 
@@ -100,13 +105,16 @@ Sigue el progreso en la pestaña **Actions** del repositorio o con `gh run watch
 |---|---|
 | `TesseraFS-X.Y.Z-escritorio-win-x64.zip` | `tesserafs-desktop.exe`, `tessera-cli.exe` ([línea de comandos](usuario/linea-de-comandos.md)), `README.txt` (en los cinco idiomas), `LICENCIAS-TERCEROS.txt` (crates de Rust incluidos) y `licencias/` |
 | `TesseraFS-X.Y.Z-portable-win-x64.zip` | `bun.exe` (firmado, sin modificar), `tesserafs.js`, lanzadores, `README.txt` (en los cinco idiomas), avisos de Bun y `licencias/` |
-| `SHA256SUMS.txt` | Sumas para comprobar las descargas (`Get-FileHash archivo.zip`) |
+| `TesseraFS-X.Y.Z-linux-x86_64.AppImage` | La app de escritorio para Linux, sin instalar ([guía](usuario/linux.md)) |
+| `TesseraFS-X.Y.Z-linux-amd64.deb` | La misma app como paquete de Debian y Ubuntu |
+| `TesseraFS-X.Y.Z-cli-linux-x64.tar.gz` | `tessera-cli` para Linux, `LICENCIAS-TERCEROS.txt` y `licencias/` |
+| `SHA256SUMS.txt` | Sumas para comprobar las descargas (`Get-FileHash archivo.zip` en Windows, `sha256sum -c SHA256SUMS.txt --ignore-missing` en Linux) |
 
 Las versiones con sufijo (`-beta.1`) se publican como *prerelease*.
 
 ### Publicar desde tu equipo (alternativa)
 
-Si GitHub Actions no está disponible, el mismo script funciona en local con `gh` autenticado:
+Si GitHub Actions no está disponible, el mismo script funciona en local con `gh` autenticado (publica los paquetes del sistema donde se ejecuta; en Windows, sólo los zips):
 
 ```bash
 bun run package --publish

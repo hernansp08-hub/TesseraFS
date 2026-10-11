@@ -1,4 +1,6 @@
-//! Integración con Windows: unidades, elevación y acciones de archivo.
+//! Integración con el sistema: unidades, elevación, carpetas del usuario y acciones de archivo
+//! (Windows con la API de Win32 y el Shell; Linux con mountinfo, XDG, xdg-open, D-Bus y la papelera
+//! de freedesktop).
 
 use crate::msg;
 use crate::types::{ElevationInfo, EngineMessage, VolumeInfo};
@@ -328,9 +330,259 @@ mod imp {
 #[cfg(windows)]
 pub use imp::*;
 
-#[cfg(not(windows))]
+/// Linux (y otros Unix): volúmenes y montajes de `/proc/self/mountinfo` con `statvfs`, carpetas de XDG
+/// y acciones con `xdg-open`, el gestor de archivos por D-Bus y la papelera de freedesktop.
+#[cfg(unix)]
 mod imp {
     use super::*;
+    use crate::posix::{self, Mount};
+    use std::ffi::{CString, OsStr};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// Espera máxima a `statvfs` en un recurso de red (uno caído no bloquea la lista de volúmenes).
+    const NET_TIMEOUT: Duration = Duration::from_secs(2);
+    /// Lo que se espera a `xdg-open` para ver si falla en seguida (no se espera a la aplicación).
+    const LAUNCH_WAIT: Duration = Duration::from_millis(1500);
+
+    /// Montajes del proceso (`/proc/self/mountinfo`); vacío si no se puede leer.
+    pub fn mounts() -> Vec<Mount> {
+        std::fs::read("/proc/self/mountinfo").map(|t| posix::parse_mountinfo(&t)).unwrap_or_default()
+    }
+
+    /// Ruta real (sin enlaces simbólicos) en bytes; si no se puede resolver, la ruta tal cual.
+    pub fn real_path(path: &str) -> Vec<u8> {
+        std::fs::canonicalize(path).map(|p| p.into_os_string().into_vec()).unwrap_or_else(|_| path.as_bytes().to_vec())
+    }
+
+    /// (total, libre para el usuario, tamaño de fragmento) en bytes.
+    #[allow(clippy::unnecessary_cast, clippy::useless_conversion)] // los tipos de `statvfs` cambian entre plataformas
+    fn statvfs(path: &str) -> Option<(u64, u64, u64)> {
+        let c = CString::new(path).ok()?;
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        let frag = if st.f_frsize > 0 { st.f_frsize as u64 } else { st.f_bsize as u64 };
+        Some((st.f_blocks as u64 * frag, st.f_bavail as u64 * frag, frag))
+    }
+
+    /// [`statvfs`] en otro hilo con un tiempo máximo (un recurso de red caído se queda colgado).
+    fn statvfs_timeout(path: &str, limit: Duration) -> Option<(u64, u64, u64)> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = path.to_string();
+        std::thread::Builder::new()
+            .name("tessera-statvfs".into())
+            .spawn(move || {
+                let _ = tx.send(statvfs(&p));
+            })
+            .ok()?;
+        rx.recv_timeout(limit).ok().flatten()
+    }
+
+    /// Dispositivo real → etiqueta, de `/dev/disk/by-label`.
+    fn labels() -> Vec<(PathBuf, String)> {
+        let Ok(rd) = std::fs::read_dir("/dev/disk/by-label") else { return Vec::new() };
+        rd.flatten()
+            .filter_map(|e| Some((std::fs::canonicalize(e.path()).ok()?, posix::udev_label(&e.file_name().to_string_lossy()))))
+            .collect()
+    }
+
+    fn label_of(m: &Mount, labels: &[(PathBuf, String)]) -> String {
+        if m.source.starts_with("/dev/") {
+            if let Ok(dev) = std::fs::canonicalize(&m.source) {
+                if let Some((_, l)) = labels.iter().find(|(d, _)| *d == dev) {
+                    return l.clone();
+                }
+            }
+        }
+        posix::fallback_label(m)
+    }
+
+    /// Volumen montado en `root` (o el que lo contiene).
+    pub fn volume_info(root: &str) -> Option<VolumeInfo> {
+        let (total, free, cluster) = statvfs(root)?;
+        let ms = mounts();
+        let (label, fs) = posix::mount_of(&ms, &real_path(root)).map(|m| (label_of(m, &labels()), m.fs.clone())).unwrap_or_default();
+        Some(VolumeInfo { path: root.to_string(), label, fs, total, free, cluster_size: cluster })
+    }
+
+    /// Sistemas de archivos reales montados (ver [`posix::volume_mounts`]): `/` primero y luego por ruta.
+    pub fn volumes() -> Vec<VolumeInfo> {
+        let ms = mounts();
+        let labels = labels();
+        posix::volume_mounts(&ms)
+            .into_iter()
+            .filter_map(|m| {
+                let path = m.path();
+                let (total, free, cluster) = if posix::is_network_fs(&m.fs) { statvfs_timeout(&path, NET_TIMEOUT)? } else { statvfs(&path)? };
+                Some(VolumeInfo { label: label_of(m, &labels), fs: m.fs.clone(), path, total, free, cluster_size: cluster })
+            })
+            .collect()
+    }
+
+    /// Punto de montaje que contiene `path` (el más largo; "/" si no hay otro).
+    pub fn volume_root_of(path: &str) -> Option<String> {
+        posix::mount_of(&mounts(), &real_path(path)).map(Mount::path)
+    }
+
+    /// NFS, CIFS/SMB o 9p (en WSL, las unidades de Windows).
+    pub fn is_network(root: &str) -> bool {
+        posix::mount_of(&mounts(), &real_path(root)).is_some_and(|m| posix::is_network_fs(&m.fs))
+    }
+
+    /// Memoria del proceso: (residente actual, pico residente, pico de memoria virtual) en bytes.
+    pub fn process_memory() -> Option<(u64, u64, u64)> {
+        posix::status_memory(&std::fs::read_to_string("/proc/self/status").ok()?)
+    }
+
+    /// `elevated` = root (euid 0); nunca se ofrece relanzar con más permisos.
+    pub fn elevation() -> ElevationInfo {
+        ElevationInfo { elevated: unsafe { libc::geteuid() } == 0, can_elevate: false }
+    }
+
+    pub fn relaunch_elevated(_args: &str) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
+    }
+
+    fn home() -> Option<PathBuf> {
+        std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
+    }
+
+    /// Carpeta de descargas de XDG (`XDG_DOWNLOAD_DIR` de `user-dirs.dirs`) o `~/Downloads`.
+    pub fn downloads_dir() -> Option<PathBuf> {
+        let home = home()?;
+        let config = posix::xdg_base(std::env::var_os("XDG_CONFIG_HOME"), &home, ".config");
+        Some(posix::download_dir(&home, &config))
+    }
+
+    /// Datos de la aplicación: `$XDG_DATA_HOME` o `~/.local/share` (el historial va en `TesseraFS/history`).
+    pub fn local_app_data() -> Option<PathBuf> {
+        match std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+            Some(p) if p.is_absolute() => Some(p),
+            _ => home().map(|h| h.join(".local/share")),
+        }
+    }
+
+    fn exists(path: &Path) -> Result<(), EngineMessage> {
+        std::fs::symlink_metadata(path).map(|_| ()).map_err(|e| super::action_io_error(&e))
+    }
+
+    /// Lanza `program` sin esperar a la aplicación: error si no se puede lanzar o si termina con error
+    /// antes de [`LAUNCH_WAIT`]; si sigue en marcha, otro hilo lo recoge cuando termine.
+    fn launch(program: &str, args: &[&OsStr]) -> Result<(), EngineMessage> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| msg::action_failed(&format!("{program}: {}", super::io_error_text(&e))))?;
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(st)) if st.success() => return Ok(()),
+                Ok(Some(st)) => return Err(msg::action_failed(&format!("{program} failed ({st})"))),
+                Ok(None) if start.elapsed() < LAUNCH_WAIT => std::thread::sleep(Duration::from_millis(20)),
+                Ok(None) => {
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                    return Ok(());
+                }
+                Err(e) => return Err(super::action_io_error(&e)),
+            }
+        }
+    }
+
+    fn opener() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        }
+    }
+
+    /// Abre con la aplicación predeterminada (`xdg-open`).
+    pub fn open(path: &Path) -> Result<(), EngineMessage> {
+        exists(path)?;
+        launch(opener(), &[path.as_os_str()])
+    }
+
+    /// Muestra el elemento seleccionado en el gestor de archivos (`org.freedesktop.FileManager1.ShowItems`
+    /// por D-Bus con `gdbus`); si no se puede, abre su carpeta con `xdg-open`.
+    pub fn reveal(path: &Path) -> Result<(), EngineMessage> {
+        exists(path)?;
+        if cfg!(target_os = "macos") {
+            return launch("open", &[OsStr::new("-R"), path.as_os_str()]);
+        }
+        // Texto GVariant: tras el percent-encoding la URI no lleva comillas ni barras invertidas
+        let items = format!("['{}']", posix::file_uri(path.as_os_str().as_bytes()));
+        let shown = Command::new("gdbus")
+            .args(["call", "--session", "--timeout", "5", "--dest", "org.freedesktop.FileManager1"])
+            .args(["--object-path", "/org/freedesktop/FileManager1", "--method", "org.freedesktop.FileManager1.ShowItems"])
+            .arg(&items)
+            .arg("''")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if shown {
+            return Ok(());
+        }
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("/"));
+        launch(opener(), &[parent.as_os_str()])
+    }
+
+    pub fn properties(_path: &Path) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
+    }
+
+    pub fn file_attributes(_p: &[u16]) -> Result<u32, EngineMessage> {
+        Err(msg::unsupported_platform())
+    }
+
+    pub fn set_file_attributes(_p: &[u16], _attrs: u32) -> Result<(), EngineMessage> {
+        Err(msg::unsupported_platform())
+    }
+
+    /// Envía a la papelera de freedesktop (nunca borra de forma permanente). Un punto de montaje o una
+    /// carpeta que contiene la propia papelera no se envían: el crate los copiaría a la papelera de la
+    /// carpeta personal antes de quitarlos.
+    pub fn trash(path: &Path) -> Result<(), EngineMessage> {
+        let meta = std::fs::symlink_metadata(path).map_err(|e| super::action_io_error(&e))?;
+        if meta.is_dir() {
+            let real = std::fs::canonicalize(path).map_err(|e| super::action_io_error(&e))?;
+            let real = real.as_os_str().as_bytes();
+            if mounts().iter().any(|m| m.point == real) {
+                return Err(msg::action_failed("Mount points can't be moved to the trash"));
+            }
+            if let Some(t) = local_app_data().map(|d| d.join("Trash")) {
+                let t = std::fs::canonicalize(&t).unwrap_or(t);
+                if posix::is_under(t.as_os_str().as_bytes(), real) {
+                    return Err(msg::action_failed("This folder contains the trash itself"));
+                }
+            }
+        }
+        trash::delete(path).map_err(|e| match e {
+            #[cfg(not(target_os = "macos"))]
+            trash::Error::FileSystem { source, .. } => super::action_io_error(&source),
+            other => msg::action_failed(&other.to_string()),
+        })
+    }
+}
+
+#[cfg(unix)]
+pub use imp::*;
+
+/// Otras plataformas: nada de esto está disponible.
+#[cfg(not(any(windows, unix)))]
+mod imp {
+    use super::*;
+    use std::path::{Path, PathBuf};
     pub fn volume_info(_root: &str) -> Option<VolumeInfo> {
         None
     }
@@ -340,35 +592,34 @@ mod imp {
     pub fn volume_root_of(_path: &str) -> Option<String> {
         None
     }
-    pub fn is_network(root: &str) -> bool {
-        root.starts_with(r"\\")
+    pub fn is_network(_root: &str) -> bool {
+        false
     }
     pub fn elevation() -> ElevationInfo {
         ElevationInfo { elevated: false, can_elevate: false }
     }
-    /// Memoria del proceso: (conjunto de trabajo actual, pico, commit pico) en bytes.
     pub fn process_memory() -> Option<(u64, u64, u64)> {
         None
     }
     pub fn relaunch_elevated(_args: &str) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())
     }
-    pub fn downloads_dir() -> Option<std::path::PathBuf> {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Downloads"))
+    pub fn downloads_dir() -> Option<PathBuf> {
+        None
     }
-    pub fn local_app_data() -> Option<std::path::PathBuf> {
-        std::env::var_os("LOCALAPPDATA").map(Into::into)
+    pub fn local_app_data() -> Option<PathBuf> {
+        None
     }
-    pub fn open(_p: &[u16]) -> Result<(), EngineMessage> {
+    pub fn open(_p: &Path) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())
     }
-    pub fn reveal(_p: &[u16]) -> Result<(), EngineMessage> {
+    pub fn reveal(_p: &Path) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())
     }
-    pub fn properties(_p: &[u16]) -> Result<(), EngineMessage> {
+    pub fn properties(_p: &Path) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())
     }
-    pub fn trash(_p: &[u16]) -> Result<(), EngineMessage> {
+    pub fn trash(_p: &Path) -> Result<(), EngineMessage> {
         Err(msg::unsupported_platform())
     }
     pub fn file_attributes(_p: &[u16]) -> Result<u32, EngineMessage> {
@@ -379,5 +630,5 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 pub use imp::*;

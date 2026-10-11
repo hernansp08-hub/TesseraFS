@@ -54,7 +54,8 @@ describe('uso de las claves', () => {
 
   test('cada carpeta conocida tiene su explicación known.<id>, y no sobra ninguna', () => {
     const src = read(join(ROOT, 'packages/ui/src/clean.ts'));
-    const ids = [...src.slice(src.indexOf('export const KNOWN')).matchAll(/^\s*\['(\w+)', \//gm)].map(m => m[1]);
+    // KNOWN (Windows) y LINUX_KNOWN: ['id', /regex/] o ['id', home('…')]
+    const ids = [...src.slice(src.indexOf('export const KNOWN')).matchAll(/^\s*\['(\w+)', (\/|home\()/gm)].map(m => m[1]);
     expect(ids.length).toBeGreaterThan(10);
     expect(ids.filter(id => !(`known.${id}` in en))).toEqual([]);
     expect(KEYS.filter(k => k.startsWith('known.') && k !== 'known.heading' && !ids.includes(k.slice(6)))).toEqual([]);

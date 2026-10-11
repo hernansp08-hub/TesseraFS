@@ -2,7 +2,7 @@
 import {
   FLAG, compileQuery, encodeSlice, type Backend, type ChangeRow, type ChildrenRequest, type CompareResult, type DupGroup, type DupProgress,
   type DupRequest, type DupResult, type HistoryEntry, type NodeRow, type RemovedRow, type ScanProgress, type ScanRequest, type ScanResult,
-  type SearchRequest, type SearchRow, type SliceSource, type VolumeInfo,
+  type Os, type SearchRequest, type SearchRow, type SliceSource, type SystemInfo, type VolumeInfo,
 } from '@tessera/protocol';
 // @ts-ignore módulo JS sin tipos
 import { buildSample } from './sample.js';
@@ -15,10 +15,26 @@ interface DNode {
 }
 
 const GB = 1024 ** 3;
-const VOLUME: VolumeInfo = { path: 'C:\\', label: 'Windows-SSD', fs: 'NTFS', total: 434560299008, free: 47590404096, clusterSize: 4096 };
+const VOLUMES: Record<'windows' | 'linux', VolumeInfo[]> = {
+  windows: [{ path: 'C:\\', label: 'Windows-SSD', fs: 'NTFS', total: 434560299008, free: 47590404096, clusterSize: 4096 }],
+  linux: [
+    { path: '/', label: 'nvme0n1p2', fs: 'ext4', total: 250375106560, free: 39821148160, clusterSize: 4096 },
+    { path: '/mnt/datos', label: 'Datos', fs: 'ntfs3', total: 1000202039296, free: 412316860416, clusterSize: 4096 },
+  ],
+};
 
 export class DemoBackend implements Backend {
   readonly kind = 'demo' as const;
+  /** Simula un Windows (por defecto) o un Linux (`#os=linux` en la demo). */
+  readonly os: 'windows' | 'linux';
+  private readonly sep: '\\' | '/';
+  private readonly rootName: string;
+  constructor(os: Os = 'windows') {
+    this.os = os === 'linux' ? 'linux' : 'windows';
+    this.sep = this.os === 'linux' ? '/' : '\\';
+    this.rootName = this.os === 'linux' ? '/' : 'C:\\';
+  }
+  private get volume() { return VOLUMES[this.os][0]; }
   private N: DNode[] = [];
   private root!: DNode;
   private ready = false;
@@ -32,13 +48,13 @@ export class DemoBackend implements Backend {
 
   private ensure() {
     if (this.ready) return;
-    const { N, root } = buildSample(); this.N = N; this.root = root; this.ready = true;
+    const { N, root } = buildSample(this.os); this.N = N; this.root = root; this.ready = true;
   }
   private flags(n: DNode) {
     return (n.isDir ? FLAG.DIR : 0) | (n.hidden ? FLAG.HIDDEN : 0) | (n.hl ? FLAG.HARDLINK : 0) | (n.comp ? FLAG.COMPRESSED : 0) | (n.cloud ? FLAG.CLOUD : 0);
   }
   private row(n: DNode): NodeRow {
-    const r: NodeRow = { id: n.id, parentId: n.parent ? n.parent.id : -1, name: n.parent ? n.name : 'C:\\', isDir: n.isDir, size: n.size, alloc: n.alloc,
+    const r: NodeRow = { id: n.id, parentId: n.parent ? n.parent.id : -1, name: n.parent ? n.name : this.rootName, isDir: n.isDir, size: n.size, alloc: n.alloc,
       files: n.files, dirs: n.dirs, mtime: n.mtime, ext: n.ext, flags: this.flags(n), childCount: n.kids ? n.kids.length : 0 };
     if (this.cmp) { if (this.cmp.fresh.has(n.id)) r.fresh = true; else if (this.cmp.prev.has(n.id)) r.prev = this.cmp.prev.get(n.id); }
     return r;
@@ -48,13 +64,18 @@ export class DemoBackend implements Backend {
     return c.fresh.has(n.id) ? n.size : c.prev.has(n.id) ? n.size - c.prev.get(n.id)! : 0;
   }
   private path(n: DNode) {
-    if (!n.parent) return 'C:\\';
+    if (!n.parent) return this.rootName;
     const a: string[] = []; for (let x: DNode | null = n; x && x.parent; x = x.parent) a.push(x.name);
-    return 'C:\\' + a.reverse().join('\\');
+    return this.rootName + a.reverse().join(this.sep);
   }
   private node(id: number) { this.ensure(); const n = this.N[id]; if (!n) throw fail('error.invalidNode', `Unknown node id: ${id}`, { id }); return n; }
 
-  async volumes() { return [VOLUME]; }
+  async volumes() { return VOLUMES[this.os]; }
+  async system(): Promise<SystemInfo> {
+    return this.os === 'linux'
+      ? { os: 'linux', sep: '/', actions: ['open', 'reveal', 'trash'] }
+      : { os: 'windows', sep: '\\', actions: ['open', 'reveal', 'properties', 'trash', 'freeUp'] };
+  }
 
   async scan(_req: ScanRequest, onProgress: (p: ScanProgress) => void): Promise<ScanResult> {
     if (this.scanning) throw fail('error.scanBusy', 'A scan is already in progress');
@@ -74,8 +95,11 @@ export class DemoBackend implements Backend {
     } finally { this.scanning = false; }
     const el = performance.now() - t0;
     onProgress({ phase: 'done', entries: total, bytes: this.root.size, elapsedMs: el });
-    return { rootId: 0, rootPath: 'C:\\', engine: 'mft', entries: total, files: this.root.files, dirs: this.root.dirs, bytes: this.root.size,
-      elapsedMs: el, volume: VOLUME, warnings: [{ code: 'scan.demoData', message: 'Sample data: no disk was read.' }] };
+    const warnings = [{ code: 'scan.demoData', message: 'Sample data: no disk was read.' }];
+    if (this.os === 'linux') warnings.push({ code: 'scan.otherMounts', params: { count: 3, paths: '/boot/efi, /mnt/datos, /snap/firefox/6966' },
+      message: '3 mounted file systems were not included (analyze them separately): /boot/efi, /mnt/datos, /snap/firefox/6966' } as never);
+    return { rootId: 0, rootPath: this.rootName, engine: this.os === 'linux' ? 'walk' : 'mft', entries: total, files: this.root.files, dirs: this.root.dirs,
+      bytes: this.root.size, elapsedMs: el, volume: this.volume, warnings };
   }
 
   async cancelScan() { if (!this.scanning) return false; this.cancelled = true; return true; }
@@ -83,7 +107,7 @@ export class DemoBackend implements Backend {
   async slice(root: number, minBytes: number, maxNodes: number) {
     const N = this.N; this.node(root);
     const src: SliceSource = {
-      isDir: i => N[i].isDir, name: i => N[i].parent ? N[i].name : 'C:\\', ext: i => N[i].ext, size: i => N[i].size, alloc: i => N[i].alloc,
+      isDir: i => N[i].isDir, name: i => N[i].parent ? N[i].name : this.rootName, ext: i => N[i].ext, size: i => N[i].size, alloc: i => N[i].alloc,
       files: i => N[i].files, dirs: i => N[i].dirs, mtime: i => N[i].mtime, flags: i => this.flags(N[i]),
       children: i => (N[i].mk || []).map(k => k.id),
     };
@@ -196,27 +220,40 @@ export class DemoBackend implements Backend {
 
   // ---------- Historial simulado ----------
   private entry(id: string, at: number, bytes: number, files: number, dirs: number): HistoryEntry {
-    return { id, path: 'C:\\', scannedAt: Math.round(at), engine: 'mft', bytes, files, dirs, nodes: 0, fileBytes: 0 };
+    return { id, path: this.rootName, scannedAt: Math.round(at), engine: this.os === 'linux' ? 'walk' : 'mft', bytes, files, dirs, nodes: 0, fileBytes: 0 };
   }
   /** Hace 30 días: sin las copias recientes, sin un modelo y un juego nuevos, con menos disco de Docker y más temporales, y con dos cosas que ya no están. */
   private pastSnapshot() {
     this.ensure();
     const N = this.N, GB = 1024 ** 3, fresh = new Set<number>(), prev = new Map<number, number>();
-    const at = (p: string) => N.find(n => this.path(n).toLowerCase() === p.toLowerCase());
+    const at = (p: string) => N.find(n => this.os === 'linux' ? this.path(n) === p : this.path(n).toLowerCase() === p.toLowerCase());
     const mark = (n: DNode | undefined) => { if (!n) return; const st = [n]; while (st.length) { const x = st.pop()!; fresh.add(x.id); if (x.kids) st.push(...x.kids); } };
     for (const n of N) if (n.copy) mark(n);
-    mark(at('C:\\Users\\usuario\\AppData\\Local\\lm-studio\\models\\qwen3-14b-instruct-q4_k_m.gguf'));
-    mark(at('C:\\Program Files (x86)\\Steam\\steamapps\\common\\Hades II'));
     const scale = (p: string, f: number) => { const d = at(p); if (!d) return; const st = [d]; while (st.length) { const x = st.pop()!; if (x.kids) st.push(...x.kids); else prev.set(x.id, Math.round(x.size * f)); } };
-    scale('C:\\apps\\lamina-rs\\target\\debug', .55);
-    scale('C:\\Users\\usuario\\AppData\\Local\\Temp', 1.8);
-    const vhdx = at('C:\\Users\\usuario\\AppData\\Local\\Docker\\wsl\\docker_data.vhdx'); if (vhdx) prev.set(vhdx.id, Math.round(vhdx.size - 2.1 * GB));
-    const removed: RemovedRow[] = [
-      { path: 'C:\\Users\\usuario\\Downloads\\ubuntu-24.04.2-desktop-amd64.iso', isDir: false, size: Math.round(5.9 * GB) },
-      { path: 'C:\\Users\\usuario\\Videos\\Grabaciones', isDir: true, size: Math.round(3.2 * GB) },
-    ];
+    let removed: RemovedRow[];
+    if (this.os === 'linux') {
+      mark(at('/home/usuario/.local/share/Steam/steamapps/common/Hades II'));
+      mark(at('/home/usuario/.local/share/gnome-boxes/images/fedora-42.qcow2'));
+      scale('/home/usuario/proyectos/lamina-rs/target/debug', .55);
+      scale('/var/lib/docker/overlay2', .8);
+      scale('/var/log/journal', .6);
+      removed = [
+        { path: '/home/usuario/Descargas/ubuntu-24.04.2-desktop-amd64.iso', isDir: false, size: Math.round(5.9 * GB) },
+        { path: '/home/usuario/Vídeos/Grabaciones', isDir: true, size: Math.round(3.2 * GB) },
+      ];
+    } else {
+      mark(at('C:\\Users\\usuario\\AppData\\Local\\lm-studio\\models\\qwen3-14b-instruct-q4_k_m.gguf'));
+      mark(at('C:\\Program Files (x86)\\Steam\\steamapps\\common\\Hades II'));
+      scale('C:\\apps\\lamina-rs\\target\\debug', .55);
+      scale('C:\\Users\\usuario\\AppData\\Local\\Temp', 1.8);
+      const vhdx = at('C:\\Users\\usuario\\AppData\\Local\\Docker\\wsl\\docker_data.vhdx'); if (vhdx) prev.set(vhdx.id, Math.round(vhdx.size - 2.1 * GB));
+      removed = [
+        { path: 'C:\\Users\\usuario\\Downloads\\ubuntu-24.04.2-desktop-amd64.iso', isDir: false, size: Math.round(5.9 * GB) },
+        { path: 'C:\\Users\\usuario\\Videos\\Grabaciones', isDir: true, size: Math.round(3.2 * GB) },
+      ];
+    }
     const extra = new Map<number, number>();
-    for (const r of removed) { const p = at(r.path.slice(0, r.path.lastIndexOf('\\'))); if (p) extra.set(p.id, (extra.get(p.id) || 0) + r.size); }
+    for (const r of removed) { const p = at(r.path.slice(0, r.path.lastIndexOf(this.sep))); if (p) extra.set(p.id, (extra.get(p.id) || 0) + r.size); }
     // Carpetas: suma de lo que ya existía más lo que se borró dentro (los hijos tienen id mayor que su padre)
     for (let i = N.length - 1; i >= 0; i--) {
       const n = N[i]; if (fresh.has(n.id)) continue;
@@ -272,9 +309,9 @@ export class DemoBackend implements Backend {
     const n = this.node(id);
     const msg: Record<string, string> = {
       open: `Demo: the app would open "${n.name}" with its default program.`,
-      reveal: 'Demo: the app would open Explorer with the item selected.',
+      reveal: `Demo: the app would open ${this.os === 'linux' ? 'the file manager' : 'Explorer'} with the item selected.`,
       properties: 'Demo: the app would open the Windows Properties dialog.',
-      trash: `Demo: nothing was moved. The app would send "${n.name}" to the Recycle Bin.`,
+      trash: `Demo: nothing was moved. The app would send "${n.name}" to the ${this.os === 'linux' ? 'Trash' : 'Recycle Bin'}.`,
     };
     if (kind === 'freeUp') {
       // Lo que haría la app real: archivos de la nube descargados → «sólo en línea»
@@ -283,6 +320,7 @@ export class DemoBackend implements Backend {
       if (!count) return { ok: false, code: 'action.nothingToFree', message: 'There are no downloaded cloud files here to free up' };
       return { ok: false, code: 'demo.freeUp', params: { count, bytes }, message: `Demo: nothing changed. The app would set ${count} files to online-only.` };
     }
+    if (!(await this.system()).actions.includes(kind as never)) return { ok: false, code: 'error.unsupportedPlatform', message: 'Only available on Windows' };
     if (!msg[kind]) return { ok: false, code: 'demo.unavailable', message: 'Action not available in the demo.' };
     return { ok: kind !== 'trash', code: 'demo.' + kind, params: { name: n.name }, message: msg[kind] };
   }

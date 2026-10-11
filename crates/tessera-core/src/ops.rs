@@ -65,6 +65,7 @@ fn walk_subtree(t: &Tree, root: u32, with_path: bool, mut f: impl FnMut(u32, &st
             names::lower_into(&mut path, &t.path(root));
         }
     }
+    let sep = t.sep();
     let mut stack: Vec<(u32, usize)> = Vec::new();
     let push_kids = |stack: &mut Vec<(u32, usize)>, id: u32, plen: usize| {
         let kids = t.kids(id);
@@ -76,8 +77,8 @@ fn walk_subtree(t: &Tree, root: u32, with_path: bool, mut f: impl FnMut(u32, &st
     while let Some((id, plen)) = stack.pop() {
         if with_path {
             path.truncate(plen);
-            if !path.ends_with('\\') {
-                path.push('\\');
+            if !path.ends_with(sep) {
+                path.push(sep);
             }
             names::lower_into(&mut path, &t.name(id));
         }
@@ -198,6 +199,27 @@ mod tests {
         let r = children(&t, 0, 0, 10, SortKey::Files, true).unwrap();
         assert_eq!(r.total, 3);
         assert_eq!(r.rows[0].name, "node_modules");
+    }
+
+    /// Árbol de Linux: rutas con `/` (también en `path:`) y sin barra doble bajo `/`.
+    #[test]
+    fn posix_paths() {
+        let raw = || {
+            let mut r = RawTree::with_capacity(4);
+            let root = r.push(NONE, b"", 0, 0, 0, flag::DIR);
+            let a = r.push(root, b"node_modules", 0, 0, 0, flag::DIR);
+            r.push(a, b"x.js", 5, 4096, 0, 0);
+            r.root = root;
+            r
+        };
+        let t = build(raw(), "/home/Ana".into(), &[]).unwrap();
+        assert_eq!(t.sep(), '/');
+        let s = search(&t, "path:ana/node_modules/", 0, 10);
+        assert_eq!((s.total, s.rows[0].path.as_str()), (1, "/home/Ana/node_modules/x.js"));
+        assert_eq!(search(&t, "path:node_modules\\", 0, 10).total, 0);
+        let t = build(raw(), "/".into(), &[]).unwrap();
+        assert_eq!((t.path(0).as_str(), t.path(1).as_str(), t.path(2).as_str()), ("/", "/node_modules", "/node_modules/x.js"));
+        assert_eq!(search(&t, "path:/node_modules/x", 0, 10).total, 1);
     }
 
     #[test]

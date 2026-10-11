@@ -2,7 +2,7 @@
 // Sin dependencias de la interfaz para poder probarlas (test/clean.test.ts). Los textos van en el catálogo:
 //   regla:   clean.<id>.title · clean.<id>.why · clean.<how>.how (si `how`)
 //   conocida: known.<id>
-import { FLAG } from '@tessera/protocol';
+import { FLAG, type Os } from '@tessera/protocol';
 
 export type Risk = 'ok' | 'warn' | 'bad';
 /** Lo que una regla necesita de un elemento (una fila de búsqueda cumple esta forma). */
@@ -118,6 +118,91 @@ export const KNOWN: [id: string, re: RegExp][] = [
   ['downloads', /^[A-Z]:\\Users\\[^\\]+\\Downloads$/i],
   ['steamapps', /\\steamapps$/i],
 ];
+
+// ---------- Linux ----------
+// Carpeta personal: /home/<usuario> o /root
+const HOME = String.raw`^/(home/[^/]+|root)`;
+const home = (rest: string) => new RegExp(HOME + rest);
+// Programas instalados y cachés de usuario (ya cubiertas por ~/.cache): sus dependencias no se regeneran solas
+const INSTALLED_LINUX = /^\/(usr|opt|snap|var\/lib)\/|\/\.(vscode|vscode-server|cursor)[^/]*\/|\/\.local\/|\/\.cache\//;
+// Cachés de herramientas de desarrollo fuera de ~/.cache (las de dentro, pip, uv, yarn, go-build…, las cubre ~/.cache)
+const PACKAGE_CACHES_LINUX: [RegExp, string, string][] = [
+  [home('/\\.npm$'), 'npm', 'npm cache clean --force'],
+  [home('/\\.local/share/pnpm/store$|/\\.pnpm-store$'), 'pnpm', 'pnpm store prune'],
+  [home('/\\.bun/install/cache$'), 'Bun', 'bun pm cache rm'],
+  [home('/\\.nuget/packages$'), 'NuGet', 'dotnet nuget locals all --clear'],
+  [home('/go/pkg/mod$'), 'Go', 'go clean -modcache'],
+];
+const packageCacheLinux = (p: string) => PACKAGE_CACHES_LINUX.find(([re]) => re.test(p));
+// Cachés de los gestores de paquetes del sistema
+const SYSTEM_PACKAGES: [RegExp, string, string][] = [
+  [/^\/var\/cache\/apt\/archives$/, 'APT', 'sudo apt clean'],
+  [/^\/var\/cache\/(dnf|yum)$/, 'DNF', 'sudo dnf clean all'],
+  [/^\/var\/cache\/pacman\/pkg$/, 'pacman', 'sudo paccache -rk1'],
+  [/^\/var\/cache\/zypp$/, 'zypper', 'sudo zypper clean --all'],
+];
+const systemPackagesOf = (p: string) => SYSTEM_PACKAGES.find(([re]) => re.test(p));
+const containersOf = (p: string): [string, string] | undefined =>
+  /^\/var\/lib\/docker$/.test(p) ? ['Docker', 'docker system prune -a'] : home('/\\.local/share/containers$').test(p) ? ['Podman', 'podman system prune -a'] : undefined;
+
+export const LINUX_RULES: Rule[] = [
+  // ---- Seguro: se regenera o es temporal ----
+  { id: 'rustTarget', q: 'type:dir name:target', risk: 'ok', cmd: 'cargo clean', needs: ['cachedir.tag', '.rustc_info.json'],
+    ok: t => t.name === 'target' && !INSTALLED_LINUX.test(t.path), min: 50 * MB },
+  { id: 'nodeModules', q: 'type:dir name:node_modules', risk: 'ok', cmd: 'bun install',
+    ok: t => t.name === 'node_modules' && (t.path.match(/\/node_modules(?=\/|$)/g) || []).length === 1 && !INSTALLED_LINUX.test(t.path), min: 20 * MB },
+  { id: 'venv', q: 'type:dir name:.venv', risk: 'ok', cmd: 'uv sync', ok: t => t.name === '.venv' && !INSTALLED_LINUX.test(t.path), min: 20 * MB },
+  { id: 'userCache', q: 'type:dir name:.cache', risk: 'ok', how: true, ok: t => home('/\\.cache$').test(t.path), min: 500 * MB },
+  { id: 'packageCaches', q: 'type:dir re:^(\\.npm|store|\\.pnpm-store|cache|packages|mod)$', risk: 'ok',
+    ok: t => !!packageCacheLinux(t.path), title: t => ['clean.packageCaches.title', { name: packageCacheLinux(t.path)?.[1] ?? t.name }],
+    cmd: t => packageCacheLinux(t.path)?.[2], min: 200 * MB },
+  { id: 'systemPackages', q: 'type:dir re:^(archives|dnf|yum|pkg|zypp)$', risk: 'ok',
+    ok: t => !!systemPackagesOf(t.path), title: t => ['clean.systemPackages.title', { name: systemPackagesOf(t.path)?.[1] ?? t.name }],
+    cmd: t => systemPackagesOf(t.path)?.[2], min: 200 * MB },
+  { id: 'journal', q: 'type:dir name:journal', risk: 'ok', cmd: 'sudo journalctl --vacuum-size=200M', ok: t => /^\/var\/log\/journal$/.test(t.path), min: 300 * MB },
+  { id: 'coreDumps', q: 'type:dir name:coredump', risk: 'ok', cmd: 'coredumpctl list', how: true, ok: t => /^\/var\/lib\/systemd\/coredump$/.test(t.path), min: 100 * MB },
+  { id: 'userTrash', q: 'type:dir name:Trash', risk: 'ok', cmd: 'gio trash --empty', ok: t => home('/\\.local/share/Trash$').test(t.path), min: 50 * MB },
+  { id: 'shaderCache', q: 'type:dir name:shadercache', risk: 'ok', ok: t => /\/steamapps\/shadercache$/.test(t.path), min: 200 * MB },
+  // ---- Revisar: es tuyo, decides tú ----
+  { id: 'aiModels', q: 'ext:gguf,safetensors,ckpt,onnx', risk: 'warn', group: true, ok: t => /^(gguf|safetensors|ckpt|onnx)$/i.test(t.ext), min: 500 * MB },
+  { id: 'vmImages', q: 'ext:qcow2,vdi,vmdk,vhd,vhdx', risk: 'warn', how: true, ok: t => /^(qcow2|vdi|vmdk|vhdx?)$/i.test(t.ext), min: 500 * MB },
+  { id: 'containers', q: 'type:dir re:^(docker|containers)$', risk: 'warn', how: true,
+    ok: t => !!containersOf(t.path), title: t => ['clean.containers.title', { name: containersOf(t.path)?.[0] ?? t.name }],
+    cmd: t => containersOf(t.path)?.[1], min: 1 * GB },
+  { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: t => ['clean.game.title', { name: t.name }], ok: t => /\/steamapps\/common\/[^/]+$/.test(t.path), min: 1 * GB },
+  { id: 'flatpak', q: 'type:dir name:flatpak', risk: 'warn', cmd: 'flatpak uninstall --unused', ok: t => /^\/var\/lib\/flatpak$/.test(t.path) || home('/\\.local/share/flatpak$').test(t.path), min: 1 * GB },
+  { id: 'snapRevisions', q: 'type:dir name:snaps', risk: 'warn', cmd: 'sudo snap set system refresh.retain=2', how: true, ok: t => /^\/var\/lib\/snapd\/snaps$/.test(t.path), min: 1 * GB },
+  { id: 'downloads', q: 'path:/Downloads/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m OR path:/Descargas/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m OR path:/Téléchargements/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m',
+    risk: 'warn', group: true, min: 200 * MB },
+  { id: 'timeshift', q: 'type:dir name:snapshots', risk: 'warn', how: true, ok: t => /^\/timeshift(-btrfs)?\/snapshots$/.test(t.path), min: 1 * GB },
+  // ---- No borrar a mano: lo gestiona el sistema ----
+  { id: 'swapLinux', q: 'swap.img OR swapfile', risk: 'bad', cmd: 'swapon --show', ok: t => /^\/(swap\.img|swapfile)$/.test(t.path) },
+];
+
+/** Carpetas de Linux que conviene explicar (texto: known.<id>). */
+export const LINUX_KNOWN: [id: string, re: RegExp][] = [
+  ['usr', /^\/usr$/],
+  ['kernelModules', /^\/(usr\/)?lib\/modules$/],
+  ['var', /^\/var$/],
+  ['varLog', /^\/var\/log$/],
+  ['varCache', /^\/var\/cache$/],
+  ['varLib', /^\/var\/lib$/],
+  ['opt', /^\/opt$/],
+  ['boot', /^\/boot$/],
+  ['tmp', /^\/(var\/)?tmp$/],
+  ['snapDir', /^\/snap$/],
+  ['home', /^\/home$/],
+  ['localShare', home('/\\.local/share$')],
+  ['dotConfig', home('/\\.config$')],
+  ['ollama', /^\/usr\/share\/ollama$|\/\.ollama\/models$/],
+  ['downloads', home('/(Downloads|Descargas|Téléchargements)$')],
+  ['steamapps', /\/steamapps$/],
+];
+
+/** Reglas del sistema donde corre el motor. */
+export const rulesFor = (os: Os) => os === 'windows' ? RULES : LINUX_RULES;
+/** Carpeta conocida en ese sistema. */
+export const knownIdFor = (path: string, os: Os) => (os === 'windows' ? KNOWN : LINUX_KNOWN).find(([, re]) => re.test(path))?.[0];
 
 /** Carpeta o archivo que la regla busca: con «type:dir» y «type:file» a la vez, ambos. */
 export function ruleKind(r: Rule): 'dir' | 'file' | 'any' {

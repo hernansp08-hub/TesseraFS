@@ -140,6 +140,33 @@ pub fn lower_into(out: &mut String, s: &str) {
     }
 }
 
+/// Ruta POSIX (Linux): empieza por `/`, usa `/` como separador y distingue mayúsculas. Las de Windows
+/// ("C:\\…", "\\\\srv\\…") usan `\\` y no las distinguen. Cada árbol, resumen o carpeta de exportación
+/// sigue el estilo de su propia ruta, así que el mismo código sirve en las dos plataformas.
+pub fn is_posix(path: &str) -> bool {
+    path.starts_with('/')
+}
+
+/// Separador de las rutas del estilo de `path`: `/` o `\\`.
+pub fn sep_of(path: &str) -> char {
+    if is_posix(path) {
+        '/'
+    } else {
+        '\\'
+    }
+}
+
+/// Clave para comparar rutas del estilo de `path`: en minúsculas en Windows, tal cual en Linux.
+pub fn path_key(path: &str) -> Cow<'_, str> {
+    if is_posix(path) {
+        Cow::Borrowed(path)
+    } else {
+        let mut o = String::with_capacity(path.len());
+        lower_into(&mut o, path);
+        Cow::Owned(o)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +196,13 @@ mod tests {
         assert_eq!(cmp_ci(b"abc", b"ABD"), Ordering::Less);
         assert_eq!(cmp_ci(b"B", b"a"), Ordering::Greater);
         assert_eq!(cmp_ci("Ñu".as_bytes(), "ña".as_bytes()), Ordering::Greater);
+    }
+
+    #[test]
+    fn path_styles() {
+        assert_eq!((sep_of("C:\\"), sep_of("\\\\srv\\x"), sep_of("/"), sep_of("/home/Ana")), ('\\', '\\', '/', '/'));
+        assert_eq!(path_key("C:\\Users\\Ña"), "c:\\users\\ña");
+        assert_eq!(path_key("/home/Ana"), "/home/Ana");
+        assert!(is_posix("/") && !is_posix("C:\\") && !is_posix(""));
     }
 }

@@ -2,7 +2,7 @@
 import type {
   ActionKind, ActionResult, Backend, ChildrenRequest, ChildrenResponse, CompareResult, DupProgress, DupRequest, DupResult, ElevationInfo,
   ExportResult, ExtStat, HistoryEntry, NodeRow, RefreshResult, RescanResult, ScanProgress, ScanRequest, ScanResult, SearchRequest,
-  SearchResponse, VolumeInfo,
+  SearchResponse, SystemInfo, VolumeInfo,
 } from '@tessera/protocol';
 import { engineFailure, isEngineMessage } from './errors';
 
@@ -57,6 +57,7 @@ export class TauriBackend implements Backend {
   action(kind: ActionKind, id: number) { return this.call<ActionResult>('action', { kind, id }); }
   elevation() { return this.call<ElevationInfo>('elevation'); }
   relaunchElevated() { return this.call<void>('relaunch_elevated'); }
+  system() { return this.call<SystemInfo>('system'); }
 }
 
 export class HttpBackend implements Backend {
@@ -131,4 +132,5 @@ export class HttpBackend implements Backend {
   action(kind: ActionKind, id: number) { return this.post<ActionResult>('/api/action', { kind, id }); }
   elevation() { return this.get<ElevationInfo>('/api/elevation'); }
   async relaunchElevated() { await this.post('/api/relaunch-elevated', {}); }
+  system() { return this.get<SystemInfo>('/api/system'); }
 }

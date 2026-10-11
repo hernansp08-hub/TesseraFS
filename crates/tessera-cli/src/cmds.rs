@@ -19,7 +19,11 @@ type Split = (Vec<String>, Vec<(String, String)>);
 
 /// Deshace el `"C:\"` de cmd.exe y del Programador de tareas: para Windows, `\"` es una comilla
 /// literal y el resto de la línea llega pegado (`C:" --min-free 10%`). Una ruta nunca lleva comillas.
+/// En Linux la shell ya separa los argumentos (y un nombre puede llevar comillas): llegan tal cual.
 fn unquote(args: &[String]) -> Vec<String> {
+    if !cfg!(windows) {
+        return args.to_vec();
+    }
     let mut out = Vec::new();
     for a in args {
         match a.split_once('"') {
@@ -361,7 +365,15 @@ pub fn render_table(top: &Top) -> String {
         out.push_str(&format!("\nLas {} carpetas más grandes (profundidad {}):\n", top.folders.len(), top.depth));
         for (i, r) in top.folders.iter().enumerate() {
             let n = &r.node;
-            out.push_str(&format!("  {:>3}  {:>12}  {:>10} arch  {:>8} carp  {}\\\n", i + 1, human(n.size), sep(n.files as u64), sep(n.dirs as u64), r.path));
+            out.push_str(&format!(
+                "  {:>3}  {:>12}  {:>10} arch  {:>8} carp  {}{}\n",
+                i + 1,
+                human(n.size),
+                sep(n.files as u64),
+                sep(n.dirs as u64),
+                r.path,
+                crate::dir_mark(true, &r.path)
+            ));
         }
     }
     out
@@ -492,11 +504,17 @@ mod tests {
         assert_eq!(parse_check(&args(&["C:\\"])).unwrap_err(), "Falta --min-free");
         assert!(parse_check(&args(&["--min-free", "1%"])).unwrap_err().starts_with("Falta la ruta"));
         assert!(parse_check(&args(&["C:\\", "--min-free", "mucho"])).unwrap_err().starts_with("Umbral no válido"));
-        // `"C:\" --min-free 10%` desde cmd.exe llega como un solo argumento
-        let a = parse_check(&args(&["C:\" --min-free 10%"])).unwrap();
-        assert_eq!((a.path.as_str(), a.min_free), ("C:\\", Threshold::Percent(10.0)));
-        let a = parse_top(&args(&["D:\\Datos\" --files 3 --format \"csv\""])).unwrap();
-        assert_eq!((a.path.as_str(), a.files, a.format), ("D:\\Datos\\", 3, Format::Csv));
+        if cfg!(windows) {
+            // `"C:\" --min-free 10%` desde cmd.exe llega como un solo argumento
+            let a = parse_check(&args(&["C:\" --min-free 10%"])).unwrap();
+            assert_eq!((a.path.as_str(), a.min_free), ("C:\\", Threshold::Percent(10.0)));
+            let a = parse_top(&args(&["D:\\Datos\" --files 3 --format \"csv\""])).unwrap();
+            assert_eq!((a.path.as_str(), a.files, a.format), ("D:\\Datos\\", 3, Format::Csv));
+        } else {
+            // En Linux las comillas son parte del nombre
+            let a = parse_top(&args(&["/srv/\"raro\"", "--files", "3"])).unwrap();
+            assert_eq!((a.path.as_str(), a.files), ("/srv/\"raro\"", 3));
+        }
         // Con el volumen real de la carpeta temporal (sin escanear)
         let tmp = std::env::temp_dir().to_string_lossy().into_owned();
         let (ok, line) = check(&CheckArgs { path: tmp.clone(), min_free: Threshold::Percent(0.0) }).unwrap();
@@ -572,6 +590,18 @@ mod tests {
         let table = render_table(&top);
         assert!(table.contains("Los 1 archivos más grandes:") && table.contains("Las 2 carpetas más grandes (profundidad 1):"), "{table}");
         assert!(table.contains("C:\\r\\a\\\n"));
+        // Árbol de Linux: rutas y marca de carpeta con `/`
+        let mut r = RawTree::with_capacity(3);
+        let root = r.push(NONE, b"", 0, 0, 0, flag::DIR);
+        let a = r.push(root, b"a", 0, 0, 0, flag::DIR);
+        r.push(a, b"f.bin", 9, 4096, 0, 0);
+        r.root = root;
+        let t = build(r, "/srv".into(), &[]).unwrap();
+        let top = top_of(&t, 1, 1, 1);
+        assert_eq!((top.files[0].path.as_str(), top.folders[0].path.as_str()), ("/srv/a/f.bin", "/srv/a"));
+        assert!(render_table(&top).contains("/srv/a/\n"));
+        assert!(render_csv(&top).contains("\r\nfolder,/srv/a,a,9,4096,1,0,\r\n"));
+        assert_eq!((crate::dir_mark(true, "/srv"), crate::dir_mark(true, "C:\\"), crate::dir_mark(false, "/srv")), ("/", "\\", ""));
         assert_eq!(iso(0), "");
         assert_eq!(iso(951_782_400), "2000-02-29T00:00:00Z");
     }

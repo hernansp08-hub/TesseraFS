@@ -1,9 +1,10 @@
-//! Exportación de archivos (CSV, JSON, informes…) a Descargas\TesseraFS, o a `TESSERA_EXPORT_DIR`.
+//! Exportación de archivos (CSV, JSON, informes…) a Descargas\TesseraFS (en Linux, la carpeta de
+//! descargas de XDG + `/TesseraFS`), o a `TESSERA_EXPORT_DIR`.
 
 use std::borrow::Cow;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 
@@ -95,15 +96,20 @@ pub fn export_file(name: &str, data: &str, base64: bool) -> Result<ExportResult,
     Err(msg::export_failed("Too many files with the same name"))
 }
 
-/// `path` está dentro de `dir` (sin distinguir mayúsculas, con separador) y no lleva `..` (que
-/// `std::path::absolute` deja en las rutas `\\?\`).
+/// `path` está dentro de `dir` (con separador; en Windows sin distinguir mayúsculas, en Linux
+/// distinguiéndolas) y no lleva `..` (que `std::path::absolute` deja en las rutas `\\?\` y en las de Linux).
 fn inside(dir: &Path, path: &Path) -> bool {
-    if path.components().any(|c| c == Component::ParentDir) {
+    let (dir, path) = (dir.to_string_lossy(), path.to_string_lossy());
+    if path.split(['\\', '/']).any(|c| c == "..") {
         return false;
     }
+    if names::is_posix(&dir) {
+        let d = dir.trim_end_matches('/');
+        return path.strip_prefix(d).is_some_and(|rest| rest.len() > 1 && rest.starts_with('/'));
+    }
     let (mut d, mut p) = (String::new(), String::new());
-    names::lower_into(&mut d, &dir.to_string_lossy());
-    names::lower_into(&mut p, &path.to_string_lossy());
+    names::lower_into(&mut d, &dir);
+    names::lower_into(&mut p, &path);
     let d = d.replace('/', "\\");
     let d = d.trim_end_matches('\\');
     p.replace('/', "\\").strip_prefix(d).is_some_and(|rest| rest.len() > 1 && rest.starts_with('\\'))
@@ -123,8 +129,11 @@ pub fn reveal_export(path: &str) -> Result<ActionResult, EngineMessage> {
     if !inside(&dir, &abs) || !abs.is_file() {
         return Err(not_found());
     }
-    let wide: Vec<u16> = abs.to_string_lossy().encode_utf16().collect();
-    Ok(match sys::reveal(&wide) {
+    #[cfg(windows)]
+    let target: Vec<u16> = abs.to_string_lossy().encode_utf16().collect();
+    #[cfg(not(windows))]
+    let target = abs;
+    Ok(match sys::reveal(&target) {
         Ok(()) => ActionResult::done(),
         Err(e) => ActionResult::fail(e),
     })
@@ -161,5 +170,16 @@ mod tests {
         assert!(!inside(dir, Path::new(r"C:\Users\x\Downloads\TesseraFS2\a.csv")));
         assert!(!inside(dir, Path::new(r"C:\Users\x\Downloads\TesseraFS\..\a.csv")));
         assert!(!inside(dir, Path::new(r"C:\Windows\notepad.exe")));
+        // Linux: distingue mayúsculas y sólo `/` separa
+        let dir = Path::new("/home/ana/Descargas/TesseraFS");
+        assert!(inside(dir, Path::new("/home/ana/Descargas/TesseraFS/a.csv")));
+        assert!(inside(dir, Path::new("/home/ana/Descargas/TesseraFS/sub/a.csv")));
+        assert!(inside(Path::new("/home/ana/Descargas/TesseraFS/"), Path::new("/home/ana/Descargas/TesseraFS/a.csv")));
+        assert!(!inside(dir, Path::new("/home/ana/descargas/tesserafs/a.csv")));
+        assert!(!inside(dir, Path::new("/home/ana/Descargas/TesseraFS")));
+        assert!(!inside(dir, Path::new("/home/ana/Descargas/TesseraFS/")));
+        assert!(!inside(dir, Path::new("/home/ana/Descargas/TesseraFS2/a.csv")));
+        assert!(!inside(dir, Path::new("/home/ana/Descargas/TesseraFS/../a.csv")));
+        assert!(!inside(dir, Path::new("/etc/passwd")));
     }
 }

@@ -4,7 +4,7 @@
 
 **Mira tu disco como un mosaico. Encuentra lo que ocupa en segundos.**
 
-Analizador de espacio en disco para Windows, de código abierto, rápido y local.
+Analizador de espacio en disco para Windows y Linux, de código abierto, rápido y local.
 
 ![TesseraFS: mapa de teselas, árbol de carpetas y panel de detalle](docs/img/principal.png)
 
@@ -75,6 +75,7 @@ Sin compilar nada, `packages/ui/dist/index.html` abierto en el navegador es una 
 | [Filtros](docs/usuario/filtros.md) | [Motores de escaneo](docs/tecnica/motores.md) |
 | [Liberar espacio](docs/usuario/liberar-espacio.md) | [Interfaz y renderizado](docs/tecnica/interfaz.md) |
 | [Preguntas frecuentes](docs/usuario/preguntas-frecuentes.md) | [Contrato interfaz ↔ motor](docs/ARQUITECTURA.md) |
+| [TesseraFS en Linux](docs/usuario/linux.md) | |
 | | [Guía de desarrollo](docs/tecnica/desarrollo.md) |
 | | [Versiones y commits](docs/VERSIONES.md) · [Cambios](CHANGELOG.md) |
 

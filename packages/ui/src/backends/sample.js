@@ -61,6 +61,15 @@ const P = {
   fonts: { s: 'app', e: [['ttf',3,900*KB,1],['otf',1,500*KB,1]], d: ['Deleted'] },
 };
 P.sxs.e = P.sys.e;
+// Perfiles de Linux
+Object.assign(P, {
+  lsys: { s: 'sys', e: [['so',30,900*KB,1.6],['',12,300*KB,2],['py',8,20*KB,1.3],['mo',4,60*KB,1],['gz',3,40*KB,1.2],['png',3,30*KB,1.4],['ko',6,200*KB,1.4],['zst',3,150*KB,1.4]],
+    d: ['x86_64-linux-gnu','python3','perl5','gtk-3.0','locale','icons','doc','firmware','modules','kernel','drivers','gnome-shell','systemd','fonts','mime','man','dri','girepository-1.0','libreoffice','gstreamer-1.0'] },
+  deb: { s: 'cache', e: [['deb',1,6*MB,1.6]], d: ['partial'] },
+  journal: { s: 'cache', e: [['journal',1,64*MB,.6]], d: [] },
+  snap: { s: 'app', e: [['snap',1,180*MB,.9]], d: [] },
+  layer: { s: 'app', e: [['so',10,2*MB,1.6],['',20,400*KB,2],['py',6,12*KB,1.3],['js',6,40*KB,1.5],['gz',2,8*MB,1.4]], d: ['diff','usr','lib','bin','app','node_modules','site-packages','etc','var','opt'] },
+});
 
 function meanOf(prof) {
   if (prof._m) return prof._m;
@@ -164,6 +173,65 @@ function build() {
   F(root, 'rust', 1.3, P.dev, 3); F(root, '$Recycle.Bin', .6, P.user, 2); F(root, 'PerfLogs', .0001, P.cache, 0);
   return root;
 }
+// Equipo Linux de ejemplo: Ubuntu de un desarrollador, con Steam, Docker y modelos de IA (tamaños en GB)
+function buildLinux() {
+  N.length = 0; R = mulberry32(20261010);
+  const root = dir(null, '/');
+  const sub = (p, nm) => p.kids.find(k => k.name === nm) || dir(p, nm); // la carpeta, sin duplicarla
+  const usr = sub(root, 'usr'), lib = sub(usr, 'lib');
+  F(lib, 'x86_64-linux-gnu', 6.4, P.lsys, 3); F(lib, 'modules', 1.9, P.lsys, 3); F(lib, 'firmware', 1.1, P.lsys, 2); F(lib, 'python3', .8, P.lsys, 3);
+  F(usr, 'share', 4.6, P.lsys, 4); F(usr, 'bin', .9, P.lsys, 0); F(usr, 'libexec', .3, P.lsys, 2);
+  const blobs = sub(sub(sub(sub(sub(usr, 'share'), 'ollama'), '.ollama'), 'models'), 'blobs');
+  [4.7, 4.1, 2.2, 1.6].forEach(g => file(blobs, 'sha256-' + hex(64), g * GB, rtime(3)));
+  F(sub(usr, 'local'), 'lib', .4, P.lsys, 2);
+
+  const v = sub(root, 'var'), vlib = sub(v, 'lib'), cache = sub(v, 'cache');
+  F(sub(cache, 'apt'), 'archives', 1.8, P.deb, 1); F(cache, 'fontconfig', .05, P.cache, 1);
+  F(sub(v, 'log'), 'journal', 2.4, P.journal, 0); fill(sub(v, 'log'), .2 * GB, P.cache, 1);
+  const docker = sub(vlib, 'docker'); F(docker, 'overlay2', 16.8, P.layer, 4); F(docker, 'volumes', 2.3, P.cache, 2); F(docker, 'buildkit', 1.4, P.cache, 2);
+  F(sub(vlib, 'snapd'), 'snaps', 3.1, P.snap, 0); F(vlib, 'flatpak', 4.2, P.lsys, 4);
+  F(sub(vlib, 'systemd'), 'coredump', 1.1, P.cache, 0); F(vlib, 'apt', .2, P.cache, 2); F(vlib, 'dpkg', .1, P.cache, 1);
+
+  const home = sub(root, 'home'), me = sub(home, 'usuario'), hc = sub(me, '.cache');
+  F(hc, 'pip', 1.4, P.cache, 2); F(hc, 'thumbnails', .6, P.cache, 1); F(hc, 'JetBrains', 1.9, P.cache, 3); F(hc, 'huggingface', 2.7, P.cache, 3);
+  F(sub(sub(sub(hc, 'mozilla'), 'firefox'), 'x1ab2cd3.default-release'), 'cache2', .9, P.cache, 2);
+  F(sub(sub(hc, 'google-chrome'), 'Default'), 'Cache', 1.2, P.cache, 1);
+  const share = sub(sub(me, '.local'), 'share');
+  const common = sub(sub(sub(share, 'Steam'), 'steamapps'), 'common');
+  F(common, 'Cities Skylines II', 18.2, P.game, 4); F(common, 'Hades II', 8.4, P.game, 4); F(common, 'Proton 9.0', 1.2, P.app, 3);
+  F(sub(sub(share, 'Steam'), 'steamapps'), 'shadercache', .7, P.cache, 2);
+  const trash = sub(share, 'Trash'); F(trash, 'files', 2.3, P.user, 2); F(trash, 'info', .001, P.cache, 0);
+  F(sub(share, 'containers'), 'storage', 3.4, P.layer, 4);
+  const imgs = sub(sub(share, 'gnome-boxes'), 'images'); file(imgs, 'fedora-42.qcow2', 12.4 * GB); file(imgs, 'debian-13.qcow2', 6.8 * GB);
+  F(me, '.npm', 1.1, P.cache, 3); F(sub(me, '.cargo'), 'registry', 1.6, P.dev, 3); F(me, '.rustup', 1.4, P.dev, 3);
+  F(me, 'Descargas', 7.9, P.user, 2); F(me, 'Documentos', 3.4, P.user, 3); F(me, 'Imágenes', 4.0, P.user, 3); F(me, 'Vídeos', 2.6, P.user, 2);
+  const pr = sub(me, 'proyectos');
+  const lam = sub(pr, 'lamina-rs'), tgt = sub(lam, 'target'); file(tgt, 'CACHEDIR.TAG', 177);
+  F(tgt, 'debug', 9.8, P.dev, 4); F(tgt, 'release', 7.1, P.dev, 4); F(lam, '.git', 2.1, P.git, 2); F(lam, 'src', .02, P.rs, 2);
+  const web = sub(pr, 'tessera-web'); F(web, 'node_modules', 2.3, P.web, 5); F(web, 'src', .2, P.web, 3);
+  const notas = sub(pr, 'notas-ia'); F(notas, '.venv', 1.8, P.py, 5); F(notas, 'datos', .3, P.user, 2);
+
+  F(sub(root, 'opt'), 'JetBrains', 2.1, P.app, 3); F(sub(root, 'opt'), 'google', .4, P.app, 3);
+  const snaps = sub(sub(root, 'timeshift'), 'snapshots');
+  ['2026-09-12_09-00-01', '2026-09-26_09-00-01', '2026-10-08_09-00-01'].forEach((d, i) => F(snaps, d, [4.8, 2.1, 1.6][i], P.lsys, 3));
+  const boot = sub(root, 'boot'); file(boot, 'vmlinuz-6.14.0-33-generic', 15 * MB); file(boot, 'initrd.img-6.14.0-33-generic', 72 * MB);
+  file(boot, 'vmlinuz-6.11.0-29-generic', 14 * MB); file(boot, 'initrd.img-6.11.0-29-generic', 68 * MB);
+  file(root, 'swap.img', 4 * GB, T1 - 3600); F(root, 'tmp', .4, P.cache, 2); F(root, 'etc', .03, P.cache, 2);
+  sub(root, 'proc'); sub(root, 'sys'); sub(root, 'dev'); sub(root, 'run');
+  return root;
+}
+function postProcessLinux(root) {
+  for (const n of N) if (n.name.startsWith('.')) n.hidden = true;
+  const at = (...names) => names.reduce((p, nm) => p.kids.find(k => k.name === nm) || dir(p, nm), root);
+  const first = N.length, me = ['home', 'usuario'], t = d => T1 - d * 86400;
+  const twice = (name, size, mt, ...folders) => folders.forEach(([p, nm]) => file(p, nm || name, size, mt));
+  twice('ubuntu-24.04.3-desktop-amd64.iso', 6.1 * GB, t(40), [at(...me, 'Descargas')], [at(...me, 'Documentos', 'Instaladores')]);
+  twice('Proyecto final.zip', 640 * MB, t(75), [at(...me, 'Descargas')], [at(...me, 'Documentos')]);
+  [3.4, 4.1, 2.9].forEach((m, i) => twice(`IMG_20${41 + i}.jpg`, m * MB + i * 4093, t(300 - i * 9), [at(...me, 'Imágenes', '2025')], [at(...me, 'Imágenes', 'Importado del móvil')]));
+  file(at(...me, 'Descargas'), 'tesserafs_0.9.0_amd64.AppImage', 92 * MB, t(1));
+  file(at(...me, 'Descargas'), 'code_1.104.0-1758_amd64.deb', 108 * MB, t(30));
+  for (let i = first; i < N.length; i++) N[i].copy = true;
+}
 function walk(n, f) { const st = [n]; while (st.length) { const x = st.pop(); f(x); if (x.isDir) for (const k of x.kids) st.push(k); } }
 const HIDDEN = new Set(['ProgramData', 'Recovery', 'System Volume Information', '$Recycle.Bin', 'AppData', '.git', 'PerfLogs', 'pagefile.sys', 'swapfile.sys', 'DumpStack.log']);
 function postProcess(root) {
@@ -228,4 +296,9 @@ function aggregate() {
   for (const n of N) if (n.isDir) { n.kids.sort((a, b) => b.size - a.size); n.mk = n.kids.filter(k => k.size > 0); }
 }
 
-export function buildSample() { const root = build(); postProcess(root); aggregate(); return { N, root }; }
+/** Árbol de ejemplo: un Windows (por defecto) o un Ubuntu (`linux`). */
+export function buildSample(os = 'windows') {
+  const root = os === 'linux' ? buildLinux() : build();
+  if (os === 'linux') postProcessLinux(root); else postProcess(root);
+  aggregate(); return { N, root };
+}

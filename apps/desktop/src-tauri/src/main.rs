@@ -7,11 +7,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Manager, State, WebviewWindowBuilder};
+#[cfg(windows)]
+use tauri::Manager;
+use tauri::{AppHandle, State, WebviewWindowBuilder};
 use tessera_core::{
     export, msg, ops, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult, ElevationInfo, EngineChoice,
     EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, RefreshResult, RescanResult, Scan, ScanOptions, ScanProgress, ScanResult,
-    SearchResponse, SortKey, VolumeInfo,
+    SearchResponse, SortKey, SystemInfo, VolumeInfo,
 };
 
 type Res<T> = Result<T, EngineMessage>;
@@ -66,6 +68,12 @@ fn check(s: &Scan, id: u32) -> Res<()> {
     } else {
         Err(msg::invalid_node(id))
     }
+}
+
+/// Sistema, separador de rutas y acciones disponibles (la interfaz oculta las demás).
+#[tauri::command]
+fn system() -> SystemInfo {
+    tessera_core::system_info()
 }
 
 #[tauri::command]
@@ -383,13 +391,21 @@ async fn relaunch_elevated(app: AppHandle) -> Res<()> {
 }
 
 fn main() {
+    // WebKitGTK con NVIDIA o Wayland deja a veces la ventana en blanco con el renderizador DMA-BUF
+    // (documentado por Tauri y WebKitGTK); se desactiva salvo que el usuario diga otra cosa.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
     tauri::Builder::default()
         .manage(Arc::new(AppState::default()))
         .setup(|app| {
+            let cfg = app.config().app.windows.first().cloned().ok_or("Missing window configuration")?;
+            #[cfg_attr(not(windows), allow(unused_mut))]
+            let mut b = WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
             // La ventana se crea aquí para separar los datos de WebView2 del proceso elevado:
             // un mismo directorio no se puede compartir entre niveles de integridad distintos.
-            let cfg = app.config().app.windows.first().cloned().ok_or("Missing window configuration")?;
-            let mut b = WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
+            #[cfg(windows)]
             if sys::elevation().elevated {
                 b = b.data_directory(app.path().app_local_data_dir()?.join("EBWebView-admin"));
             }
@@ -397,6 +413,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            system,
             volumes,
             scan,
             rescan,

@@ -63,6 +63,7 @@ Tipos en [`packages/protocol/src/types.ts`](../packages/protocol/src/types.ts). 
 | Volver a escanear una carpeta | `rescan {id, onProgress: Channel<ScanProgress>}` | `POST /api/rescan` `{id}` + eventos SSE del escaneo | `RescanResult`; se cancela con `cancel_scan` / `POST /api/cancel` |
 | Actualizar con el diario USN | `refresh {onProgress: Channel<ScanProgress>}` | `POST /api/refresh` (siempre `refresh.unavailable` en la portable) | `RefreshResult` |
 | Elevación | `elevation` / `relaunch_elevated` | `GET /api/elevation` / `POST /api/relaunch-elevated` | `ElevationInfo` |
+| Sistema | `system` | `GET /api/system` (siempre Windows en la portable) | `SystemInfo {os, sep, actions}`: la interfaz adapta rutas, textos y acciones (en Linux no hay `properties` ni `freeUp`) |
 
 Historial: cada resumen son dos archivos en `%LOCALAPPDATA%\TesseraFS\history`, con el mismo formato en las dos ediciones:
 

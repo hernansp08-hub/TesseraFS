@@ -12,6 +12,14 @@
 
 El CLI de Tauri no hace falta instalarlo aparte: se usa con `bunx tauri` desde `apps/desktop`.
 
+**En Linux** (o en WSL) hacen falta además las bibliotecas de WebKitGTK y un compilador de C. En Ubuntu o Debian:
+
+```bash
+sudo apt install build-essential curl wget file pkg-config libxdo-dev libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+En WSL, compila con las fuentes de Windows pero con otra carpeta de compilación, para no mezclar los binarios de los dos sistemas: `CARGO_TARGET_DIR=~/tessera-target cargo test --workspace`. `bun run package` en Linux genera la AppImage, el `.deb` y el `.tar.gz` de la línea de comandos. La interfaz se puede probar como en Linux sin compilar nada: la demo con `#os=linux` simula un Ubuntu.
+
 ## Primeros pasos
 
 ```bash

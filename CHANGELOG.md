@@ -4,6 +4,14 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+### Linux
+- **Edición de escritorio para Linux:** AppImage, paquete `.deb` y `tessera-cli` para x86_64, con la misma interfaz, mapa, filtros, duplicados, historial y exportación que en Windows.
+- Motor de recorrido para Linux: en paralelo, sin seguir enlaces simbólicos, contando una vez los enlaces duros y sin cruzar a otros sistemas de archivos montados (avisa de cuáles quedaron fuera).
+- Unidades como puntos de montaje, papelera del escritorio, «Mostrar en el gestor de archivos» y textos adaptados al sistema en los cinco idiomas.
+- «Liberar espacio» con reglas de Linux: `~/.cache`, paquetes de APT/DNF/pacman/zypper, journald, volcados de fallos, Docker y Podman, Flatpak, versiones de snap, máquinas virtuales, Timeshift, papelera y archivo de intercambio; y «¿Qué es esto?» para las carpetas del sistema.
+- La demo simula un Ubuntu con `#os=linux`.
+- Guía nueva: docs/usuario/linux.md.
+
 ## [0.8.1] - 2026-10-11
 
 ### Corregido

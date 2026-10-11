@@ -1,14 +1,15 @@
 //! tessera-core: motor de TesseraFS.
 //!
 //! - [`scan::scan`] escanea una ruta con el motor MFT (NTFS + administrador) o con el
-//!   recorrido de directorios, y devuelve un [`tree::Tree`] compacto.
+//!   recorrido de directorios (en Linux, [`walk_unix`]), y devuelve un [`tree::Tree`] compacto.
 //! - [`slice::encode_slice`], [`ops::children`], [`ops::search`] y [`ops::ext_stats`]
 //!   responden a la interfaz según el contrato de `docs/ARQUITECTURA.md`.
 //! - [`dup::duplicates`] busca archivos duplicados (tamaño, primeros 64 KiB y BLAKE3 completo).
 //! - [`history::History`] guarda resúmenes de los escaneos y compara el escaneo cargado con uno de ellos.
-//! - [`export`] guarda los archivos exportados en Descargas\TesseraFS.
+//! - [`export`] guarda los archivos exportados en Descargas\TesseraFS (Linux: descargas de XDG).
 //! - [`rescan`] vuelve a escanear una carpeta del árbol cargado y actualiza con el diario USN ([`usn`]).
-//! - [`action`] abre, muestra, envía a la papelera o libera espacio de OneDrive ([`freeup`]).
+//! - [`action`] abre, muestra, envía a la papelera o libera espacio de OneDrive ([`freeup`]); en Linux,
+//!   sólo abrir, mostrar y papelera ([`system_info`]).
 
 pub mod attrs;
 pub mod build;
@@ -20,6 +21,8 @@ pub mod mft;
 pub mod msg;
 pub mod names;
 pub mod ops;
+#[cfg(any(unix, test))]
+pub mod posix;
 pub mod query;
 pub mod rescan;
 pub mod scan;
@@ -30,6 +33,8 @@ pub mod types;
 pub mod usn;
 #[cfg(windows)]
 pub mod walk;
+#[cfg(unix)]
+pub mod walk_unix;
 
 pub use dup::duplicates;
 pub use history::{Comparison, History};
@@ -38,23 +43,60 @@ pub use scan::{scan, Progress, Scan, ScanOptions};
 pub use tree::Tree;
 pub use types::*;
 
+/// Ruta exacta de un nodo para las acciones del sistema: UTF-16 sin terminador en Windows (admite
+/// suplentes sueltos y nombres con punto o espacio final), `PathBuf` en el resto. En Linux los nombres
+/// que no son UTF-8 se guardan con pérdida (U+FFFD), así que las acciones sobre ellos fallan con
+/// `action.failed` (limitación conocida).
+#[cfg(windows)]
+pub type NativePath = Vec<u16>;
+#[cfg(not(windows))]
+pub type NativePath = std::path::PathBuf;
+
+/// [`NativePath`] del nodo `id`.
+#[cfg(windows)]
+pub fn native_path(tree: &Tree, id: u32) -> NativePath {
+    tree.path_wide(id)
+}
+
+/// [`NativePath`] del nodo `id`.
+#[cfg(not(windows))]
+pub fn native_path(tree: &Tree, id: u32) -> NativePath {
+    std::path::PathBuf::from(tree.path(id))
+}
+
+/// La plataforma para la interfaz: sistema, separador de rutas y acciones disponibles (Windows: open,
+/// reveal, properties, trash y freeUp; Linux: open, reveal y trash).
+pub fn system_info() -> SystemInfo {
+    use ActionKind::*;
+    if cfg!(windows) {
+        SystemInfo { os: Os::Windows, sep: "\\".into(), actions: vec![Open, Reveal, Properties, Trash, FreeUp] }
+    } else {
+        let os = if cfg!(target_os = "macos") { Os::Macos } else { Os::Linux };
+        SystemInfo { os, sep: "/".into(), actions: vec![Open, Reveal, Trash] }
+    }
+}
+
 /// Lo que una acción necesita del árbol: se toma bajo lectura y la acción corre después sin bloquearlo.
 pub enum ActionTarget {
-    /// Ruta exacta del nodo (UTF-16 sin terminador): open, reveal, properties y trash.
-    Path(Vec<u16>),
+    /// Ruta exacta del nodo ([`NativePath`]): open, reveal, properties y trash.
+    Path(NativePath),
     /// Archivos y carpetas de la nube bajo el nodo: freeUp.
     FreeUp(Vec<freeup::Candidate>),
 }
 
 /// Comprueba el nodo (`error.invalidNode`, `action.trashRoot`) y toma del árbol lo que la acción necesita.
+/// Las acciones que la plataforma no tiene (Linux: properties y freeUp) dan `error.unsupportedPlatform`.
 pub fn action_target(tree: &Tree, kind: ActionKind, id: u32) -> Result<ActionTarget, EngineMessage> {
     if !tree.live(id) {
         return Err(msg::invalid_node(id));
     }
+    if !system_info().actions.contains(&kind) {
+        return Err(msg::unsupported_platform());
+    }
     Ok(match kind {
         ActionKind::Trash if id == 0 => return Err(msg::trash_root()),
         ActionKind::FreeUp => ActionTarget::FreeUp(freeup::candidates(tree, id)),
-        _ => ActionTarget::Path(tree.path_wide(id)),
+        _ => ActionTarget::Path(native_path(tree, id)),
     })
 }
 

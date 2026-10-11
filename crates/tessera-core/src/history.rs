@@ -6,8 +6,9 @@
 //!   `parent` −1 y la ruta como nombre; cada nodo va después de su padre);
 //! - `<id>.json`: el [`HistoryEntry`], que se escribe después y «confirma» el resumen.
 //!
-//! El id es la fecha UTC del guardado (`YYYYMMDDTHHMMSSZ`) + `-` + FNV-1a de 32 bits de la ruta en
-//! minúsculas (UTF-8), en hex; si ya existe, se añade `-2`, `-3`…
+//! El id es la fecha UTC del guardado (`YYYYMMDDTHHMMSSZ`) + `-` + FNV-1a de 32 bits de la ruta (UTF-8;
+//! en minúsculas si es de Windows, tal cual en Linux, que distingue mayúsculas), en hex; si ya existe,
+//! se añade `-2`, `-3`…
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -74,22 +75,17 @@ impl Comparison {
 
 // ---------- Identificadores ----------
 
-fn lower(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    names::lower_into(&mut o, s);
-    o
-}
-
-/// Clave de una ruta raíz para compararla: minúsculas y sin barras finales ("C:\" = "c:").
+/// Clave de una ruta raíz para compararla: sin barras finales ("C:\" = "c:", "/home/ana/" =
+/// "/home/ana") y, si es de Windows, en minúsculas ([`names::path_key`]).
 fn root_key(path: &str) -> String {
-    let mut k = lower(path);
+    let mut k = names::path_key(path).into_owned();
     k.truncate(k.trim_end_matches(['\\', '/']).len());
     k
 }
 
-/// FNV-1a de 32 bits de la ruta en minúsculas (UTF-8).
+/// FNV-1a de 32 bits de la ruta (UTF-8): en minúsculas si es de Windows, tal cual si es de Linux.
 pub fn path_hash(path: &str) -> u32 {
-    lower(path).bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+    names::path_key(path).bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
 }
 
 /// Días desde 1970-01-01 → (año, mes, día) (algoritmo de H. Hinnant).
@@ -263,9 +259,10 @@ fn snap_path(nodes: &[SnapNode], mut i: usize) -> String {
         i = nodes[i].parent();
     }
     let mut s = nodes[0].name().to_string();
+    let sep = names::sep_of(&s);
     for name in chain.into_iter().rev() {
-        if !s.ends_with('\\') {
-            s.push('\\');
+        if !s.ends_with(sep) {
+            s.push(sep);
         }
         s.push_str(name);
     }
@@ -280,7 +277,8 @@ pub struct History {
 }
 
 impl History {
-    /// `TESSERA_HISTORY_DIR` si está definida; si no, `%LOCALAPPDATA%\TesseraFS\history`.
+    /// `TESSERA_HISTORY_DIR` si está definida; si no, `%LOCALAPPDATA%\TesseraFS\history` en Windows y
+    /// `$XDG_DATA_HOME/TesseraFS/history` (o `~/.local/share/TesseraFS/history`) en Linux.
     pub fn open() -> Result<History, EngineMessage> {
         let dir = match std::env::var_os("TESSERA_HISTORY_DIR").filter(|d| !d.is_empty()) {
             Some(d) => PathBuf::from(d),
@@ -355,7 +353,8 @@ impl History {
         }
     }
 
-    /// Retención: de los resúmenes de `path` (sin distinguir mayúsculas) deja los [`KEEP`] más recientes.
+    /// Retención: de los resúmenes de `path` (en Windows, sin distinguir mayúsculas) deja los [`KEEP`]
+    /// más recientes.
     fn prune(&self, path: &str) {
         let Ok(all) = self.list() else { return };
         let key = root_key(path);
@@ -469,20 +468,26 @@ impl History {
 
 // ---------- Comparación ----------
 
-/// Clave de emparejamiento: tipo + nombre en minúsculas.
-fn match_key(out: &mut String, dir: bool, name: &str) {
+/// Clave de emparejamiento: tipo + nombre (en minúsculas con `fold`).
+fn match_key(out: &mut String, dir: bool, name: &str, fold: bool) {
     out.clear();
     out.push(if dir { '/' } else { '|' });
-    names::lower_into(out, name);
+    if fold {
+        names::lower_into(out, name);
+    } else {
+        out.push_str(name);
+    }
 }
 
 /// Empareja cada nodo del resumen con uno del árbol (o [`NONE`]): raíz con raíz y, bajando, cada hijo
-/// de una carpeta emparejada con el hijo actual del mismo nombre (sin mayúsculas) y tipo. El índice
-/// (nombre → nodo) se crea sólo para las carpetas emparejadas que tienen hijos guardados, y de los
-/// hijos actuales sólo se miran los del tipo que falta (casi nunca hay que mirar los archivos pequeños).
+/// de una carpeta emparejada con el hijo actual del mismo nombre (sin mayúsculas en Windows; exacto en
+/// Linux, que las distingue) y tipo. El índice (nombre → nodo) se crea sólo para las carpetas
+/// emparejadas que tienen hijos guardados, y de los hijos actuales sólo se miran los del tipo que falta
+/// (casi nunca hay que mirar los archivos pequeños).
 fn match_nodes(t: &Tree, nodes: &[SnapNode]) -> Vec<u32> {
     const END: u32 = u32::MAX;
     let n = nodes.len();
+    let fold = !names::is_posix(t.root_path());
     // Hijos de cada nodo del resumen: primer hijo y siguiente hermano (en orden del resumen)
     let (mut first, mut next) = (vec![END; n], vec![END; n]);
     for i in (1..n).rev() {
@@ -516,7 +521,7 @@ fn match_nodes(t: &Tree, nodes: &[SnapNode]) -> Vec<u32> {
             } else {
                 want_files += 1;
             }
-            match_key(&mut key, node.is_dir(), node.name());
+            match_key(&mut key, node.is_dir(), node.name(), fold);
             same[c as usize] = index.insert(key.clone(), c).unwrap_or(END);
         }
         let kids = t.kids(m[s]);
@@ -529,7 +534,7 @@ fn match_nodes(t: &Tree, nodes: &[SnapNode]) -> Vec<u32> {
             if if dir { want_dirs == 0 } else { want_files == 0 } {
                 continue;
             }
-            match_key(&mut key, dir, &t.name(k));
+            match_key(&mut key, dir, &t.name(k), fold);
             let Some(head) = index.get_mut(key.as_str()) else { continue };
             let c = *head as usize;
             if same[c] == END {
@@ -613,7 +618,7 @@ fn changes(t: &Tree, c: &Comparison, limit: usize) -> (Vec<ChangeRow>, Vec<Chang
 /// Los `limit` primeros por `key` desc, desempate por ruta (orden de texto, como el motor Bun). Las
 /// rutas se calculan sólo para los que pueden entrar (los que superan el corte y los empatados con él).
 fn top_by<K: Ord + Copy>(mut v: Vec<(K, usize)>, limit: usize, path: impl Fn(usize) -> String) -> Vec<(K, usize, String)> {
-    v.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    v.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
     if v.len() > limit {
         let cut = v[limit - 1].0;
         let end = v.partition_point(|x| x.0 >= cut);
@@ -764,6 +769,30 @@ mod tests {
         assert!(m[1] != NONE && m[2] != NONE && m[1] != m[2], "{m:?}");
         assert!(t.is_dir(m[1]) && t.is_dir(m[2]) && !t.is_dir(m[3]));
         assert_eq!(m[4], NONE);
+    }
+
+    /// Rutas de Linux: distinguen mayúsculas (id, otra raíz y emparejamiento) y usan `/`.
+    #[test]
+    fn posix_paths() {
+        use crate::build::{build, RawTree};
+        use crate::types::flag;
+        assert_ne!(path_hash("/home/Ana"), path_hash("/home/ana"));
+        let fnv = |s: &str| s.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
+        assert_eq!(path_hash("/home/Ana"), fnv("/home/Ana"));
+        assert_eq!(path_hash("C:\\Users"), fnv("c:\\users"));
+        assert_eq!(entry_id(1_791_654_312, "/srv/Datos"), format!("20261010T174512Z-{:08x}", path_hash("/srv/Datos")));
+        assert_eq!((root_key("/home/ana/"), root_key("/"), root_key("/Home")), ("/home/ana".to_string(), String::new(), "/Home".to_string()));
+        let mut r = RawTree::with_capacity(4);
+        let root = r.push(NONE, b"", 0, 0, 0, flag::DIR);
+        r.push(root, b"x", 0, 0, 0, flag::DIR);
+        r.push(root, b"X", 0, 0, 0, flag::DIR);
+        r.root = root;
+        let t = build(r, "/srv".into(), &[]).unwrap();
+        let node = |p: f64, name: &str| SnapNode(p, name.into(), 1.0, 0.0, IgnoredAny, 0.0, 0.0, IgnoredAny);
+        let nodes = [node(-1.0, "/srv"), node(0.0, "X"), node(0.0, "x"), node(1.0, "y")];
+        let m = match_nodes(&t, &nodes);
+        assert_eq!((t.name(m[1]), t.name(m[2]), m[3]), ("X".into(), "x".into(), NONE));
+        assert_eq!(snap_path(&nodes, 3), "/srv/X/y");
     }
 
     #[test]

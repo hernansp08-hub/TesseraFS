@@ -90,6 +90,19 @@ Cada registro pasa por estos pasos:
 > [!NOTE]
 > Es una implementación propia a partir de documentación pública (Linux-NTFS, libyal, MS-FSCC); no deriva de código GPL. El parser se prueba con registros sintéticos: fixups correctos y dañados, nombres DOS, registros borrados, extensiones fuera de orden, enlaces duros, compresión, WOF, junctions y huérfanos.
 
+## Motor de recorrido en Linux
+
+`walk_unix.rs` produce el mismo `RawTree` que el recorrido de Windows, así que árbol, búsqueda, slice, duplicados, historial, `rescan` y línea de comandos no cambian:
+
+- **Llamadas:** `openat` relativo a la carpeta padre, `getdents64` (búfer de 64 KiB) y `fstatat(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT)`, con la crate `libc` (ya estaba en el grafo de dependencias). Un 10 % más rápido que `std::fs::read_dir` con el mismo acumulador. En otros Unix, `fdopendir`/`readdir`.
+- **Descriptores:** como mucho la mitad de `RLIMIT_NOFILE` (entre 16 y 4096) carpetas padre abiertas a la vez; por encima, los hijos se abren por ruta completa.
+- **Tamaños y marcas:** `size` = `st_size`, `alloc` = `st_blocks × 512`. Oculto = nombre con punto; enlace simbólico = archivo con `REPARSE` (nunca se sigue); `SPARSE` si ocupa claramente menos que su tamaño; el mismo `(st_dev, st_ino)` con `st_nlink > 1` cuenta una vez (`HARDLINK` en los demás).
+- **Puntos de montaje:** se leen de `/proc/self/mountinfo` (nunca por `st_dev`, para recorrer los subvolúmenes de btrfs que no están montados aparte). Cada punto de montaje dentro de la carpeta queda como carpeta vacía con `DIR | REPARSE`; los que no son pseudo-sistemas (proc, sysfs, tmpfs, cgroup…) se avisan con `scan.otherMounts`.
+- **Sin MFT ni USN:** `auto` siempre recorre; `canRefresh` es falso.
+- **Rutas:** el estilo sale de la propia ruta (empieza por `/` → separador `/` y distinción de mayúsculas), así que el historial, la búsqueda `path:` y la exportación funcionan igual en los dos sistemas.
+
+En WSL (ext4, caché caliente, 16 hilos): `/` con 649.000 elementos en 0,25 s; `/usr` (59.000) en 0,06 s. Las unidades de Windows montadas por 9p (`/mnt/c`) van unas cien veces más lentas.
+
 ## Motor de recorrido
 
 Funciona sin administrador y con cualquier sistema de archivos. La clave es usar **`NtQueryDirectoryFile`** en lugar de `FindFirstFile`: una sola llamada devuelve por entrada el tamaño, el asignado, los atributos, la etiqueta de *reparse* y el id de archivo.
@@ -260,5 +273,4 @@ La selección por niveles gasta el presupuesto primero en lo que más se ve. El 
 
 - Saltar los registros libres con `$MFT:$BITMAP` (≈40 % menos de E/S).
 - Lectura de la MFT con E/S solapada y varios hilos en Bun.
-- Actualización en vivo con el diario USN (`FSCTL_READ_USN_JOURNAL`), sin volver a escanear.
 - Proceso auxiliar elevado y mínimo, en lugar de relanzar la app completa.

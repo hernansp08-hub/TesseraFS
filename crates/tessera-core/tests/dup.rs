@@ -1,5 +1,4 @@
-//! Pruebas de la búsqueda de duplicados sobre carpetas temporales creadas aquí mismo.
-#![cfg(windows)]
+//! Pruebas de la búsqueda de duplicados sobre carpetas temporales creadas aquí mismo (Windows y Linux).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -27,9 +26,13 @@ impl TempDir {
         std::fs::write(&p, data).unwrap();
         p
     }
-    /// Nombre con punto final: sólo se puede crear (y abrir) con `\\?\`.
+    /// Nombre con punto final: en Windows sólo se puede crear (y abrir) con `\\?\`.
     fn odd(&self) -> PathBuf {
-        PathBuf::from(format!(r"\\?\{}\copia.", self.0.join("x").display()))
+        if cfg!(windows) {
+            PathBuf::from(format!(r"\\?\{}\copia.", self.0.join("x").display()))
+        } else {
+            self.0.join("x/copia.")
+        }
     }
 }
 impl Drop for TempDir {
@@ -85,9 +88,18 @@ fn run(p: &Path) -> tessera_core::Scan {
     scan(&p.to_string_lossy(), EngineChoice::Walk, &ScanOptions::default(), &|_| {}, &cancel).unwrap()
 }
 
+/// Ruta como la escribe el árbol: en Windows con `\` y sin distinguir mayúsculas; en Linux, tal cual.
+fn norm(p: &str) -> String {
+    if cfg!(windows) {
+        p.replace('/', "\\").to_lowercase()
+    } else {
+        p.to_string()
+    }
+}
+
 fn find(t: &Tree, path: &Path) -> u32 {
-    let want = path.to_string_lossy().replace('/', "\\").to_lowercase();
-    (0..t.len() as u32).find(|&i| t.path(i).to_lowercase() == want).unwrap_or_else(|| panic!("no está {want}"))
+    let want = norm(&path.to_string_lossy());
+    (0..t.len() as u32).find(|&i| norm(&t.path(i)) == want).unwrap_or_else(|| panic!("no está {want}"))
 }
 
 fn dups(t: &Tree, root: u32, min: u64, limit: u32) -> DupResult {
@@ -103,7 +115,7 @@ fn finds_groups_in_three_passes() {
     let d = fixture("dup");
     let s = run(&d.0);
     let t = &s.tree;
-    let p = |rel: &str| d.0.join(rel).to_string_lossy().replace('/', "\\");
+    let p = |rel: &str| d.0.join(rel).to_string_lossy().replace('/', std::path::MAIN_SEPARATOR_STR);
     // El enlace duro: uno de los dos nombres lleva la marca
     let (u, l) = (find(t, &d.0.join("unique.bin")), find(t, &d.0.join("e/unique-enlace.bin")));
     assert_eq!((t.flags(u) | t.flags(l)) & flag::HARDLINK, flag::HARDLINK);

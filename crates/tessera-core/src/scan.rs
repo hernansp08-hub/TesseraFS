@@ -81,7 +81,7 @@ impl Default for Progress {
 pub struct ScanOptions {
     /// Hilos del recorrido (0 = núcleos lógicos).
     pub threads: usize,
-    /// Búfer por hilo para `NtQueryDirectoryFile` (local; en red se usan 64 KiB).
+    /// Búfer por hilo para `NtQueryDirectoryFile` (local; en red se usan 64 KiB) o, en Linux, `getdents64`.
     pub buf_size: usize,
     /// Intervalo de progreso.
     pub tick: Duration,
@@ -135,6 +135,7 @@ pub fn ticking<T>(prog: &Progress, tick: Duration, on_progress: &(dyn Fn(ScanPro
 }
 
 /// Normaliza a ruta absoluta: "C:" → "C:\\", sin barra final salvo en la raíz.
+#[cfg(windows)]
 pub fn normalize_path(path: &str) -> Result<String, EngineMessage> {
     let p = path.trim().trim_matches('"');
     if p.is_empty() {
@@ -159,6 +160,29 @@ pub fn normalize_path(path: &str) -> Result<String, EngineMessage> {
     Ok(s)
 }
 
+/// Normaliza a ruta absoluta POSIX (relativa al directorio actual si no lo es): sin `.`, sin barras
+/// repetidas ni finales salvo en `/` y con `..` resuelto como texto (como `GetFullPathNameW` en Windows).
+/// No resuelve enlaces simbólicos: el árbol muestra la ruta tal como se pidió.
+#[cfg(not(windows))]
+pub fn normalize_path(path: &str) -> Result<String, EngineMessage> {
+    let p = path.trim().trim_matches('"');
+    if p.is_empty() {
+        return Err(msg::invalid_path(path));
+    }
+    let abs = std::path::absolute(p).map_err(|_| msg::invalid_path(path))?;
+    let abs = abs.to_str().ok_or_else(|| msg::invalid_path(path))?;
+    Ok(crate::posix::lexical(abs))
+}
+
+/// La ruta escaneada es la raíz del volumen.
+fn is_volume_root(root: &str, vol_root: &str) -> bool {
+    if cfg!(windows) {
+        root.eq_ignore_ascii_case(vol_root.trim_end_matches('\\')) || root.eq_ignore_ascii_case(vol_root)
+    } else {
+        root == vol_root
+    }
+}
+
 fn drive_letter(root: &str) -> Option<char> {
     let b = root.as_bytes();
     (b.len() == 3 && b[1] == b':' && b[2] == b'\\' && b[0].is_ascii_alphabetic()).then(|| b[0].to_ascii_uppercase() as char)
@@ -179,12 +203,13 @@ pub fn scan(
     let vol_root = sys::volume_root_of(&root).unwrap_or_else(|| root.clone());
     let volume: Option<VolumeInfo> = sys::volume_info(&vol_root);
     let fs = volume.as_ref().map(|v| v.fs.to_ascii_uppercase()).unwrap_or_default();
-    let whole_volume = root.eq_ignore_ascii_case(vol_root.trim_end_matches('\\')) || root.eq_ignore_ascii_case(&vol_root);
+    let whole_volume = is_volume_root(&root, &vol_root);
     let mut warnings: Vec<EngineMessage> = Vec::new();
+    // Fuera de Windows no hay MFT: `auto` es siempre el recorrido y `mft` avisa (ver `run_engines`)
     let want_mft = match choice {
         EngineChoice::Walk => false,
         EngineChoice::Mft => true,
-        EngineChoice::Auto => whole_volume,
+        EngineChoice::Auto => whole_volume && cfg!(windows),
     };
     let threads = if opts.threads == 0 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) } else { opts.threads };
     // Diario USN: la posición se toma al empezar, así lo que cambie durante el escaneo también lo verá
@@ -278,10 +303,15 @@ fn run_engines(
     warnings: &mut Vec<EngineMessage>,
 ) -> Result<(Tree, Engine, bool), EngineMessage> {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().map_err(|e| e.to_string())?;
+    #[cfg(not(windows))]
+    let _ = whole_volume;
     if want_mft {
         let letter = drive_letter(vol_root);
-        // Primero lo que no funcionaría ni con administrador
-        if sys::is_network(vol_root) {
+        // Primero lo que no funcionaría ni con administrador (fuera de Windows no hay MFT)
+        if !cfg!(windows) {
+            // Con el nombre como lo escribe Linux (ext4, btrfs…)
+            warnings.push(msg::mft_unsupported_fs(&if fs.is_empty() { "?".to_string() } else { fs.to_ascii_lowercase() }));
+        } else if sys::is_network(vol_root) {
             warnings.push(msg::mft_network_path());
         } else if fs != "NTFS" || letter.is_none() {
             warnings.push(msg::mft_unsupported_fs(if fs.is_empty() { "?" } else { fs }));
@@ -359,7 +389,40 @@ fn walk_engine(
     Ok((out.raw, out.frn_complete))
 }
 
-#[cfg(not(windows))]
+/// Opciones del recorrido de Unix. Para `getdents64` basta un búfer de 64 KiB (medido: de 32 KiB a 1 MiB
+/// no cambia el tiempo) y así no se llena 1 MiB por hilo en cada recorrido.
+#[cfg(unix)]
+pub(crate) fn walk_options(threads: usize, opts: &ScanOptions) -> crate::walk_unix::WalkOptions {
+    crate::walk_unix::WalkOptions { threads, buf_size: opts.buf_size.min(64 << 10), fd_budget: 0 }
+}
+
+/// Recorrido de Unix: sin FRN ni diario; avisa de los sistemas de archivos montados que no recorrió.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn walk_engine(
+    root: &str,
+    _fs: &str,
+    _want_frn: bool,
+    threads: usize,
+    opts: &ScanOptions,
+    prog: &Progress,
+    cancel: &AtomicBool,
+    warnings: &mut Vec<EngineMessage>,
+) -> Result<(RawTree, bool), EngineMessage> {
+    let out = crate::walk_unix::walk(root, &walk_options(threads, opts), prog, cancel)?;
+    if out.denied > 0 {
+        warnings.push(msg::access_denied(out.denied, &out.denied_samples));
+    }
+    if out.errors > 0 {
+        warnings.push(msg::read_errors(out.errors, &out.error_samples));
+    }
+    if !out.other_mounts.is_empty() {
+        warnings.push(msg::other_mounts(out.other_mounts.len() as u64, &out.other_mounts));
+    }
+    Ok((out.raw, false))
+}
+
+#[cfg(not(any(windows, unix)))]
 #[allow(clippy::too_many_arguments)]
 fn walk_engine(
     _root: &str,
@@ -378,6 +441,7 @@ fn walk_engine(
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn normalizes() {
         assert_eq!(normalize_path("c:").unwrap(), "C:\\");
@@ -387,5 +451,17 @@ mod tests {
         assert_eq!(drive_letter("D:\\"), Some('D'));
         assert_eq!(drive_letter("\\\\srv\\x\\"), None);
         assert_eq!(normalize_path("  ").unwrap_err().code, "error.invalidPath");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn normalizes_posix() {
+        assert_eq!(normalize_path("/").unwrap(), "/");
+        assert_eq!(normalize_path(" /home//ana/./docs/ ").unwrap(), "/home/ana/docs");
+        assert_eq!(normalize_path("\"/srv/Mis datos/..\"").unwrap(), "/srv");
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(normalize_path("relativa").unwrap(), cwd.join("relativa").to_string_lossy());
+        assert_eq!(normalize_path("  ").unwrap_err().code, "error.invalidPath");
+        assert!(is_volume_root("/", "/") && !is_volume_root("/Home", "/home"));
     }
 }

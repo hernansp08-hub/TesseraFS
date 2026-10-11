@@ -127,6 +127,15 @@ fn history_cmd(args: &[String]) {
     }
 }
 
+/// Marca final de una carpeta en el estilo de su ruta: `\` (Windows) o `/` (Linux); nada en un archivo.
+pub(crate) fn dir_mark(is_dir: bool, path: &str) -> &'static str {
+    match (is_dir, tessera_core::names::sep_of(path)) {
+        (false, _) => "",
+        (true, '/') => "/",
+        _ => "\\",
+    }
+}
+
 fn signed(d: i64) -> String {
     format!("{}{}", if d < 0 { "-" } else { "+" }, human(d.unsigned_abs()))
 }
@@ -138,7 +147,7 @@ fn change_line(c: &ChangeRow) -> String {
         Some(p) => format!("antes {}", human(p)),
         None => "nuevo".into(),
     };
-    format!("  {:>12}  {}{}  ({what}, ahora {})", signed(d), c.row.path, if n.is_dir { "\\" } else { "" }, human(n.size))
+    format!("  {:>12}  {}{}  ({what}, ahora {})", signed(d), c.row.path, dir_mark(n.is_dir, &c.row.path), human(n.size))
 }
 
 fn main() {
@@ -284,7 +293,9 @@ fn main() {
     println!("Tiempo:    {:.3} s", res.elapsed_ms as f64 / 1000.0);
     println!("Memoria:   ≈{} en el árbol ({} nodos, {} B de nombres, {} extensiones)", human(t.memory_bytes() as u64), sep(t.len() as u64), sep(t.names_len() as u64), t.exts().len());
     if let Some((ws, peak, commit)) = tessera_core::sys::process_memory() {
-        println!("Proceso:   {} en uso · pico {} · commit pico {}", human(ws), human(peak), human(commit));
+        // En Linux el tercer valor es el pico de memoria virtual (VmPeak), no hay «commit»
+        let third = if cfg!(windows) { "commit pico" } else { "virtual pico" };
+        println!("Proceso:   {} en uso · pico {} · {third} {}", human(ws), human(peak), human(commit));
     }
     for w in &res.warnings {
         println!("Aviso:     [{}] {}", w.code, w.message);
@@ -309,7 +320,7 @@ fn main() {
             }
             println!("  Ya no está ({}):", r.removed.len());
             for x in r.removed.iter().take(top.max(5)) {
-                println!("  {:>12}  {}{}", human(x.size), x.path, if x.is_dir { "\\" } else { "" });
+                println!("  {:>12}  {}{}", human(x.size), x.path, dir_mark(x.is_dir, &x.path));
             }
             if let Some(f) = &compare_out {
                 std::fs::write(f, serde_json::to_vec(&r).unwrap()).expect("escribir comparación");
@@ -364,7 +375,7 @@ Hijos de la raíz ({}):", r.total);
                 _ if compared => " (desconocido)".into(),
                 _ => String::new(),
             };
-            println!("  {:>12} {:>10} arch {:>9} carp  {}{}{change}", human(row.size), sep(row.files as u64), sep(row.dirs as u64), row.name, if row.is_dir { "\\" } else { "" });
+            println!("  {:>12} {:>10} arch {:>9} carp  {}{}{change}", human(row.size), sep(row.files as u64), sep(row.dirs as u64), row.name, dir_mark(row.is_dir, t.root_path()));
         }
     }
     if top > 0 {
