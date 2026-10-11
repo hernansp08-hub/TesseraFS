@@ -35,7 +35,7 @@ writeFileSync(join(W, `${ID}.installer.yaml`), yml('installer', [
 writeFileSync(join(W, `${ID}.locale.en-US.yaml`), yml('defaultLocale', [
   'PackageLocale: en-US', 'Publisher: TesseraFS', `PublisherUrl: https://github.com/${REPO}`, 'PackageName: TesseraFS',
   `PackageUrl: https://github.com/${REPO}`, 'License: MIT OR Apache-2.0', `LicenseUrl: https://github.com/${REPO}#licencia`,
-  `ShortDescription: ${DESC}`, 'Moniker: tesserafs', 'Tags:', '- disk-usage', '- disk-space', '- treemap', '- duplicates', '- cleanup',
+  `ShortDescription: '${DESC}'`, 'Moniker: tesserafs', 'Tags:', '- disk-usage', '- disk-space', '- treemap', '- duplicates', '- cleanup',
   `ReleaseNotesUrl: https://github.com/${REPO}/releases/tag/${tag}`, '',
 ].join('\n')));
 
