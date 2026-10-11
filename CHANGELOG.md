@@ -4,6 +4,8 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.9.0] - 2026-10-11
+
 ### Linux
 - **Edición de escritorio para Linux:** AppImage, paquete `.deb` y `tessera-cli` para x86_64, con la misma interfaz, mapa, filtros, duplicados, historial y exportación que en Windows.
 - Motor de recorrido para Linux: en paralelo, sin seguir enlaces simbólicos, contando una vez los enlaces duros y sin cruzar a otros sistemas de archivos montados (avisa de cuáles quedaron fuera).
@@ -11,6 +13,9 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 - «Liberar espacio» con reglas de Linux: `~/.cache`, paquetes de APT/DNF/pacman/zypper, journald, volcados de fallos, Docker y Podman, Flatpak, versiones de snap, máquinas virtuales, Timeshift, papelera y archivo de intercambio; y «¿Qué es esto?» para las carpetas del sistema.
 - La demo simula un Ubuntu con `#os=linux`.
 - Guía nueva: docs/usuario/linux.md.
+
+### Añadido
+- **linux:** edición de escritorio para Linux (AppImage, .deb y línea de comandos)
 
 ## [0.8.1] - 2026-10-11
 
@@ -114,7 +119,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.8.1...HEAD
+[Sin publicar]: ../../compare/v0.9.0...HEAD
+[0.9.0]: ../../compare/v0.8.1...v0.9.0
 [0.8.1]: ../../compare/v0.8.0...v0.8.1
 [0.8.0]: ../../compare/v0.7.0...v0.8.0
 [0.7.0]: ../../compare/v0.6.0...v0.7.0
