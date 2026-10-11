@@ -124,4 +124,16 @@ Sin `--publish` sólo deja los archivos en `dist/release/vX.Y.Z/` para revisarlo
 
 ### Pendiente: firma de código
 
-Cuando haya certificado (SignPath Foundation para proyectos open source, o Azure Artifact Signing), se añadirá al flujo un paso que firme `tesserafs-desktop.exe` antes de empaquetarlo. Así desaparece el aviso de SmartScreen y los antivirus confían más en el ejecutable.
+Se ha pedido el certificado gratuito de **SignPath Foundation** para proyectos open source. La [política de firma](../README.md#code-signing-policy) ya está en el README y en las notas de cada release. Cuando se apruebe, el flujo enviará a firmar `tesserafs-desktop.exe`, `tessera-cli.exe` y el instalador antes de empaquetarlos, y cada firma se aprobará a mano en SignPath. Así desaparece el aviso de SmartScreen y los antivirus confían más en el ejecutable.
+
+Lo que pide SignPath y cómo se cumple:
+
+| Requisito | En TesseraFS |
+|---|---|
+| Licencia OSI sin licencia comercial dual, sin componentes propietarios | MIT o Apache-2.0; dependencias abiertas (ver `LICENCIAS-TERCEROS.txt` de cada paquete) |
+| Ya publicado y documentado en la página de descarga | Releases de GitHub con notas y tabla de descargas |
+| Política de firma en la portada y en la descarga | README › Code signing policy y notas de cada release |
+| Compilación verificable en un sistema de confianza | GitHub Actions con runners de GitHub; la compilación firmada no reutiliza cachés anteriores |
+| Metadatos del archivo | Nombre de producto «TesseraFS» y la misma versión en todos los archivos de una compilación |
+| Autenticación de dos factores | En GitHub y en SignPath para todo el equipo |
+| Instalar implica poder desinstalar | Los zips no se instalan; el `.deb` y el instalador de Windows se desinstalan desde el sistema |

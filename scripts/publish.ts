@@ -44,6 +44,9 @@ export function sumsAndNotes(dir: string, version: string): string[] {
     ...(win ? ['> [!NOTE]', '> Windows: descomprime y ejecuta, no hay instalación. El ejecutable aún no está firmado: SmartScreen puede pedir confirmación (Más información › Ejecutar de todas formas).', ''] : []),
     ...(linux ? ['> [!NOTE]', '> Linux: x86_64 con WebKitGTK 4.1 (Ubuntu 22.04 o posterior, Debian 12, Fedora 37…). Guía: docs/usuario/linux.md.', ''] : []),
     '## Cambios', '', section || '- Ver CHANGELOG.md', '',
+    '## Code signing policy', '',
+    'Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). '
+      + 'Roles, privacy policy and details: [README › Code signing policy](https://github.com/hernansp08-hub/TesseraFS#code-signing-policy).', '',
   ].join('\n');
   writeFileSync(join(dir, 'NOTAS.md'), notes);
   console.log(`\n✓ v${version}: ${files.length} paquetes en ${dir}`);

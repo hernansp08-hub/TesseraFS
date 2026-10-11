@@ -91,6 +91,24 @@ flowchart LR
 
 El árbol completo (millones de nodos) vive en el motor. La interfaz sólo pide lo que va a mostrar: una porción binaria para el mapa, páginas de hijos para el árbol y búsquedas ya filtradas. Detalles en [Arquitectura](docs/tecnica/arquitectura.md).
 
+## Code signing policy
+
+*Política de firma de código.*
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+| Role | Members |
+|---|---|
+| Committers and reviewers | [hernansp08-hub](https://github.com/hernansp08-hub) |
+| Approvers | [hernansp08-hub](https://github.com/hernansp08-hub) |
+
+Every signed file is built by the [GitHub Actions release workflow](.github/workflows/release.yml) from this repository, and each signing request is approved by hand.
+
+**Privacy policy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. TesseraFS scans, keeps its history and exports only on your computer; its interface makes no external requests.
+
+> [!NOTE]
+> La solicitud a SignPath Foundation está en trámite: hasta que se apruebe, los ejecutables publicados no están firmados.
+
 ## Licencia
 
 A tu elección, [MIT](LICENSE-MIT) o [Apache-2.0](LICENSE-APACHE). Las fuentes incrustadas (Bricolage Grotesque e IBM Plex) se distribuyen bajo la SIL Open Font License 1.1: ver `packages/ui/fonts/licencias/`.
