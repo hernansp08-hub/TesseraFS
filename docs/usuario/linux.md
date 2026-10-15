@@ -8,13 +8,29 @@ En cada [release](https://github.com/hernansp08-hub/TesseraFS/releases) hay tres
 
 | Paquete | Para | Cómo |
 |---|---|---|
-| `TesseraFS-X.Y.Z-linux-x86_64.AppImage` | Cualquier distribución reciente, sin instalar nada | `chmod +x TesseraFS-*.AppImage` y ábrelo |
-| `TesseraFS-X.Y.Z-linux-amd64.deb` | Ubuntu, Debian, Linux Mint, Pop!_OS… | `sudo apt install ./TesseraFS-*-linux-amd64.deb`: aparece en el menú de aplicaciones. Se desinstala con `sudo apt remove tessera-fs` |
+| `TesseraFS-X.Y.Z-linux-x86_64.AppImage` | Cualquier distribución reciente, sin instalar nada | `chmod +x TesseraFS-*.AppImage` y ábrelo. Lleva dentro `tessera-cli` ([cómo usarlo](#la-línea-de-comandos)) |
+| `TesseraFS-X.Y.Z-linux-amd64.deb` | Ubuntu, Debian, Linux Mint, Pop!_OS… | `sudo apt install ./TesseraFS-*-linux-amd64.deb`: aparece en el menú de aplicaciones y deja `tessera-cli` en `/usr/bin`. Se desinstala con `sudo apt remove tessera-fs` |
 | `TesseraFS-X.Y.Z-cli-linux-x64.tar.gz` | Servidores y tareas programadas, sin ventana | `tar xzf TesseraFS-*-cli-linux-x64.tar.gz` y usa `tessera-cli` ([guía](linea-de-comandos.md)) |
 
 Comprueba las descargas con `sha256sum -c SHA256SUMS.txt --ignore-missing`.
 
 **Requisitos:** x86_64 y WebKitGTK 4.1, que traen Ubuntu 22.04 o posterior, Debian 12, Fedora 37, Linux Mint 21, Pop!_OS 22.04, openSUSE Tumbleweed y Arch. El paquete `.deb` lo instala solo; con la AppImage, si tu distribución no lo tiene, instala `libwebkit2gtk-4.1-0` (o el paquete equivalente).
+
+## La línea de comandos
+
+`tessera-cli` hace lo mismo que en Windows ([guía](linea-de-comandos.md)): lo más grande en tabla, CSV o JSON, avisos de poco espacio, el historial y el [servidor MCP](mcp.md) para asistentes de IA. No necesita WebKitGTK ni escritorio.
+
+- **Con el `.deb`** ya está instalado en `/usr/bin/tessera-cli`: prueba con `tessera-cli --help`. `sudo apt remove tessera-fs` lo quita junto con la app.
+- **Con la AppImage** va dentro, pero no se puede lanzar desde ella (al abrirla se abre la app). Sácalo una vez y déjalo en tu `PATH`:
+
+  ```bash
+  ./TesseraFS-*.AppImage --appimage-extract usr/bin/tessera-cli
+  install -Dm755 squashfs-root/usr/bin/tessera-cli ~/.local/bin/tessera-cli
+  rm -r squashfs-root
+  ```
+
+  En Ubuntu, Debian, Fedora y la mayoría de distribuciones `~/.local/bin` entra en el `PATH` al iniciar sesión (si la carpeta no existía, cierra la sesión y vuelve a entrar). Cuando cambies de AppImage, repítelo para que los dos sean de la misma versión.
+- **Sin la app** (servidores, contenedores, tareas programadas), descarga sólo el `.tar.gz`, que lleva `tessera-cli` y sus licencias.
 
 ## Qué cambia respecto a Windows
 

@@ -140,3 +140,6 @@ En Linux, la pestaña usa sus propias reglas. Las de desarrollo (`target`, `node
 
 > [!TIP]
 > **Después de liberar, vuelve a escanear.** Con el modo rápido son un par de segundos, y verás el cambio en el mapa.
+
+> [!TIP]
+> **Pregúntale a tu asistente de IA.** `tessera-cli mcp` le da a Claude, Copilot o Cursor estas mismas reglas con la herramienta `cleanup_candidates`: «¿qué puedo limpiar sin riesgo en mis proyectos?» ([cómo conectarlo](mcp.md)).

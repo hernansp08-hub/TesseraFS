@@ -78,7 +78,7 @@ flowchart LR
     P --> W{{"Windows<br/>windows-latest"}}
     P --> L{{"Linux<br/>ubuntu-22.04"}}
     W --> WT["¿Etiqueta = versión?<br/>bun test · cargo test"]
-    WT --> WB["bun run package<br/>zips de escritorio y portable"]
+    WT --> WB["bun run package<br/>instalador y zips"]
     L --> LT["bun test · cargo test"]
     LT --> LB["bun run package<br/>AppImage · .deb · CLI"]
     WB --> J["Publicar<br/>bun scripts/publish.ts"]
@@ -91,7 +91,7 @@ flowchart LR
 | Comprobación | La etiqueta (`v0.3.0`) debe coincidir con la versión de `package.json`; si no, el flujo se detiene |
 | Herramientas | Bun **1.3.14** fijado en el flujo (es el `bun.exe` que viaja en la portable) y Rust estable, con caché de compilación |
 | Pruebas | Windows: `bun test` y `cargo test --workspace --release`. Linux: las de la interfaz, i18n y protocolo (el motor portable es sólo de Windows) y `cargo test`. Si fallan en cualquiera de los dos, **no se publica nada** |
-| Paquetes | Cada sistema ejecuta `bun run package` y guarda sus paquetes como artefacto |
+| Paquetes | Cada sistema ejecuta `bun run package` y guarda sus paquetes como artefacto. `tessera-cli` se compila antes que la app y Tauri lo mete en el instalador, el `.deb` y la AppImage como *sidecar* (`bundle.externalBin`, que el script pasa con `--config`: `cargo build` y `tauri dev` no lo necesitan) |
 | Publicación | El trabajo «Publicar» junta los paquetes de los dos y ejecuta `bun scripts/publish.ts`: sumas, notas y release. Si la release ya existe, reemplaza sus archivos y notas, así que el flujo se puede relanzar |
 | Duración y coste | Unos 15–25 min con caché, con Windows y Linux en paralelo. En un repositorio privado consume minutos de Actions (los de Windows cuentan doble; los de Linux, sencillos) |
 
@@ -103,11 +103,11 @@ Sigue el progreso en la pestaña **Actions** del repositorio o con `gh run watch
 
 | Archivo | Contenido |
 |---|---|
-| `TesseraFS-X.Y.Z-instalador-win-x64.exe` | Instalador NSIS de la app de escritorio: por usuario, sin administrador, en los cinco idiomas; se desinstala desde Configuración y conserva el historial |
+| `TesseraFS-X.Y.Z-instalador-win-x64.exe` | Instalador NSIS de la app de escritorio, con `tessera-cli.exe` ([línea de comandos](usuario/linea-de-comandos.md) y [servidor MCP](usuario/mcp.md)) en la misma carpeta, que añade al `PATH` del usuario: por usuario, sin administrador, en los cinco idiomas; se desinstala desde Configuración, quita los dos ejecutables y la entrada del `PATH`, y conserva el historial |
 | `TesseraFS-X.Y.Z-escritorio-win-x64.zip` | `tesserafs-desktop.exe`, `tessera-cli.exe` ([línea de comandos](usuario/linea-de-comandos.md)), `README.txt` (en los cinco idiomas), `LICENCIAS-TERCEROS.txt` (crates de Rust incluidos) y `licencias/` |
 | `TesseraFS-X.Y.Z-portable-win-x64.zip` | `bun.exe` (firmado, sin modificar), `tesserafs.js`, lanzadores, `README.txt` (en los cinco idiomas), avisos de Bun y `licencias/` |
-| `TesseraFS-X.Y.Z-linux-x86_64.AppImage` | La app de escritorio para Linux, sin instalar ([guía](usuario/linux.md)) |
-| `TesseraFS-X.Y.Z-linux-amd64.deb` | La misma app como paquete de Debian y Ubuntu |
+| `TesseraFS-X.Y.Z-linux-x86_64.AppImage` | La app de escritorio para Linux, sin instalar, con `tessera-cli` dentro (`usr/bin`; [cómo usarlo](usuario/linux.md#la-línea-de-comandos)) |
+| `TesseraFS-X.Y.Z-linux-amd64.deb` | La misma app como paquete de Debian y Ubuntu, con `tessera-cli` en `/usr/bin` |
 | `TesseraFS-X.Y.Z-cli-linux-x64.tar.gz` | `tessera-cli` para Linux, `LICENCIAS-TERCEROS.txt` y `licencias/` |
 | `SHA256SUMS.txt` | Sumas para comprobar las descargas (`Get-FileHash archivo.zip` en Windows, `sha256sum -c SHA256SUMS.txt --ignore-missing` en Linux) |
 

@@ -24,6 +24,7 @@ flowchart LR
 | [Preguntas frecuentes](usuario/preguntas-frecuentes.md) | Por qué los totales no coinciden con el Explorador, antivirus, permisos y problemas comunes |
 | [TesseraFS en Linux](usuario/linux.md) | Instalar la AppImage, el `.deb` o la línea de comandos, y qué cambia respecto a Windows |
 | [Línea de comandos](usuario/linea-de-comandos.md) | `tessera-cli`: lo más grande en tabla, CSV o JSON, avisos de poco espacio y tareas programadas |
+| [Asistentes de IA (MCP)](usuario/mcp.md) | Conectar Claude, Copilot o Cursor con `tessera-cli mcp` para preguntarles qué ocupa tu disco |
 
 ## Para desarrolladores
 

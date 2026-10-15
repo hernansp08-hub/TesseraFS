@@ -1,0 +1,138 @@
+{
+  "$comment": "Reglas de «Liberar espacio». Las leen la interfaz (packages/ui/src/clean.ts) y tessera-cli mcp (crates/tessera-cli/src/clean.rs); el formato se explica en packages/protocol/src/clean.ts. Los textos van en el catálogo: clean.<id>.title, clean.<id>.why y clean.<how>.how.",
+  "windows": {
+    "ignoreCase": true,
+    "sep": "\\",
+    "vars": {
+      "installed": "/(Program Files( \\(x86\\))?|AppData|ProgramData|\\.cache|\\.vscode[^/]*|\\.cursor|Windows)/|/resources/app/|/extensions/",
+      "keepEmpty": "-path:\\windows\\ -path:\"\\program files\" -path:\\programdata\\ -path:\\appdata\\ -path:\\.git\\ -path:\\node_modules\\ -path:$recycle.bin -path:\"system volume information\" -attr:reparse"
+    },
+    "rules": [
+      { "id": "rustTarget", "q": "type:dir name:target", "risk": "ok", "cmd": "cargo clean", "needs": ["cachedir.tag", ".rustc_info.json"],
+        "ok": { "name": "^target$", "notPath": "{installed}" }, "min": "50m" },
+      { "id": "nodeModules", "q": "type:dir name:node_modules", "risk": "ok", "cmd": "bun install",
+        "$comment": "Sólo la de fuera: una node_modules dentro de otra ya cuenta en la de fuera",
+        "ok": { "name": { "re": "^node_modules$", "i": false }, "notPath": "/node_modules/|{installed}" }, "min": "20m" },
+      { "id": "venv", "q": "type:dir name:.venv", "risk": "ok", "cmd": "uv sync",
+        "ok": { "name": { "re": "^\\.venv$", "i": false }, "notPath": "{installed}" }, "min": "20m" },
+      { "id": "packageCaches", "q": "type:dir re:^(npm-cache|store|pnpm-store|\\.pnpm-store|cache|packages|go-build)$", "risk": "ok",
+        "$comment": "Cachés de gestores de paquetes de desarrollo: herramienta y la orden que la vacía",
+        "titleParams": { "name": "{label}" }, "min": "200m",
+        "variants": [
+          { "path": "/AppData/Local/npm-cache$", "label": "npm", "cmd": "npm cache clean --force" },
+          { "path": "/AppData/Local/pnpm/store$|/AppData/Local/pnpm-store$|/\\.pnpm-store$", "label": "pnpm", "cmd": "pnpm store prune" },
+          { "path": "/AppData/Local/Yarn/Cache$", "label": "Yarn", "cmd": "yarn cache clean" },
+          { "path": "/\\.bun/install/cache$", "label": "Bun", "cmd": "bun pm cache rm" },
+          { "path": "/AppData/Local/pip/cache$", "label": "pip", "cmd": "pip cache purge" },
+          { "path": "/AppData/Local/uv/cache$", "label": "uv", "cmd": "uv cache clean" },
+          { "path": "/\\.nuget/packages$", "label": "NuGet", "cmd": "dotnet nuget locals all --clear" },
+          { "path": "/AppData/Local/go-build$", "label": "Go", "cmd": "go clean -cache" }
+        ] },
+      { "id": "browserCache", "q": "type:dir re:^(Cache|Code.Cache|cache2)$", "risk": "ok", "how": true,
+        "titleParams": { "name": "{label}" }, "min": "100m",
+        "variants": [
+          { "path": "/Google/Chrome/User Data/[^/]+/(Cache|Code Cache)$", "label": "Chrome" },
+          { "path": "/Microsoft/Edge/User Data/[^/]+/(Cache|Code Cache)$", "label": "Edge" },
+          { "path": "/BraveSoftware/Brave-Browser/User Data/[^/]+/(Cache|Code Cache)$", "label": "Brave" },
+          { "path": "/Vivaldi/User Data/[^/]+/(Cache|Code Cache)$", "label": "Vivaldi" },
+          { "path": "/Mozilla/Firefox/Profiles/[^/]+/cache2$", "label": "Firefox" }
+        ] },
+      { "id": "temp", "q": "type:dir name:Temp", "risk": "ok", "how": true, "ok": { "path": "/AppData/Local/Temp$|^[A-Z]:/Windows/Temp$" }, "min": "50m" },
+      { "id": "windowsUpdate", "q": "type:dir name:SoftwareDistribution", "risk": "ok", "how": true, "ok": { "path": "^[A-Z]:/Windows/SoftwareDistribution$" }, "min": "100m" },
+      { "id": "deliveryOptimization", "q": "type:dir name:DeliveryOptimization", "risk": "ok", "how": "temp",
+        "ok": { "path": "^[A-Z]:/Windows/(ServiceProfiles/NetworkService/AppData/Local/Microsoft/Windows|SoftwareDistribution)/DeliveryOptimization$" }, "min": "100m" },
+      { "id": "crashDumps", "q": "type:dir re:^(Minidump|LiveKernelReports|CrashDumps|ReportArchive|ReportQueue)$ OR type:file name:MEMORY.DMP", "risk": "ok", "how": "temp",
+        "ok": { "path": "^[A-Z]:/Windows/(Minidump|LiveKernelReports|MEMORY\\.DMP)$|/AppData/Local/CrashDumps$|/Microsoft/Windows/WER/(ReportArchive|ReportQueue)$" }, "min": "50m" },
+      { "id": "shaderCache", "q": "type:dir re:^(D3DSCache|DXCache|GLCache|DxcCache|VkCache|ShaderCache|shadercache)$", "risk": "ok",
+        "ok": { "path": "/AppData/Local/(D3DSCache|NVIDIA/(DXCache|GLCache)|AMD/(DxCache|DxcCache|VkCache)|Intel/ShaderCache)$|/steamapps/shadercache$" }, "min": "200m" },
+      { "id": "windowsOld", "q": "type:dir name:Windows.old", "risk": "ok", "how": true, "ok": { "path": "^[A-Z]:/Windows\\.old$" } },
+      { "id": "recycleBin", "q": "type:dir name:$Recycle.Bin", "risk": "ok", "how": true, "ok": { "path": "^[A-Z]:/\\$Recycle\\.Bin$" }, "min": "10m" },
+      { "id": "aiModels", "q": "ext:gguf,safetensors,ckpt,onnx", "risk": "warn", "group": true, "ok": { "ext": "^(gguf|safetensors|ckpt|onnx)$" }, "min": "500m" },
+      { "id": "virtualDisks", "q": "ext:vhdx,vhd", "risk": "warn", "cmd": "wsl --manage <distro> --set-sparse true", "ok": { "ext": "^vhdx?$" }, "min": "500m" },
+      { "id": "game", "q": "type:dir path:steamapps", "risk": "warn", "titleParams": { "name": "{name}" }, "ok": { "path": "/steamapps/common/[^/]+$" }, "min": "1g",
+        "$comment": "Sin desinstalarlo: comprimirlo con WOF (se lee igual; sólo si aún no está comprimido)",
+        "cmd": "compact /c /s /i /q /exe:lzx \"{path}\\*\"", "cmdMinAlloc": 0.9, "how": true },
+      { "id": "oneDrive", "q": "type:dir name:OneDrive attr:cloud", "risk": "ok", "useAlloc": true, "action": "freeUp", "how": true,
+        "$comment": "Lo descargado en este equipo puede quedarse sólo en la nube sin borrar nada. Sólo con «Archivos a petición» (la carpeta lleva la marca de la nube): sin él todo está siempre descargado y no hay nada que liberar",
+        "ok": { "path": "^[A-Z]:/Users/[^/]+/OneDrive( - [^/]+)?$", "flag": "CLOUD" }, "min": "200m" },
+      { "id": "downloads", "q": "path:Downloads ext:msi,exe,iso,zip,7z size:>100m", "risk": "warn", "group": true, "min": "200m" },
+      { "id": "restorePoints", "q": "type:dir name:\"System Volume Information\"", "risk": "warn", "cmd": "vssadmin list shadowstorage",
+        "ok": { "path": "^[A-Z]:/System Volume Information$" }, "min": "100m" },
+      { "id": "systemFile", "q": "pagefile.sys OR hiberfil.sys OR swapfile.sys", "risk": "bad", "ok": { "path": "^[A-Z]:/(pagefile|hiberfil|swapfile)\\.sys$" },
+        "variants": [
+          { "name": "^hiberfil\\.sys$", "title": "clean.hiberfil.title" },
+          { "name": "^swapfile\\.sys$", "title": "clean.swapfile.title" },
+          { "title": "clean.pagefile.title" }
+        ] },
+      { "id": "winsxs", "q": "type:dir name:WinSxS", "risk": "bad", "cmd": "DISM /Online /Cleanup-Image /StartComponentCleanup", "ok": { "path": "^[A-Z]:/Windows/WinSxS$" } },
+      { "id": "installer", "q": "type:dir name:Installer", "risk": "bad", "ok": { "path": "^[A-Z]:/Windows/Installer$" } },
+      { "id": "packageCache", "q": "type:dir name:\"Package Cache\"", "risk": "bad", "ok": { "path": "^[A-Z]:/ProgramData/Package Cache$" }, "min": "500m" },
+      { "id": "driverStore", "q": "type:dir name:FileRepository", "risk": "bad", "cmd": "pnputil /enum-drivers", "ok": { "path": "^[A-Z]:/Windows/System32/DriverStore/FileRepository$" }, "min": "1g" },
+      { "id": "brokenLinks", "q": "", "risk": "ok", "list": "links" },
+      { "id": "emptyFolders", "q": "type:dir files:=0 {keepEmpty}", "risk": "warn", "list": "query" },
+      { "id": "emptyFiles", "q": "size:=0 {keepEmpty}", "risk": "warn", "list": "query" },
+      { "id": "cacheTag", "q": "re:^CACHEDIR\\.TAG$", "risk": "ok", "parent": true, "titleParams": { "name": "{lastTwo}" },
+        "$comment": "Al final: una carpeta que ya tiene tarjeta (o está dentro de otra) no se repite como caché declarada",
+        "ok": { "notPath": "^[A-Z]:/(Windows|Program Files( \\(x86\\))?)/" }, "min": "50m" }
+    ]
+  },
+  "linux": {
+    "ignoreCase": false,
+    "sep": "/",
+    "vars": {
+      "home": "^/(home/[^/]+|root)",
+      "installed": "^/(usr|opt|snap|var/lib)(/|$)|/\\.(vscode|vscode-server|cursor)[^/]*(/|$)|/\\.local(/|$)|/\\.cache(/|$)",
+      "keepEmpty": "-path:/usr/ -path:/etc/ -path:/var/lib/ -path:/run/ -path:/snap/ -path:/.local/ -path:/.cache/ -path:/.config/ -path:/.git/ -path:/node_modules/ -attr:reparse"
+    },
+    "rules": [
+      { "id": "rustTarget", "q": "type:dir name:target", "risk": "ok", "cmd": "cargo clean", "needs": ["cachedir.tag", ".rustc_info.json"],
+        "ok": { "name": "^target$", "notPath": "{installed}" }, "min": "50m" },
+      { "id": "nodeModules", "q": "type:dir name:node_modules", "risk": "ok", "cmd": "bun install",
+        "ok": { "name": "^node_modules$", "notPath": "/node_modules/|{installed}" }, "min": "20m" },
+      { "id": "venv", "q": "type:dir name:.venv", "risk": "ok", "cmd": "uv sync", "ok": { "name": "^\\.venv$", "notPath": "{installed}" }, "min": "20m" },
+      { "id": "userCache", "q": "type:dir name:.cache", "risk": "ok", "how": true, "ok": { "path": "{home}/\\.cache$" }, "min": "500m" },
+      { "id": "packageCaches", "q": "type:dir re:^(\\.npm|store|\\.pnpm-store|cache|packages|mod)$", "risk": "ok",
+        "$comment": "Cachés de herramientas de desarrollo fuera de ~/.cache (las de dentro, pip, uv, yarn, go-build…, las cubre ~/.cache)",
+        "titleParams": { "name": "{label}" }, "min": "200m",
+        "variants": [
+          { "path": "{home}/\\.npm$", "label": "npm", "cmd": "npm cache clean --force" },
+          { "path": "{home}/\\.local/share/pnpm/store$|/\\.pnpm-store$", "label": "pnpm", "cmd": "pnpm store prune" },
+          { "path": "{home}/\\.bun/install/cache$", "label": "Bun", "cmd": "bun pm cache rm" },
+          { "path": "{home}/\\.nuget/packages$", "label": "NuGet", "cmd": "dotnet nuget locals all --clear" },
+          { "path": "{home}/go/pkg/mod$", "label": "Go", "cmd": "go clean -modcache" }
+        ] },
+      { "id": "systemPackages", "q": "type:dir re:^(archives|dnf|yum|pkg|zypp)$", "risk": "ok",
+        "titleParams": { "name": "{label}" }, "min": "200m",
+        "variants": [
+          { "path": "^/var/cache/apt/archives$", "label": "APT", "cmd": "sudo apt clean" },
+          { "path": "^/var/cache/(dnf|yum)$", "label": "DNF", "cmd": "sudo dnf clean all" },
+          { "path": "^/var/cache/pacman/pkg$", "label": "pacman", "cmd": "sudo paccache -rk1" },
+          { "path": "^/var/cache/zypp$", "label": "zypper", "cmd": "sudo zypper clean --all" }
+        ] },
+      { "id": "journal", "q": "type:dir name:journal", "risk": "ok", "cmd": "sudo journalctl --vacuum-size=200M", "ok": { "path": "^/var/log/journal$" }, "min": "300m" },
+      { "id": "coreDumps", "q": "type:dir name:coredump", "risk": "ok", "cmd": "coredumpctl list", "how": true, "ok": { "path": "^/var/lib/systemd/coredump$" }, "min": "100m" },
+      { "id": "userTrash", "q": "type:dir name:Trash", "risk": "ok", "cmd": "gio trash --empty", "ok": { "path": "{home}/\\.local/share/Trash$" }, "min": "50m" },
+      { "id": "shaderCache", "q": "type:dir name:shadercache", "risk": "ok", "ok": { "path": "/steamapps/shadercache$" }, "min": "200m" },
+      { "id": "aiModels", "q": "ext:gguf,safetensors,ckpt,onnx", "risk": "warn", "group": true, "ok": { "ext": { "re": "^(gguf|safetensors|ckpt|onnx)$", "i": true } }, "min": "500m" },
+      { "id": "vmImages", "q": "ext:qcow2,vdi,vmdk,vhd,vhdx", "risk": "warn", "how": true, "ok": { "ext": { "re": "^(qcow2|vdi|vmdk|vhdx?)$", "i": true } }, "min": "500m" },
+      { "id": "containers", "q": "type:dir re:^(docker|containers)$", "risk": "warn", "how": true,
+        "titleParams": { "name": "{label}" }, "min": "1g",
+        "variants": [
+          { "path": "^/var/lib/docker$", "label": "Docker", "cmd": "docker system prune -a" },
+          { "path": "{home}/\\.local/share/containers$", "label": "Podman", "cmd": "podman system prune -a" }
+        ] },
+      { "id": "game", "q": "type:dir path:steamapps", "risk": "warn", "titleParams": { "name": "{name}" }, "ok": { "path": "/steamapps/common/[^/]+$" }, "min": "1g" },
+      { "id": "flatpak", "q": "type:dir name:flatpak", "risk": "warn", "cmd": "flatpak uninstall --unused", "ok": { "path": "^/var/lib/flatpak$|{home}/\\.local/share/flatpak$" }, "min": "1g" },
+      { "id": "snapRevisions", "q": "type:dir name:snaps", "risk": "warn", "cmd": "sudo snap set system refresh.retain=2", "how": true, "ok": { "path": "^/var/lib/snapd/snaps$" }, "min": "1g" },
+      { "id": "downloads", "q": "path:/Downloads/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m OR path:/Descargas/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m OR path:/Téléchargements/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m",
+        "risk": "warn", "group": true, "min": "200m" },
+      { "id": "timeshift", "q": "type:dir name:snapshots", "risk": "warn", "how": true, "ok": { "path": "^/timeshift(-btrfs)?/snapshots$" }, "min": "1g" },
+      { "id": "swapLinux", "q": "swap.img OR swapfile", "risk": "bad", "cmd": "swapon --show", "ok": { "path": "^/(swap\\.img|swapfile)$" } },
+      { "id": "brokenLinks", "q": "", "risk": "ok", "list": "links" },
+      { "id": "emptyFolders", "q": "type:dir files:=0 {keepEmpty}", "risk": "warn", "list": "query" },
+      { "id": "emptyFiles", "q": "size:=0 {keepEmpty}", "risk": "warn", "list": "query" },
+      { "id": "cacheTag", "q": "re:^CACHEDIR\\.TAG$", "risk": "ok", "parent": true, "titleParams": { "name": "{lastTwo}" },
+        "ok": { "notPath": "{installed}" }, "min": "50m" }
+    ]
+  }
+}

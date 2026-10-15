@@ -26,7 +26,7 @@ En entornos corporativos el antivirus bloquea por **falta de firma y reputación
 ## Estructura del repositorio
 
 ```
-packages/protocol   Tipos, codec binario "slice" y lenguaje de búsqueda (TS, compartido)
+packages/protocol   Tipos, codec binario "slice", lenguaje de búsqueda y reglas de limpieza (TS y JSON, compartido)
 packages/ui         Interfaz (TS + Canvas). Backends: demo, tauri, http
 packages/core-bun   Motor en Bun: recorrido FFI, lector MFT FFI, almacén SoA, API
 apps/portable       Servidor Bun + lanzador Edge + script de empaquetado portable

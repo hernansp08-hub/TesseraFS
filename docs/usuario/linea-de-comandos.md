@@ -1,6 +1,6 @@
 # Línea de comandos
 
-`tessera-cli.exe` viene en el zip de la **edición de escritorio**, junto a `tesserafs-desktop.exe`. Usa el mismo motor que la app (MFT con administrador, recorrido sin él), así que sirve para scripts, informes periódicos y avisos de poco espacio en equipos que administras.
+`tessera-cli.exe` viene con la **edición de escritorio**, junto a `tesserafs-desktop.exe`: el instalador lo deja en `%LOCALAPPDATA%\TesseraFS` y añade esa carpeta a tu `PATH` (abre una terminal nueva después de instalar), y también va en el zip de escritorio y en Scoop. En Linux está en el `.deb`, la AppImage y el `.tar.gz` ([dónde](linux.md#la-línea-de-comandos)). Usa el mismo motor que la app (MFT con administrador, recorrido sin él), así que sirve para scripts, informes periódicos y avisos de poco espacio en equipos que administras.
 
 ```powershell
 tessera-cli --help
@@ -97,3 +97,11 @@ tessera-cli scan C:\ --history-trend Users\ana\Downloads    # ruta absoluta o re
 
 > [!TIP]
 > La variable de entorno `TESSERA_HISTORY_DIR` cambia la carpeta del historial, por ejemplo para guardar los resúmenes de varios equipos en una carpeta compartida.
+
+## Asistentes de IA: `mcp`
+
+```powershell
+tessera-cli mcp
+```
+
+No se usa a mano: lo lanza un asistente de IA (Claude, GitHub Copilot, Cursor…) para preguntarle a TesseraFS qué ocupa el disco, buscar con filtros, comparar con el historial, buscar duplicados o ver qué se puede limpiar con las reglas de «Liberar espacio». Sólo lee. Cómo conectarlo en cada asistente: [Asistentes de IA (MCP)](mcp.md).

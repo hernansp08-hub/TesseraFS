@@ -2,7 +2,8 @@
 // Sin dependencias de la interfaz para poder probarlas (test/clean.test.ts). Los textos van en el catálogo:
 //   regla:   clean.<id>.title · clean.<id>.why · clean.<how>.how (si `how`)
 //   conocida: known.<id>
-import { FLAG, type Os } from '@tessera/protocol';
+// Las reglas son datos que comparte con tessera-cli mcp (packages/protocol/src/clean-rules.json); KNOWN, no.
+import { CLEAN_RULES, FLAG, type CleanMatch, type CleanPattern, type CleanRuleSet, type CleanRuleSpec, type Os } from '@tessera/protocol';
 
 export type Risk = 'ok' | 'warn' | 'bad';
 /** Lo que una regla necesita de un elemento (una fila de búsqueda cumple esta forma). */
@@ -39,87 +40,82 @@ export interface Rule {
   min?: number;
 }
 
-const MB = 1024 ** 2, GB = 1024 ** 3;
-// Vacíos que no conviene tocar: los del sistema, los de programas instalados y los internos de Git y Node
-const KEEP_EMPTY_WIN = String.raw`-path:\windows\ -path:"\program files" -path:\programdata\ -path:\appdata\ -path:\.git\ -path:\node_modules\ -path:$recycle.bin -path:"system volume information" -attr:reparse`;
-const KEEP_EMPTY_LINUX = '-path:/usr/ -path:/etc/ -path:/var/lib/ -path:/run/ -path:/snap/ -path:/.local/ -path:/.cache/ -path:/.config/ -path:/.git/ -path:/node_modules/ -attr:reparse';
-// Carpetas que pertenecen a programas instalados: sus dependencias no se regeneran solas
-const INSTALLED = /\\(Program Files( \(x86\))?|AppData|ProgramData|\.cache|\.vscode[^\\]*|\.cursor|Windows)\\|\\resources\\app\\|\\extensions\\/i;
-
-const BROWSERS: [RegExp, string][] = [
-  [/\\Google\\Chrome\\User Data\\[^\\]+\\(Cache|Code Cache)$/i, 'Chrome'],
-  [/\\Microsoft\\Edge\\User Data\\[^\\]+\\(Cache|Code Cache)$/i, 'Edge'],
-  [/\\BraveSoftware\\Brave-Browser\\User Data\\[^\\]+\\(Cache|Code Cache)$/i, 'Brave'],
-  [/\\Vivaldi\\User Data\\[^\\]+\\(Cache|Code Cache)$/i, 'Vivaldi'],
-  [/\\Mozilla\\Firefox\\Profiles\\[^\\]+\\cache2$/i, 'Firefox'],
-];
-// Cachés de gestores de paquetes de desarrollo: herramienta y la orden que la vacía
-const PACKAGE_CACHES: [RegExp, string, string][] = [
-  [/\\AppData\\Local\\npm-cache$/i, 'npm', 'npm cache clean --force'],
-  [/\\AppData\\Local\\pnpm\\store$|\\AppData\\Local\\pnpm-store$|\\\.pnpm-store$/i, 'pnpm', 'pnpm store prune'],
-  [/\\AppData\\Local\\Yarn\\Cache$/i, 'Yarn', 'yarn cache clean'],
-  [/\\\.bun\\install\\cache$/i, 'Bun', 'bun pm cache rm'],
-  [/\\AppData\\Local\\pip\\cache$/i, 'pip', 'pip cache purge'],
-  [/\\AppData\\Local\\uv\\cache$/i, 'uv', 'uv cache clean'],
-  [/\\\.nuget\\packages$/i, 'NuGet', 'dotnet nuget locals all --clear'],
-  [/\\AppData\\Local\\go-build$/i, 'Go', 'go clean -cache'],
-];
-/** Sin comprimir: ocupa en disco al menos el 90 % de su tamaño (sin datos, se supone que sí). */
-const uncompressed = (t: Target) => t.size == null || t.alloc == null || t.alloc >= t.size * .9;
+// ---------- Reglas: de los datos a funciones ----------
+// Las reglas son datos (packages/protocol/src/clean-rules.json, los mismos que lee tessera-cli mcp); el formato
+// se explica en packages/protocol/src/clean.ts. Un error en los datos falla al cargar, y lo detectan las pruebas.
+const fail = (msg: string): never => { throw new Error(`clean-rules.json: ${msg}`); };
+/** "50m" → bytes, con las unidades de la búsqueda (base 1024). */
+function bytes(s: string): number {
+  const m = /^(\d+(?:\.\d+)?)([kmgt]?)$/i.exec(s.trim()) ?? fail(`tamaño no válido «${s}»`);
+  return Number(m[1]) * 1024 ** (m[2] ? 'kmgt'.indexOf(m[2].toLowerCase()) + 1 : 0);
+}
+/** `{var}` del sistema: entre (?:…) en una expresión regular, tal cual en una consulta. */
+const expand = (s: string, set: CleanRuleSet, regex: boolean) =>
+  s.replace(/\{([A-Za-z]\w*)\}/g, (m, k: string) => {
+    const v = Object.hasOwn(set.vars, k) ? set.vars[k] : fail(`variable desconocida ${m}`);
+    return regex ? `(?:${v})` : v;
+  });
+/** En Windows, `/` es el separador `\`. */
+function regex(p: CleanPattern, set: CleanRuleSet): RegExp {
+  const { re, i } = typeof p === 'string' ? { re: p, i: set.ignoreCase } : p;
+  const src = expand(re, set, true);
+  return new RegExp(set.sep === '\\' ? src.replaceAll('/', '\\\\') : src, i ? 'i' : '');
+}
+type Test = (t: Target) => boolean;
+function matcher(m: CleanMatch, set: CleanRuleSet): Test {
+  const tests: Test[] = [];
+  const on = (p: CleanPattern | undefined, f: (re: RegExp, t: Target) => boolean) => {
+    if (p != null) { const re = regex(p, set); tests.push(t => f(re, t)); }
+  };
+  on(m.name, (re, t) => re.test(t.name));
+  on(m.path, (re, t) => re.test(t.path));
+  on(m.notPath, (re, t) => !re.test(t.path));
+  on(m.ext, (re, t) => re.test(t.ext));
+  if (m.flag) { const f = FLAG[m.flag] ?? fail(`atributo desconocido ${m.flag}`); tests.push(t => !!((t.flags ?? 0) & f)); }
+  return t => tests.every(f => f(t));
+}
 /** «restic › e4b1c9a07d»: la carpeta con su padre, porque muchas cachés se llaman con un código. */
 const lastTwo = (p: string) => p.split(/[\\/]/).filter(Boolean).slice(-2).join(' › ');
-const browserOf = (p: string) => BROWSERS.find(([re]) => re.test(p))?.[1];
-const packageCacheOf = (p: string) => PACKAGE_CACHES.find(([re]) => re.test(p));
+type Fill = (t: Target, label?: string) => string;
+const TOKENS: Record<string, Fill> = { label: (t, label) => label ?? t.name, name: t => t.name, path: t => t.path, lastTwo: t => lastTwo(t.path) };
+function template(tpl: string): Fill {
+  for (const [m, k] of tpl.matchAll(/\{(\w+)\}/g)) if (!Object.hasOwn(TOKENS, k)) fail(`${m} no es {label}, {name}, {path} ni {lastTwo}`);
+  return (t, label) => tpl.replace(/\{(\w+)\}/g, (_, k: string) => TOKENS[k](t, label));
+}
+/** Ocupa en disco al menos esa fracción de su tamaño, es decir, sin comprimir (sin datos, se supone que sí). */
+const fills = (t: Target, ratio: number) => t.size == null || t.alloc == null || t.alloc >= t.size * ratio;
 
-export const RULES: Rule[] = [
-  // ---- Seguro: se regenera o es temporal ----
-  { id: 'rustTarget', q: 'type:dir name:target', risk: 'ok', cmd: 'cargo clean', needs: ['cachedir.tag', '.rustc_info.json'],
-    ok: t => t.name.toLowerCase() === 'target' && !INSTALLED.test(t.path), min: 50 * MB },
-  { id: 'nodeModules', q: 'type:dir name:node_modules', risk: 'ok', cmd: 'bun install',
-    ok: t => t.name === 'node_modules' && (t.path.match(/\\node_modules(?=\\|$)/gi) || []).length === 1 && !INSTALLED.test(t.path), min: 20 * MB },
-  { id: 'venv', q: 'type:dir name:.venv', risk: 'ok', cmd: 'uv sync', ok: t => t.name === '.venv' && !INSTALLED.test(t.path), min: 20 * MB },
-  { id: 'packageCaches', q: 'type:dir re:^(npm-cache|store|pnpm-store|\\.pnpm-store|cache|packages|go-build)$', risk: 'ok',
-    ok: t => !!packageCacheOf(t.path), title: t => ['clean.packageCaches.title', { name: packageCacheOf(t.path)?.[1] ?? t.name }],
-    cmd: t => packageCacheOf(t.path)?.[2], min: 200 * MB },
-  { id: 'browserCache', q: 'type:dir re:^(Cache|Code.Cache|cache2)$', risk: 'ok', how: true,
-    ok: t => !!browserOf(t.path), title: t => ['clean.browserCache.title', { name: browserOf(t.path) ?? t.name }], min: 100 * MB },
-  { id: 'temp', q: 'type:dir name:Temp', risk: 'ok', how: true, ok: t => /\\AppData\\Local\\Temp$|^[A-Z]:\\Windows\\Temp$/i.test(t.path), min: 50 * MB },
-  { id: 'windowsUpdate', q: 'type:dir name:SoftwareDistribution', risk: 'ok', how: true, ok: t => /^[A-Z]:\\Windows\\SoftwareDistribution$/i.test(t.path), min: 100 * MB },
-  { id: 'deliveryOptimization', q: 'type:dir name:DeliveryOptimization', risk: 'ok', how: 'temp',
-    ok: t => /^[A-Z]:\\Windows\\(ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows|SoftwareDistribution)\\DeliveryOptimization$/i.test(t.path), min: 100 * MB },
-  { id: 'crashDumps', q: 'type:dir re:^(Minidump|LiveKernelReports|CrashDumps|ReportArchive|ReportQueue)$ OR type:file name:MEMORY.DMP', risk: 'ok', how: 'temp',
-    ok: t => /^[A-Z]:\\Windows\\(Minidump|LiveKernelReports|MEMORY\.DMP)$|\\AppData\\Local\\CrashDumps$|\\Microsoft\\Windows\\WER\\(ReportArchive|ReportQueue)$/i.test(t.path), min: 50 * MB },
-  { id: 'shaderCache', q: 'type:dir re:^(D3DSCache|DXCache|GLCache|DxcCache|VkCache|ShaderCache|shadercache)$', risk: 'ok',
-    ok: t => /\\AppData\\Local\\(D3DSCache|NVIDIA\\(DXCache|GLCache)|AMD\\(DxCache|DxcCache|VkCache)|Intel\\ShaderCache)$|\\steamapps\\shadercache$/i.test(t.path), min: 200 * MB },
-  { id: 'windowsOld', q: 'type:dir name:Windows.old', risk: 'ok', how: true, ok: t => /^[A-Z]:\\Windows\.old$/i.test(t.path) },
-  { id: 'recycleBin', q: 'type:dir name:$Recycle.Bin', risk: 'ok', how: true, ok: t => /^[A-Z]:\\\$Recycle\.Bin$/i.test(t.path), min: 10 * MB },
-  // ---- Revisar: es tuyo, decides tú ----
-  { id: 'aiModels', q: 'ext:gguf,safetensors,ckpt,onnx', risk: 'warn', group: true, ok: t => /^(gguf|safetensors|ckpt|onnx)$/i.test(t.ext), min: 500 * MB },
-  { id: 'virtualDisks', q: 'ext:vhdx,vhd', risk: 'warn', cmd: 'wsl --manage <distro> --set-sparse true', ok: t => /^vhdx?$/i.test(t.ext), min: 500 * MB },
-  { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: t => ['clean.game.title', { name: t.name }], ok: t => /\\steamapps\\common\\[^\\]+$/i.test(t.path), min: 1 * GB,
-    // Sin desinstalarlo: comprimirlo con WOF (se lee igual; sólo si aún no está comprimido)
-    cmd: t => uncompressed(t) ? `compact /c /s /i /q /exe:lzx "${t.path}\\*"` : undefined, how: true },
-  // OneDrive: lo descargado en este equipo puede quedarse sólo en la nube sin borrar nada. Sólo con «Archivos a
-  // petición» (la carpeta lleva la marca de la nube): sin él todo está siempre descargado y no hay nada que liberar
-  { id: 'oneDrive', q: 'type:dir name:OneDrive attr:cloud', risk: 'ok', useAlloc: true, action: 'freeUp', how: true,
-    ok: t => /^[A-Z]:\\Users\\[^\\]+\\OneDrive( - [^\\]+)?$/i.test(t.path) && !!((t.flags ?? 0) & FLAG.CLOUD), min: 200 * MB },
-  { id: 'downloads', q: 'path:Downloads ext:msi,exe,iso,zip,7z size:>100m', risk: 'warn', group: true, min: 200 * MB },
-  { id: 'restorePoints', q: 'type:dir name:"System Volume Information"', risk: 'warn', cmd: 'vssadmin list shadowstorage', ok: t => /^[A-Z]:\\System Volume Information$/i.test(t.path), min: 100 * MB },
-  // ---- No borrar a mano: lo gestiona Windows ----
-  { id: 'systemFile', q: 'pagefile.sys OR hiberfil.sys OR swapfile.sys', risk: 'bad', ok: t => /^[A-Z]:\\(pagefile|hiberfil|swapfile)\.sys$/i.test(t.path),
-    title: t => [t.name.toLowerCase() === 'hiberfil.sys' ? 'clean.hiberfil.title' : t.name.toLowerCase() === 'swapfile.sys' ? 'clean.swapfile.title' : 'clean.pagefile.title'] },
-  { id: 'winsxs', q: 'type:dir name:WinSxS', risk: 'bad', cmd: 'DISM /Online /Cleanup-Image /StartComponentCleanup', ok: t => /^[A-Z]:\\Windows\\WinSxS$/i.test(t.path) },
-  { id: 'installer', q: 'type:dir name:Installer', risk: 'bad', ok: t => /^[A-Z]:\\Windows\\Installer$/i.test(t.path) },
-  { id: 'packageCache', q: 'type:dir name:"Package Cache"', risk: 'bad', ok: t => /^[A-Z]:\\ProgramData\\Package Cache$/i.test(t.path), min: 500 * MB },
-  { id: 'driverStore', q: 'type:dir name:FileRepository', risk: 'bad', cmd: 'pnputil /enum-drivers', ok: t => /^[A-Z]:\\Windows\\System32\\DriverStore\\FileRepository$/i.test(t.path), min: 1 * GB },
-  // ---- Orden: no liberan espacio, pero sobran ----
-  { id: 'brokenLinks', q: '', risk: 'ok', list: 'links' },
-  { id: 'emptyFolders', q: 'type:dir files:=0 ' + KEEP_EMPTY_WIN, risk: 'warn', list: 'query' },
-  { id: 'emptyFiles', q: 'size:=0 ' + KEEP_EMPTY_WIN, risk: 'warn', list: 'query' },
-  // Al final: una carpeta que ya tiene tarjeta (o está dentro de otra) no se repite como caché declarada
-  { id: 'cacheTag', q: 're:^CACHEDIR\\.TAG$', risk: 'ok', parent: true, title: t => ['clean.cacheTag.title', { name: lastTwo(t.path) }],
-    ok: t => !/^[A-Z]:\\(Windows|Program Files( \(x86\))?)\\/i.test(t.path), min: 50 * MB },
-];
+function compile(s: CleanRuleSpec, set: CleanRuleSet): Rule {
+  const ok = s.ok && matcher(s.ok, set);
+  const variants = s.variants?.map(v => ({ test: matcher(v, set), label: v.label, cmd: v.cmd != null ? template(v.cmd) : undefined, title: v.title }));
+  const variantOf = (t: Target) => variants?.find(v => v.test(t));
+  const r: Rule = { id: s.id, q: expand(s.q, set, false), risk: s.risk };
+  if (ok || variants) r.ok = t => (!ok || ok(t)) && (!variants || !!variantOf(t));
+  if (s.needs) r.needs = s.needs;
+  const params = s.titleParams && Object.entries(s.titleParams).map(([k, v]) => [k, template(v)] as const);
+  if (params || variants?.some(v => v.title)) r.title = t => {
+    const v = variantOf(t), key = v?.title ?? `clean.${s.id}.title`;
+    return params ? [key, Object.fromEntries(params.map(([k, f]) => [k, f(t, v?.label)]))] : [key];
+  };
+  // Una orden fija se queda en texto; la que depende del elemento, en función
+  const cmd = s.cmd != null ? template(s.cmd) : undefined;
+  if (s.cmd != null && !variants?.some(v => v.cmd) && s.cmdMinAlloc == null && !/\{\w+\}/.test(s.cmd)) r.cmd = s.cmd;
+  else if (cmd || variants?.some(v => v.cmd)) r.cmd = t => {
+    const v = variantOf(t), f = v?.cmd ?? cmd;
+    return f && (s.cmdMinAlloc == null || fills(t, s.cmdMinAlloc)) ? f(t, v?.label) : undefined;
+  };
+  if (s.how) r.how = s.how;
+  if (s.useAlloc) r.useAlloc = true;
+  if (s.action) r.action = s.action;
+  if (s.parent) r.parent = true;
+  if (s.list) r.list = s.list;
+  if (s.group) r.group = true;
+  if (s.min) r.min = bytes(s.min);
+  return r;
+}
+const compileSet = (set: CleanRuleSet) => set.rules.map(s => compile(s, set));
+
+export const RULES: Rule[] = compileSet(CLEAN_RULES.windows);
 
 /** Carpetas que conviene explicar aunque no sean candidatas a limpieza (texto: known.<id>). */
 export const KNOWN: [id: string, re: RegExp][] = [
@@ -139,70 +135,11 @@ export const KNOWN: [id: string, re: RegExp][] = [
 ];
 
 // ---------- Linux ----------
-// Carpeta personal: /home/<usuario> o /root
-const HOME = String.raw`^/(home/[^/]+|root)`;
+// Carpeta personal: /home/<usuario> o /root (la misma variable que usan las reglas)
+const HOME = CLEAN_RULES.linux.vars.home;
 const home = (rest: string) => new RegExp(HOME + rest);
-// Programas instalados y cachés de usuario (ya cubiertas por ~/.cache): sus dependencias no se regeneran solas
-const INSTALLED_LINUX = /^\/(usr|opt|snap|var\/lib)\/|\/\.(vscode|vscode-server|cursor)[^/]*\/|\/\.local\/|\/\.cache\//;
-// Cachés de herramientas de desarrollo fuera de ~/.cache (las de dentro, pip, uv, yarn, go-build…, las cubre ~/.cache)
-const PACKAGE_CACHES_LINUX: [RegExp, string, string][] = [
-  [home('/\\.npm$'), 'npm', 'npm cache clean --force'],
-  [home('/\\.local/share/pnpm/store$|/\\.pnpm-store$'), 'pnpm', 'pnpm store prune'],
-  [home('/\\.bun/install/cache$'), 'Bun', 'bun pm cache rm'],
-  [home('/\\.nuget/packages$'), 'NuGet', 'dotnet nuget locals all --clear'],
-  [home('/go/pkg/mod$'), 'Go', 'go clean -modcache'],
-];
-const packageCacheLinux = (p: string) => PACKAGE_CACHES_LINUX.find(([re]) => re.test(p));
-// Cachés de los gestores de paquetes del sistema
-const SYSTEM_PACKAGES: [RegExp, string, string][] = [
-  [/^\/var\/cache\/apt\/archives$/, 'APT', 'sudo apt clean'],
-  [/^\/var\/cache\/(dnf|yum)$/, 'DNF', 'sudo dnf clean all'],
-  [/^\/var\/cache\/pacman\/pkg$/, 'pacman', 'sudo paccache -rk1'],
-  [/^\/var\/cache\/zypp$/, 'zypper', 'sudo zypper clean --all'],
-];
-const systemPackagesOf = (p: string) => SYSTEM_PACKAGES.find(([re]) => re.test(p));
-const containersOf = (p: string): [string, string] | undefined =>
-  /^\/var\/lib\/docker$/.test(p) ? ['Docker', 'docker system prune -a'] : home('/\\.local/share/containers$').test(p) ? ['Podman', 'podman system prune -a'] : undefined;
 
-export const LINUX_RULES: Rule[] = [
-  // ---- Seguro: se regenera o es temporal ----
-  { id: 'rustTarget', q: 'type:dir name:target', risk: 'ok', cmd: 'cargo clean', needs: ['cachedir.tag', '.rustc_info.json'],
-    ok: t => t.name === 'target' && !INSTALLED_LINUX.test(t.path), min: 50 * MB },
-  { id: 'nodeModules', q: 'type:dir name:node_modules', risk: 'ok', cmd: 'bun install',
-    ok: t => t.name === 'node_modules' && (t.path.match(/\/node_modules(?=\/|$)/g) || []).length === 1 && !INSTALLED_LINUX.test(t.path), min: 20 * MB },
-  { id: 'venv', q: 'type:dir name:.venv', risk: 'ok', cmd: 'uv sync', ok: t => t.name === '.venv' && !INSTALLED_LINUX.test(t.path), min: 20 * MB },
-  { id: 'userCache', q: 'type:dir name:.cache', risk: 'ok', how: true, ok: t => home('/\\.cache$').test(t.path), min: 500 * MB },
-  { id: 'packageCaches', q: 'type:dir re:^(\\.npm|store|\\.pnpm-store|cache|packages|mod)$', risk: 'ok',
-    ok: t => !!packageCacheLinux(t.path), title: t => ['clean.packageCaches.title', { name: packageCacheLinux(t.path)?.[1] ?? t.name }],
-    cmd: t => packageCacheLinux(t.path)?.[2], min: 200 * MB },
-  { id: 'systemPackages', q: 'type:dir re:^(archives|dnf|yum|pkg|zypp)$', risk: 'ok',
-    ok: t => !!systemPackagesOf(t.path), title: t => ['clean.systemPackages.title', { name: systemPackagesOf(t.path)?.[1] ?? t.name }],
-    cmd: t => systemPackagesOf(t.path)?.[2], min: 200 * MB },
-  { id: 'journal', q: 'type:dir name:journal', risk: 'ok', cmd: 'sudo journalctl --vacuum-size=200M', ok: t => /^\/var\/log\/journal$/.test(t.path), min: 300 * MB },
-  { id: 'coreDumps', q: 'type:dir name:coredump', risk: 'ok', cmd: 'coredumpctl list', how: true, ok: t => /^\/var\/lib\/systemd\/coredump$/.test(t.path), min: 100 * MB },
-  { id: 'userTrash', q: 'type:dir name:Trash', risk: 'ok', cmd: 'gio trash --empty', ok: t => home('/\\.local/share/Trash$').test(t.path), min: 50 * MB },
-  { id: 'shaderCache', q: 'type:dir name:shadercache', risk: 'ok', ok: t => /\/steamapps\/shadercache$/.test(t.path), min: 200 * MB },
-  // ---- Revisar: es tuyo, decides tú ----
-  { id: 'aiModels', q: 'ext:gguf,safetensors,ckpt,onnx', risk: 'warn', group: true, ok: t => /^(gguf|safetensors|ckpt|onnx)$/i.test(t.ext), min: 500 * MB },
-  { id: 'vmImages', q: 'ext:qcow2,vdi,vmdk,vhd,vhdx', risk: 'warn', how: true, ok: t => /^(qcow2|vdi|vmdk|vhdx?)$/i.test(t.ext), min: 500 * MB },
-  { id: 'containers', q: 'type:dir re:^(docker|containers)$', risk: 'warn', how: true,
-    ok: t => !!containersOf(t.path), title: t => ['clean.containers.title', { name: containersOf(t.path)?.[0] ?? t.name }],
-    cmd: t => containersOf(t.path)?.[1], min: 1 * GB },
-  { id: 'game', q: 'type:dir path:steamapps', risk: 'warn', title: t => ['clean.game.title', { name: t.name }], ok: t => /\/steamapps\/common\/[^/]+$/.test(t.path), min: 1 * GB },
-  { id: 'flatpak', q: 'type:dir name:flatpak', risk: 'warn', cmd: 'flatpak uninstall --unused', ok: t => /^\/var\/lib\/flatpak$/.test(t.path) || home('/\\.local/share/flatpak$').test(t.path), min: 1 * GB },
-  { id: 'snapRevisions', q: 'type:dir name:snaps', risk: 'warn', cmd: 'sudo snap set system refresh.retain=2', how: true, ok: t => /^\/var\/lib\/snapd\/snaps$/.test(t.path), min: 1 * GB },
-  { id: 'downloads', q: 'path:/Downloads/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m OR path:/Descargas/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m OR path:/Téléchargements/ ext:iso,zip,7z,deb,rpm,appimage,xz,gz size:>100m',
-    risk: 'warn', group: true, min: 200 * MB },
-  { id: 'timeshift', q: 'type:dir name:snapshots', risk: 'warn', how: true, ok: t => /^\/timeshift(-btrfs)?\/snapshots$/.test(t.path), min: 1 * GB },
-  // ---- No borrar a mano: lo gestiona el sistema ----
-  { id: 'swapLinux', q: 'swap.img OR swapfile', risk: 'bad', cmd: 'swapon --show', ok: t => /^\/(swap\.img|swapfile)$/.test(t.path) },
-  // ---- Orden ----
-  { id: 'brokenLinks', q: '', risk: 'ok', list: 'links' },
-  { id: 'emptyFolders', q: 'type:dir files:=0 ' + KEEP_EMPTY_LINUX, risk: 'warn', list: 'query' },
-  { id: 'emptyFiles', q: 'size:=0 ' + KEEP_EMPTY_LINUX, risk: 'warn', list: 'query' },
-  { id: 'cacheTag', q: 're:^CACHEDIR\\.TAG$', risk: 'ok', parent: true, title: t => ['clean.cacheTag.title', { name: lastTwo(t.path) }],
-    ok: t => !INSTALLED_LINUX.test(t.path + '/'), min: 50 * MB },
-];
+export const LINUX_RULES: Rule[] = compileSet(CLEAN_RULES.linux);
 
 /** Carpetas de Linux que conviene explicar (texto: known.<id>). */
 export const LINUX_KNOWN: [id: string, re: RegExp][] = [

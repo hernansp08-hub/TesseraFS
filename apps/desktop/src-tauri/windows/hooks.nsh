@@ -4,6 +4,11 @@
 ; unidades. Se escribe sólo para el usuario que instala (HKCU\Software\Classes, sin administrador) y la
 ; desinstalación lo quita. En Windows 11 aparece dentro de «Mostrar más opciones» (Mayús+F10).
 ; La app recibe la ruta como primer argumento y la escanea al abrirse (SystemInfo.launchPath).
+;
+; tessera-cli.exe (la línea de comandos y el servidor MCP) va junto a la app: lo copia y lo borra la plantilla
+; de Tauri (bundle > externalBin, que añade scripts/package.ts). Su carpeta se pone en el PATH del usuario
+; (HKCU\Environment, nunca el del sistema) y la desinstalación la quita. Lo hace la app (--add-to-path,
+; --remove-from-path) porque NSIS corta las cadenas a 1024 caracteres y un PATH más largo quedaría truncado.
 
 Var TesseraMenuText
 
@@ -14,7 +19,15 @@ Var TesseraMenuText
   WriteRegStr HKCU "Software\Classes\${ROOT}\shell\TesseraFS\command" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" ${ARG}"
 !macroend
 
+; Un asistente de IA puede tener abierto el servidor MCP (tessera-cli mcp), y entonces su exe no se puede
+; reemplazar ni borrar: como con la app, se pide cerrarlo (en silencio, se cierra)
+!macro NSIS_HOOK_PREINSTALL
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\tessera-cli.exe" "tessera-cli"
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
+  nsExec::Exec '"$INSTDIR\${MAINBINARYNAME}.exe" --add-to-path'
+  Pop $0
   ; El texto del menú, en el idioma elegido en el instalador (identificadores de idioma de Windows)
   StrCpy $TesseraMenuText "Analyze with TesseraFS"
   StrCmp $LANGUAGE "1034" 0 +2
@@ -35,6 +48,15 @@ Var TesseraMenuText
     nsExec::Exec '"$INSTDIR\${MAINBINARYNAME}.exe" --restore-schedule'
     Pop $0
   ${EndIf}
+!macroend
+
+; El PATH se quita con la app todavía instalada, después de cerrarla (y a tessera-cli): si se cancela,
+; la desinstalación se detiene sin haber tocado nada
+!macro NSIS_HOOK_PREUNINSTALL
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\tessera-cli.exe" "tessera-cli"
+  nsExec::Exec '"$INSTDIR\${MAINBINARYNAME}.exe" --remove-from-path'
+  Pop $0
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

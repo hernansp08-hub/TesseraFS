@@ -311,20 +311,20 @@ pub struct Top {
     pub folders: Vec<SearchRow>,
 }
 
-/// Los `n` archivos más grandes, a cualquier profundidad (tamaño desc, nombre).
-pub fn largest_files(t: &Tree, n: usize) -> Vec<SearchRow> {
+/// Los `n` archivos más grandes bajo `root`, a cualquier profundidad (tamaño desc, nombre).
+pub fn largest_files(t: &Tree, root: u32, n: usize) -> Vec<SearchRow> {
     if n == 0 {
         return Vec::new();
     }
-    ops::search(t, "", 0, n.min(u32::MAX as usize) as u32).rows
+    ops::search(t, "", root, n.min(u32::MAX as usize) as u32).rows
 }
 
-/// Las `n` carpetas más grandes a profundidad `depth` (1 = hijas directas de la raíz).
-pub fn largest_folders(t: &Tree, depth: u32, n: usize) -> Vec<SearchRow> {
+/// Las `n` carpetas más grandes a profundidad `depth` bajo `root` (1 = sus hijas directas).
+pub fn largest_folders(t: &Tree, root: u32, depth: u32, n: usize) -> Vec<SearchRow> {
     if n == 0 {
         return Vec::new();
     }
-    let mut level = vec![0u32];
+    let mut level = vec![root];
     for _ in 0..depth {
         level = level.iter().flat_map(|&id| t.kids(id).to_vec()).filter(|&k| t.is_dir(k)).collect();
     }
@@ -457,8 +457,8 @@ pub fn top_cmd(args: &[String]) -> i32 {
         size: t.size(0),
         total_files: t.files(0),
         total_dirs: t.dirs(0),
-        files: largest_files(t, a.files),
-        folders: largest_folders(t, a.depth, a.folders),
+        files: largest_files(t, 0, a.files),
+        folders: largest_folders(t, 0, a.depth, a.folders),
     };
     let text = match a.format {
         Format::Table => render_table(&top),
@@ -647,8 +647,8 @@ mod tests {
             size: t.size(0),
             total_files: t.files(0),
             total_dirs: t.dirs(0),
-            files: largest_files(t, files),
-            folders: largest_folders(t, depth, folders),
+            files: largest_files(t, 0, files),
+            folders: largest_folders(t, 0, depth, folders),
         }
     }
 
@@ -656,12 +656,16 @@ mod tests {
     fn largest_and_rendering() {
         let t = sample();
         let paths = |v: &[SearchRow]| v.iter().map(|r| r.path.clone()).collect::<Vec<_>>();
-        assert_eq!(paths(&largest_files(&t, 2)), ["C:\\r\\a\\sub\\x, \"y\".txt", "C:\\r\\a\\a1.bin"]);
-        assert_eq!(paths(&largest_folders(&t, 1, 10)), ["C:\\r\\a", "C:\\r\\b"]);
-        assert_eq!(paths(&largest_folders(&t, 1, 1)), ["C:\\r\\a"]);
-        assert_eq!(paths(&largest_folders(&t, 2, 10)), ["C:\\r\\a\\sub"]);
-        assert!(largest_folders(&t, 3, 10).is_empty());
-        assert!(largest_files(&t, 0).is_empty());
+        assert_eq!(paths(&largest_files(&t, 0, 2)), ["C:\\r\\a\\sub\\x, \"y\".txt", "C:\\r\\a\\a1.bin"]);
+        assert_eq!(paths(&largest_folders(&t, 0, 1, 10)), ["C:\\r\\a", "C:\\r\\b"]);
+        assert_eq!(paths(&largest_folders(&t, 0, 1, 1)), ["C:\\r\\a"]);
+        assert_eq!(paths(&largest_folders(&t, 0, 2, 10)), ["C:\\r\\a\\sub"]);
+        assert!(largest_folders(&t, 0, 3, 10).is_empty());
+        assert!(largest_files(&t, 0, 0).is_empty());
+        // Bajo una carpeta
+        let a = find_node(&t, "a").unwrap();
+        assert_eq!(paths(&largest_files(&t, a, 1)), ["C:\\r\\a\\sub\\x, \"y\".txt"]);
+        assert_eq!(paths(&largest_folders(&t, a, 1, 10)), ["C:\\r\\a\\sub"]);
         let top = top_of(&t, 1, 1, 2);
         let csv = render_csv(&top);
         assert_eq!(

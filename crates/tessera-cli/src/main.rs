@@ -1,9 +1,12 @@
 //! tessera-cli: escanea una ruta e imprime el resumen; lista los archivos y carpetas más grandes
 //! (tabla, CSV o JSON); comprueba el espacio libre de un volumen sin escanear; gestiona el
-//! historial; guarda el escaneo completo en un `.tessera` (y abre uno en vez de escanear) y, para
-//! pruebas cruzadas, escribe un slice binario o un volcado JSON.
+//! historial; guarda el escaneo completo en un `.tessera` (y abre uno en vez de escanear); sirve las
+//! mismas consultas a asistentes de IA como servidor MCP (`mcp`) y, para pruebas cruzadas, escribe un
+//! slice binario o un volcado JSON.
 
+mod clean;
 mod cmds;
+mod mcp;
 
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
@@ -18,6 +21,7 @@ Uso:
   tessera-cli top <ruta> [opciones de top]          Los archivos y carpetas más grandes (tabla, CSV o JSON)
   tessera-cli check <ruta> --min-free <umbral>      Comprueba el espacio libre del volumen, sin escanear
   tessera-cli history [list | delete <id> | clear]  Historial (JSON; respeta TESSERA_HISTORY_DIR)
+  tessera-cli mcp                                   Servidor MCP para asistentes de IA (ver abajo)
   tessera-cli --help                                Esta ayuda (también `help` o `<orden> --help`)
 
 Escaneo guardado: si <ruta> es un archivo .tessera (de `scan --save` o de «Guardar escaneo» en la app),
@@ -69,6 +73,11 @@ Opciones de scan:
   --children               Lista los hijos de la raíz con sus totales (con --history-compare, por delta)
   --progress               Muestra el progreso
   --repeat N               Repite el escaneo N veces (medición)
+
+mcp  (servidor MCP por la entrada y la salida estándar, JSON-RPC):
+  Para Claude, Copilot, Cursor y otros clientes MCP: el cliente lanza `tessera-cli mcp` y le pide
+  escanear, ver lo más grande, buscar con filtros, tipos de archivo, duplicados, enlaces rotos e historial.
+  Sólo lee: no borra, no mueve y no envía nada. Los escaneos quedan en memoria mientras dura la sesión.
 
 Códigos de salida de scan, top e history: 0 bien, 1 error, 2 uso incorrecto.
 ";
@@ -167,6 +176,7 @@ fn main() {
         Some("history") => return history_cmd(&args[1..]),
         Some("top") => std::process::exit(cmds::top_cmd(&args[1..])),
         Some("check") => std::process::exit(cmds::check_cmd(&args[1..])),
+        Some("mcp") => std::process::exit(mcp::run()),
         _ => {}
     }
     if args.first().map(String::as_str) != Some("scan") || args.len() < 2 {

@@ -4,6 +4,13 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+### Asistentes de IA (MCP)
+- `tessera-cli mcp`: servidor MCP para que Claude, GitHub Copilot, Cursor y otros asistentes pregunten a TesseraFS qué ocupa el disco. Trece herramientas: unidades y espacio libre, escanear (también un `.tessera`), lo más grande, contenido de una carpeta, búsqueda con filtros, tipos de archivo, qué se puede limpiar, duplicados, enlaces rotos, historial, comparar con un resumen, evolución de una carpeta y guardar un resumen.
+- `cleanup_candidates`: qué se puede limpiar, con las mismas reglas que la pestaña «Liberar espacio» (que ahora comparten la app y `tessera-cli`). Cada candidato trae su riesgo, tamaño, por qué, cómo y la orden del propio programa (`cargo clean`, `npm cache clean --force`, `sudo apt clean`…); se puede filtrar por riesgo. Tampoco borra nada.
+- Sólo lee: no borra, no mueve y no envía nada. Los escaneos se quedan en memoria durante la sesión y se ponen al día con `refresh` (diario USN o volver a escanear la carpeta); los escaneos largos muestran progreso y se pueden cancelar.
+- Guía nueva: docs/usuario/mcp.md (Claude Desktop, Claude Code, VS Code y Cursor).
+- `tessera-cli` va ahora también en el instalador de Windows, el `.deb` y la AppImage. El instalador lo deja junto a la app y añade su carpeta al `PATH` del usuario (la desinstalación la quita); el `.deb`, en `/usr/bin/tessera-cli`; la AppImage lo lleva dentro (docs/usuario/linux.md explica cómo sacarlo).
+
 ## [0.11.0] - 2026-10-11
 
 ### El tiempo

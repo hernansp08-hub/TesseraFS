@@ -45,18 +45,19 @@ bun run desktop:dev
 | `bun run portable:pack` | Genera `apps/portable/dist/TesseraFS-portable/` y comprueba la firma de `bun.exe` |
 | `bun run desktop:dev` | Edición de escritorio en modo desarrollo |
 | `cd apps/desktop && bunx tauri build --no-bundle` | `target/release/tesserafs-desktop.exe` sin instalador |
-| `bun run desktop:build` | Igual, más el instalador NSIS |
+| `bun run desktop:build` | Igual, más el instalador NSIS, pero sin `tessera-cli.exe` (el instalador que se publica sale de `bun run package`) |
 | `cargo build --release -p tessera-cli` | Herramienta de línea de comandos |
 | `bun test` | Pruebas de TypeScript (protocolo, interfaz, motor Bun, catálogos de idiomas) |
 | `cargo test --workspace` | Pruebas de Rust |
 | `bun run release <tipo>` | Sube la versión, escribe el CHANGELOG, hace el commit y la etiqueta (ver [Versiones](../VERSIONES.md)) |
-| `bun run package` | Compila las dos ediciones y genera los zips, sumas y notas en `dist/release/vX.Y.Z/` |
+| `bun run package` | Compila las dos ediciones y `tessera-cli`, y genera el instalador (que lo incluye), los zips, sumas y notas en `dist/release/vX.Y.Z/` |
 | `bun run package --publish` | Además crea (o actualiza) la release en GitHub con `gh`; normalmente lo hace GitHub Actions |
 | `bun run i18n:check` | Estado de las traducciones: claves que faltan, que sobran o idénticas al inglés (`--same`, `--strict`) |
 | `bun packages/ui/scripts/serve.ts` | Sirve la interfaz compilada con el motor demo en `http://127.0.0.1:47801` (prueba con `#lang=de` o `#pseudo`) |
 | `TESSERA_HISTORY_DIR=… TESSERA_EXPORT_DIR=… bun run portable:dev` | La portable con historial y exportaciones en carpetas de prueba (la configuración `portable-pruebas` de `.claude/launch.json` usa `dist/pruebas/`) |
 | `tessera-cli scan <ruta> --history-save` · `--history-compare <id>` · `tessera-cli history list` | Historial desde la línea de comandos, para comprobar resúmenes entre motores |
 | `tessera-cli top <ruta>` · `tessera-cli check <ruta> --min-free 10%` | Lo más grande y aviso de poco espacio ([guía](../usuario/linea-de-comandos.md)) |
+| `npx @modelcontextprotocol/inspector target/release/tessera-cli mcp` | Probar el servidor MCP a mano ([guía](../usuario/mcp.md); código en `crates/tessera-cli/src/mcp.rs`) |
 | `tessera-cli scan <ruta> --dups <bytes> [--dups-out f.json]` | Búsqueda de duplicados desde la línea de comandos |
 | `pwsh scripts/capturas.ps1 [-Lang es]` | Regenera las capturas de la documentación (en español por defecto) |
 
@@ -145,27 +146,30 @@ target/release/tessera-cli scan C:\ --compare
 
 ### Añadir una regla a «Liberar espacio»
 
-Las reglas son filtros con explicación, en `RULES` dentro de `packages/ui/src/clean.ts`. Ese módulo no depende de la interfaz, así que se prueba con rutas reales en `packages/ui/test/clean.test.ts`. La misma regla alimenta la tarjeta de la pestaña y el bloque «¿Qué es esto?» del panel de detalle.
+Las reglas son filtros con explicación escritos como datos, en `packages/protocol/src/clean-rules.json` (una lista para Windows y otra para Linux). Las leen dos sitios: la interfaz, donde `packages/ui/src/clean.ts` las convierte en funciones para la tarjeta de la pestaña y el bloque «¿Qué es esto?» del panel de detalle, y `tessera-cli mcp`, donde `crates/tessera-cli/src/clean.rs` las incluye con `include_str!` para la herramienta `cleanup_candidates`. El formato completo se explica en `packages/protocol/src/clean.ts`.
 
-```ts
-{ id: 'gradleCache', q: 'type:dir name:caches', risk: 'ok',
-  ok: t => /\\\.gradle\\caches$/i.test(t.path), min: 200 * MB },
+```json
+{ "id": "gradleCache", "q": "type:dir name:caches", "risk": "ok",
+  "ok": { "path": "/\\.gradle/caches$" }, "min": "200m" }
 ```
+
+Las expresiones regulares van en texto. En las reglas de Windows, `/` es el separador `\` (para no doblar barras) y no se distinguen mayúsculas; `{ "re": "^node_modules$", "i": false }` las distingue. Usa sólo lo que entienden igual JavaScript y el crate `regex` de Rust: nada de lookahead ni de referencias hacia atrás.
 
 | Campo | Para qué |
 |---|---|
 | `id` | Sus textos van en el catálogo: `clean.<id>.title` y `clean.<id>.why` |
-| `q` | Consulta del lenguaje de búsqueda que trae los candidatos (se ejecuta en el motor) |
-| `ok` | Filtro adicional sobre el nombre, la ruta o la extensión; también decide el «¿Qué es esto?» |
-| `needs` | Hijos que confirman el candidato, como `['cachedir.tag']` en un `target` de Rust |
-| `title` | Título que depende del elemento: devuelve una clave y sus parámetros (`['clean.game.title', { name }]`) |
-| `cmd` | Orden que se puede copiar; una función si depende de la ruta |
-| `how` | Ajuste de Windows: `true` usa `clean.<id>.how`; un id usa el de otra regla (`'temp'`) |
-| `min` | Tamaño mínimo para proponerlo en la pestaña |
+| `q` | Consulta del lenguaje de búsqueda que trae los candidatos (se ejecuta en el motor). `{keepEmpty}` inserta una variable del sistema (`vars`) |
+| `ok` | Condiciones sobre `name`, `path`, `notPath`, `ext` y `flag` (p. ej. `"CLOUD"`); también deciden el «¿Qué es esto?» |
+| `variants` | La primera que encaja da la herramienta (`label`), su `cmd` o su `title`: npm, Chrome, APT… Con variantes, lo que no encaja en ninguna no es candidato |
+| `needs` | Hijos que confirman el candidato, como `["cachedir.tag"]` en un `target` de Rust |
+| `titleParams` | Parámetros del título, como `{ "name": "{label}" }`. Las plantillas conocen `{label}`, `{name}`, `{path}` y `{lastTwo}` |
+| `cmd` | Orden que se puede copiar (plantilla); con `cmdMinAlloc`, sólo si aún no está comprimido |
+| `how` | Ajuste de Windows: `true` usa `clean.<id>.how`; un id usa el de otra regla (`"temp"`) |
+| `min` | Tamaño mínimo para proponerlo, con las unidades de la búsqueda: `"200m"`, `"1g"` |
 | `group` | Agrupa los archivos por carpeta; al marcar, se marcan los archivos y no la carpeta |
 | `risk` | `ok`, `warn` o `bad` (las de `bad` no se pueden marcar desde la tarjeta) |
 
-Si el candidato puede estar dentro de un programa instalado, excluye esas rutas con `INSTALLED`. Añade casos positivos y negativos a `clean.test.ts`: la prueba comprueba que la consulta `q` de verdad trae el ejemplo y que `ok` lo acepta. Los textos van en los cinco catálogos; `bun test packages/i18n` avisa si falta alguno.
+Si el candidato puede estar dentro de un programa instalado, excluye esas rutas con `"notPath": "{installed}"`. Añade casos positivos y negativos a `clean.test.ts`: la prueba comprueba que la consulta `q` de verdad trae el ejemplo y que `ok` lo acepta. Las pruebas de `clean.rs` (`cargo test -p tessera-cli`) comprueban que Rust carga las reglas y compila sus expresiones y consultas; si la regla usa algo nuevo del formato, añade allí también un caso. Los textos van en los cinco catálogos; `bun test packages/i18n` avisa si falta alguno.
 
 Para explicar una carpeta que no es candidata a limpieza, añádela a `KNOWN` con su expresión regular y su texto `known.<id>`.
 

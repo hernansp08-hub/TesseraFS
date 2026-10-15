@@ -2,6 +2,8 @@ node_modules/
 target/
 dist/
 dist-demo/
+# tessera-cli copiado para los paquetes de Tauri (scripts/package.ts)
+apps/desktop/src-tauri/binaries/
 *.log
 # Investigación interna: no forma parte del producto publicado
 reports/

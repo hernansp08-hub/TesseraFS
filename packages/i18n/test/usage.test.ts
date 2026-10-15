@@ -46,10 +46,17 @@ describe('uso de las claves', () => {
     expect([...used(PACKAGING)].filter(k => !(k in en))).toEqual([]);
   });
 
-  test('cada regla de «Liberar espacio» tiene su explicación', () => {
-    const ids = [...read(join(ROOT, 'packages/ui/src/clean.ts')).matchAll(/\{ id: '(\w+)', q:/g)].map(m => m[1]);
-    expect(ids.length).toBeGreaterThan(20);
-    expect(ids.filter(id => !(`clean.${id}.why` in en))).toEqual([]);
+  test('cada regla de «Liberar espacio» tiene sus textos: título, por qué y cómo', () => {
+    // Las reglas son datos que comparten la interfaz y tessera-cli mcp
+    const data = JSON.parse(read(join(ROOT, 'packages/protocol/src/clean-rules.json')));
+    const rules: { id: string; how?: true | string; variants?: { title?: string }[] }[] = [...data.windows.rules, ...data.linux.rules];
+    expect(rules.length).toBeGreaterThan(40);
+    const keys = rules.flatMap(r => [
+      `clean.${r.id}.why`,
+      ...(r.variants?.map(v => v.title ?? `clean.${r.id}.title`) ?? [`clean.${r.id}.title`]),
+      ...(r.how ? [`clean.${r.how === true ? r.id : r.how}.how`] : []),
+    ]);
+    expect(keys.filter(k => !(k in en))).toEqual([]);
   });
 
   test('cada carpeta conocida tiene su explicación known.<id>, y no sobra ninguna', () => {

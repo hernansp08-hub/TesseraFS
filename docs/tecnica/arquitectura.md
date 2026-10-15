@@ -53,7 +53,7 @@ La comparación que llevó a elegir Edge para la portable, comprobada con `Get-A
 
 ```text
 packages/
-  protocol/      contrato: types.ts · slice.ts (codec binario) · query.ts (lenguaje de búsqueda)
+  protocol/      contrato: types.ts · slice.ts (codec binario) · query.ts (lenguaje de búsqueda) · clean-rules.json (reglas de «Liberar espacio», también para tessera-cli)
   ui/            interfaz: index.html, src/{app,render,colors,format,main}.ts, backends/, fonts/
   core-bun/      motor Bun: win32.ts (FFI) · walk.ts + walkworker.ts · mft.ts · store.ts · engine.ts
 apps/

@@ -1,11 +1,11 @@
 // Empaqueta la versión actual para el sistema donde se ejecuta y, con --publish, crea la release en GitHub.
 // Windows:
-//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-instalador-win-x64.exe   instalador NSIS de la app de escritorio (por usuario, sin administrador)
+//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-instalador-win-x64.exe   instalador NSIS de la app de escritorio y tessera-cli.exe (por usuario, sin administrador)
 //   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-escritorio-win-x64.zip   tesserafs-desktop.exe + tessera-cli.exe + README multilingüe + licencias
 //   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-portable-win-x64.zip     carpeta portable (bun.exe firmado + tesserafs.js) + licencias
 // Linux (x86_64):
-//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-linux-x86_64.AppImage    la app de escritorio, sin instalar
-//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-linux-amd64.deb          paquete para Debian/Ubuntu
+//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-linux-x86_64.AppImage    la app de escritorio, sin instalar (con tessera-cli en usr/bin)
+//   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-linux-amd64.deb          paquete para Debian/Ubuntu (con /usr/bin/tessera-cli)
 //   dist/release/vX.Y.Z/TesseraFS-X.Y.Z-cli-linux-x64.tar.gz     tessera-cli + licencias
 // Y en ambos: SHA256SUMS.txt y NOTAS.md (scripts/publish.ts, que también junta los de los dos sistemas en CI).
 // Uso: bun run package [--skip-build] [--publish]
@@ -36,9 +36,17 @@ const out = (cmd: string[]) => Bun.spawnSync(cmd, { cwd: ROOT }).stdout.toString
 // ---------- 1. Compilar ----------
 if (!skipBuild) {
   run(['bun', 'packages/ui/build.ts']);
-  // Tauri compila el exe y genera los paquetes: en Linux, AppImage y .deb; en Windows, el instalador NSIS
-  run(['bunx', 'tauri', 'build', '--bundles', LINUX ? 'appimage,deb' : 'nsis'], join(ROOT, 'apps', 'desktop'));
   run(['cargo', 'build', '--release', '-p', 'tessera-cli']);
+  // tessera-cli entra en los paquetes de Tauri como «sidecar» (bundle > externalBin): Tauri lo busca con el
+  // target triple en el nombre y lo instala sin él, junto a la app en Windows y en /usr/bin en Linux. Se
+  // añade sólo aquí, con --config, para que cargo build/test y tauri dev no necesiten el archivo.
+  const ext = LINUX ? '' : '.exe', sidecar = 'binaries/tessera-cli';
+  const tauriDir = join(ROOT, 'apps', 'desktop', 'src-tauri');
+  mkdirSync(join(tauriDir, 'binaries'), { recursive: true });
+  cpSync(join(ROOT, 'target', 'release', `tessera-cli${ext}`), join(tauriDir, `${sidecar}-${TARGET}${ext}`));
+  // Tauri compila el exe y genera los paquetes: en Linux, AppImage y .deb; en Windows, el instalador NSIS
+  run(['bunx', 'tauri', 'build', '--bundles', LINUX ? 'appimage,deb' : 'nsis',
+    '--config', JSON.stringify({ bundle: { externalBin: [sidecar] } })], join(ROOT, 'apps', 'desktop'));
   if (!LINUX) run(['bun', 'apps/portable/pack.ts']);
 }
 

@@ -16,6 +16,8 @@
 //! - [`launch`] lee la carpeta pedida al abrir la app (`SystemInfo.launchPath`).
 //! - [`schedule`] programa un escaneo sin ventana (Programador de tareas o temporizador de systemd) que
 //!   guarda un resumen en el historial y avisa si queda poco espacio.
+//! - [`user_path`] pone o quita la carpeta de la app (con `tessera-cli`) en el `PATH` del usuario al
+//!   instalar y desinstalar en Windows.
 
 pub mod attrs;
 pub mod build;
@@ -40,6 +42,7 @@ pub mod slice;
 pub mod sys;
 pub mod tree;
 pub mod types;
+pub mod user_path;
 pub mod usn;
 #[cfg(windows)]
 pub mod walk;

@@ -12,6 +12,8 @@ use tauri::ipc::{Channel, InvokeBody, Request, Response};
 #[cfg(windows)]
 use tauri::Manager;
 use tauri::{AppHandle, State, WebviewWindowBuilder};
+#[cfg(windows)]
+use tessera_core::user_path;
 use tessera_core::{
     export, launch, links, msg, ops, saved, schedule, slice, sys, ActionKind, ActionResult, ChildrenResponse, CompareResult, DupProgress, DupResult,
     ElevationInfo, EngineChoice, EngineMessage, ExportResult, ExtStat, History, HistoryEntry, NodeRow, RefreshResult, RescanResult, Scan, ScanOptions,
@@ -511,6 +513,19 @@ fn restore_schedule() -> i32 {
     }
 }
 
+/// `--add-to-path` y `--remove-from-path` (los lanza el instalador de Windows): pone o quita la carpeta de la
+/// app, donde también está `tessera-cli.exe`, en el `PATH` del usuario. Termina con 0, o con 1 si no se pudo.
+#[cfg(windows)]
+fn update_user_path(add: bool) -> i32 {
+    match if add { user_path::add() } else { user_path::remove() } {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("TesseraFS: couldn't update the user PATH: {e}");
+            1
+        }
+    }
+}
+
 #[tauri::command]
 fn elevation() -> ElevationInfo {
     sys::elevation()
@@ -532,6 +547,12 @@ fn main() {
     }
     if schedule::has_arg(std::env::args_os().skip(1), schedule::RESTORE_ARG) {
         std::process::exit(restore_schedule());
+    }
+    #[cfg(windows)]
+    for (arg, add) in [(user_path::ADD_ARG, true), (user_path::REMOVE_ARG, false)] {
+        if schedule::has_arg(std::env::args_os().skip(1), arg) {
+            std::process::exit(update_user_path(add));
+        }
     }
     // WebKitGTK con NVIDIA o Wayland deja a veces la ventana en blanco con el renderizador DMA-BUF
     // (documentado por Tauri y WebKitGTK); se desactiva salvo que el usuario diga otra cosa.

@@ -62,14 +62,14 @@ Cada versión se publica en la página **Releases** del repositorio:
 
 | Archivo | Edición |
 |---|---|
-| `TesseraFS-X.Y.Z-instalador-win-x64.exe` (≈3 MB) | Escritorio, con instalador: **lo recomendado** |
+| `TesseraFS-X.Y.Z-instalador-win-x64.exe` (≈4 MB) | Escritorio, con instalador: **lo recomendado** (incluye `tessera-cli.exe`) |
 | `TesseraFS-X.Y.Z-escritorio-win-x64.zip` (≈5 MB) | Escritorio, sin instalar (incluye `tessera-cli.exe`) |
 | `TesseraFS-X.Y.Z-portable-win-x64.zip` (≈37 MB) | Portable |
 | `SHA256SUMS.txt` | Sumas para comprobar que la descarga está íntegra |
 
 **Con Scoop:** `scoop bucket add tesserafs https://github.com/hernansp08-hub/scoop-tesserafs` y después `scoop install tesserafs` (instala la edición de escritorio y deja `tessera-cli` en el PATH; se actualiza con `scoop update tesserafs`).
 
-**Con el instalador:** ábrelo y sigue los pasos. Se instala sólo para tu usuario (en `%LOCALAPPDATA%\TesseraFS`), sin pedir administrador, con acceso en el menú Inicio. Para actualizar, instala la versión nueva encima. Se desinstala desde Configuración › Aplicaciones; tu historial de escaneos se conserva.
+**Con el instalador:** ábrelo y sigue los pasos. Se instala sólo para tu usuario (en `%LOCALAPPDATA%\TesseraFS`), sin pedir administrador, con acceso en el menú Inicio. También instala `tessera-cli` ([línea de comandos](linea-de-comandos.md) y [asistentes de IA](mcp.md)) y añade esa carpeta a tu `PATH` de usuario. Para actualizar, instala la versión nueva encima. Se desinstala desde Configuración › Aplicaciones, que también quita la carpeta del `PATH`; tu historial de escaneos se conserva.
 
 **Con un zip:**
 
