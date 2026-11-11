@@ -4,6 +4,7 @@
 //   --no-window   sólo servidor; imprime URL y token (pruebas)
 //   --debug       deja la consola visible y registra en ella
 //   --threads=N   workers del recorrido (0 = un solo hilo)
+//   mcp           servidor MCP para asistentes de IA por la entrada y la salida estándar, sin ventana (ver mcp.ts)
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,7 @@ import type { ActionKind, DupProgress, EngineChoice, ScanProgress, SortKey } fro
 import {
   TESSERA_MAX_FILE, TesseraEngine, defaultThreads, errorResponse, launchPath, msg, quoteArg, runElevated, setWalkWorkerUrl, win32,
 } from '../../../packages/core-bun/src/index.ts';
+import { runMcp } from './mcp.ts';
 import { embeddedUi } from './ui-macro.ts' with { type: 'macro' };
 
 // en un objeto para que el minificador no copie la cadena en cada uso
@@ -56,6 +58,10 @@ async function main() {
 
   // en el bundle, este mismo archivo hace de worker del recorrido
   if (import.meta.path.endsWith('.js')) setWalkWorkerUrl(import.meta.url);
+
+  // `mcp`: antes de tocar la consola, abrir Edge o el servidor HTTP. La salida estándar es del cliente MCP: sólo
+  // mensajes JSON-RPC (los registros van a la salida de errores)
+  if (args[0] === 'mcp') return runMcp({ threads });
 
   // consola: se oculta si es nuestra; con Windows Terminal se relanza sin consola
   if (!debug && !noWindow) {

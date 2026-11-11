@@ -21,7 +21,7 @@ Analizador de espacio en disco para Windows y Linux, de código abierto, rápido
 - **Filtros potentes:** `ext:gguf size:>1g`, `age:>2y size:>500m`, `path:Downloads ext:msi,exe`…
 - **Liberar espacio con criterio:** propone candidatos como Seguro, Revisar o No borrar a mano, con la orden o el ajuste correcto para cada uno.
 - **Privado y prudente:** nada sale de tu equipo; sólo lee el disco; borra únicamente a la Papelera y siempre con confirmación.
-- **Pregúntale a tu asistente de IA:** `tessera-cli mcp` es un servidor MCP de sólo lectura para Claude, Copilot o Cursor: «¿qué ha crecido en C: este mes?» ([cómo conectarlo](docs/usuario/mcp.md)).
+- **Pregúntale a tu asistente de IA:** `tessera-cli mcp` es un servidor MCP de sólo lectura para Claude, Copilot o Cursor: «¿qué ha crecido en C: este mes?». La edición portable lo trae también, sin ejecutables propios ([cómo conectarlo](docs/usuario/mcp.md)).
 - **En tu idioma:** English, Español, Português (Brasil), Français y Deutsch, con el idioma de Windows por defecto y cambio al instante ([cómo se traduce](docs/tecnica/i18n.md)).
 
 <table>

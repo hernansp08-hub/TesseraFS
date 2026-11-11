@@ -1,0 +1,215 @@
+{
+  "$comment": "Herramientas del servidor MCP: las anuncian tessera-cli mcp (crates/tessera-cli/src/mcp.rs, con include_str!) y la edición portable (apps/portable/src/mcp.ts, vía packages/protocol/src/mcp.ts) tal cual, salvo que {\"$ref\": \"#/$defs/<nombre>\"} se sustituye por $defs.<nombre>. Los textos van en inglés (los lee el modelo) y deben valer para las dos ediciones.",
+  "instructions": "TesseraFS analyzes disk usage on this computer (Windows or Linux). Typical flow: list_volumes, then scan a drive or folder (as administrator a whole NTFS drive takes seconds; without it a large drive can take a minute or two the first time, so tell the user and prefer the folder they ask about; scans stay in memory, so later calls are instant), then largest, list_folder, search and file_types to explain what uses the space. compare_snapshot and size_trend answer \"what grew?\" from the snapshots in the TesseraFS history. Every result says when its scan was taken; call scan with refresh: true for current data. All tools are read-only: nothing is deleted, moved or sent anywhere. When suggesting what to free, start with cleanup_candidates (the rules of the app's Free up space tab, with risk, why and how), explain what each item is, prefer the program's own cleanup command (cargo clean, npm cache clean --force, docker system prune, Disk Cleanup…) over deleting folders, and let the user delete things themselves (the TesseraFS app sends them to the Recycle Bin).",
+  "$defs": {
+    "path": {
+      "type": "string",
+      "description": "Absolute path of a folder or file (e.g. C:\\Users\\ana\\Downloads or /home/ana). Defaults to the root of the most recently used scan. If no scan in memory contains it, the folder is scanned first."
+    }
+  },
+  "tools": [
+    {
+      "name": "list_volumes",
+      "title": "Drives and free space",
+      "description": "List the drives (Windows) or mounted file systems (Linux) with size and free space, without scanning. Also says whether TesseraFS runs as administrator (whole NTFS drives then scan in seconds through the MFT).",
+      "inputSchema": { "type": "object", "properties": {} },
+      "annotations": {
+        "title": "Drives and free space",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "scan",
+      "title": "Scan a drive or folder",
+      "description": "Scan a drive or folder (or open a .tessera saved scan) and keep it in memory for the other tools. Returns the totals, the largest items inside and, for a drive, its free space. As administrator a whole NTFS drive takes seconds (MFT); without it the folders are walked, which for a large system drive can take from 15 seconds to a couple of minutes (the first scan after a restart is the slowest): progress is reported meanwhile, and scanning only the folder you need (e.g. the user profile) is faster. If a scan in memory already contains the path, answers from it at once; refresh: true updates it (a folder inside the scan is rescanned on its own; the scanned drive or folder itself is scanned again, or updated from the NTFS change journal when the engine supports it).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Drive or folder to scan (C:\\, D:\\Projects, /home/ana) or a .tessera file" },
+          "refresh": { "type": "boolean", "description": "Update the data even if it is already in memory (default false)" },
+          "engine": {
+            "type": "string",
+            "enum": ["auto", "walk", "mft"],
+            "description": "auto (default): MFT for a whole NTFS drive when running as administrator, otherwise a folder walk"
+          }
+        },
+        "required": ["path"]
+      },
+      "annotations": {
+        "title": "Scan a drive or folder",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "largest",
+      "title": "Largest files and folders",
+      "description": "The largest files (at any depth) and the largest folders (at a given depth) under a folder.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "$ref": "#/$defs/path" },
+          "files": { "type": "integer", "minimum": 0, "description": "How many files (default 20, max 500)" },
+          "folders": { "type": "integer", "minimum": 0, "description": "How many folders (default 10, max 500)" },
+          "depth": { "type": "integer", "minimum": 0, "description": "Folder depth: 1 = direct subfolders (default), 2 = their subfolders…" }
+        }
+      },
+      "annotations": {
+        "title": "Largest files and folders",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_folder",
+      "title": "List a folder",
+      "description": "The items directly inside a folder with their total size, file count and date, largest first by default. Use it to drill down step by step.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "$ref": "#/$defs/path" },
+          "sort": {
+            "type": "string",
+            "enum": ["size", "name", "modified", "files", "onDisk", "change"],
+            "description": "Order (default size). change = growth since the snapshot of compare_snapshot"
+          },
+          "limit": { "type": "integer", "minimum": 0, "description": "Items (default 50, max 1000)" },
+          "offset": { "type": "integer", "minimum": 0, "description": "Items to skip, for paging (default 0)" }
+        }
+      },
+      "annotations": { "title": "List a folder", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "search",
+      "title": "Search with filters",
+      "description": "Find files or folders under a path with the TesseraFS filter language (size, age, extension, path, attributes…). Returns the matches largest first, plus the count and total size of all matches.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "TesseraFS filter. Space = AND, `OR` or `|` = OR, `-x` = NOT, quotes for text with spaces. Plain text matches names (substring, case-insensitive); `*` and `?` are wildcards over the whole name. Keys: ext:mp4,mkv (ext:none) · size:>1g, size:100m..2g (b k m g t, base 1024) · alloc:>500m (space on disk) · age:<7d, age:>1y (d w mo y; time since last modification) · path:Downloads (text in the full path) · name:*.bak · re:^IMG_\\d{4} (regex on the name) · type:dir or type:file (default: files only) · files:>10k (files inside a folder; files:=0 = empty) · attr:cloud,hidden,system,compressed,hardlink,sparse,reparse. Examples: `ext:gguf,safetensors size:>1g` · `type:dir name:node_modules` · `path:Downloads ext:msi,exe,iso,zip age:>6mo` · `type:dir files:=0 -attr:reparse` · `age:>2y size:>500m`. Empty = the largest files."
+          },
+          "path": { "$ref": "#/$defs/path" },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Rows (default 50, max 2000); the count and total size always cover all matches"
+          }
+        }
+      },
+      "annotations": {
+        "title": "Search with filters",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "file_types",
+      "title": "Space by file type",
+      "description": "Space used by each file extension under a folder, largest first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "path": { "$ref": "#/$defs/path" }, "limit": { "type": "integer", "minimum": 0, "description": "Extensions (default 25)" } }
+      },
+      "annotations": { "title": "Space by file type", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "cleanup_candidates",
+      "title": "What can be cleaned up",
+      "description": "What the Free up space tab of the TesseraFS app would propose inside a folder, with the same rules: build output and dependencies (target, node_modules, .venv), package, browser and shader caches, temporary files, crash dumps, update leftovers, the Recycle Bin or Trash, local AI models, virtual disks, games, installers in Downloads, folders that declare themselves a cache (CACHEDIR.TAG), empty folders and files, broken links… Each candidate has its risk (ok = regenerates itself or is temporary; warn = the user's own data: they decide; bad = managed by the system: never delete it by hand), size, why, how and the program's own cleanup command when there is one. Safest first, then largest. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "$ref": "#/$defs/path" },
+          "risk": { "type": "string", "description": "Only these risks, comma-separated: ok, warn, bad (default: all)" },
+          "limit": { "type": "integer", "minimum": 0, "description": "Candidates (default 50, max 500); byRisk always covers all of them" }
+        }
+      },
+      "annotations": {
+        "title": "What can be cleaned up",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "find_duplicates",
+      "title": "Find duplicate files",
+      "description": "Find files with identical content under a folder (same size, then a hash of the whole content). Reads the candidate files, so a large folder can take minutes; raise minSize to go faster.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "$ref": "#/$defs/path" },
+          "minSize": { "type": ["string", "integer"], "description": "Smallest file size to compare: \"10MB\", \"1GB\" or bytes (default 1MB)" },
+          "limit": { "type": "integer", "minimum": 0, "description": "Groups to return, most space wasted first (default 20, max 500)" }
+        }
+      },
+      "annotations": {
+        "title": "Find duplicate files",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "broken_links",
+      "title": "Broken links",
+      "description": "Symbolic links, junctions and mount points under a folder whose target no longer exists.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "path": { "$ref": "#/$defs/path" }, "limit": { "type": "integer", "minimum": 0, "description": "Rows (default 50)" } }
+      },
+      "annotations": { "title": "Broken links", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "history",
+      "title": "Saved snapshots",
+      "description": "The scan snapshots in the TesseraFS history (saved by the app, its scheduled scan or save_snapshot), newest first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "path": { "type": "string", "description": "Only the snapshots of this scanned root (optional)" } }
+      },
+      "annotations": { "title": "Saved snapshots", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "compare_snapshot",
+      "title": "What changed",
+      "description": "Compare the scan in memory with a saved snapshot of the same root: what grew, shrank or disappeared since then. Read its warnings: rows marked likelyArtifact (folders this scan could not read, NTFS metadata seen only by the MFT engine) are differences in how the scans were made, not real changes on disk.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "$ref": "#/$defs/path" },
+          "snapshotId": { "type": "string", "description": "Snapshot id from history (default: the most recent one of this root made with the same engine as the scan, or else the most recent one)" },
+          "limit": { "type": "integer", "minimum": 0, "description": "Rows per list (default 20)" }
+        }
+      },
+      "annotations": { "title": "What changed", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "size_trend",
+      "title": "Size over time",
+      "description": "Size of a file or folder in every saved snapshot of its root, oldest first, plus the current scan.",
+      "inputSchema": { "type": "object", "properties": { "path": { "$ref": "#/$defs/path" } } },
+      "annotations": { "title": "Size over time", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+    },
+    {
+      "name": "save_snapshot",
+      "title": "Save a snapshot",
+      "description": "Save a summary of the scan containing path to the TesseraFS history, to compare against it later (compare_snapshot, size_trend or the app's Changes tab). Writes only to the history folder; like the app, it keeps the most recent snapshots of each root and removes older ones.",
+      "inputSchema": { "type": "object", "properties": { "path": { "$ref": "#/$defs/path" } } },
+      "annotations": { "title": "Save a snapshot", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false }
+    }
+  ]
+}

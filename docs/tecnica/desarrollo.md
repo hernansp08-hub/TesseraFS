@@ -58,6 +58,7 @@ bun run desktop:dev
 | `tessera-cli scan <ruta> --history-save` · `--history-compare <id>` · `tessera-cli history list` | Historial desde la línea de comandos, para comprobar resúmenes entre motores |
 | `tessera-cli top <ruta>` · `tessera-cli check <ruta> --min-free 10%` | Lo más grande y aviso de poco espacio ([guía](../usuario/linea-de-comandos.md)) |
 | `npx @modelcontextprotocol/inspector target/release/tessera-cli mcp` | Probar el servidor MCP a mano ([guía](../usuario/mcp.md); código en `crates/tessera-cli/src/mcp.rs`) |
+| `npx @modelcontextprotocol/inspector bun apps/portable/src/main.ts mcp` | El servidor MCP de la portable (`apps/portable/src/mcp.ts`). Las herramientas y las instrucciones de los dos servidores son datos compartidos: `packages/protocol/src/mcp-tools.json` |
 | `tessera-cli scan <ruta> --dups <bytes> [--dups-out f.json]` | Búsqueda de duplicados desde la línea de comandos |
 | `pwsh scripts/capturas.ps1 [-Lang es]` | Regenera las capturas de la documentación (en español por defecto) |
 
@@ -146,7 +147,7 @@ target/release/tessera-cli scan C:\ --compare
 
 ### Añadir una regla a «Liberar espacio»
 
-Las reglas son filtros con explicación escritos como datos, en `packages/protocol/src/clean-rules.json` (una lista para Windows y otra para Linux). Las leen dos sitios: la interfaz, donde `packages/ui/src/clean.ts` las convierte en funciones para la tarjeta de la pestaña y el bloque «¿Qué es esto?» del panel de detalle, y `tessera-cli mcp`, donde `crates/tessera-cli/src/clean.rs` las incluye con `include_str!` para la herramienta `cleanup_candidates`. El formato completo se explica en `packages/protocol/src/clean.ts`.
+Las reglas son filtros con explicación escritos como datos, en `packages/protocol/src/clean-rules.json` (una lista para Windows y otra para Linux). Las leen dos sitios: la interfaz, donde `packages/ui/src/clean.ts` las convierte en funciones para la tarjeta de la pestaña y el bloque «¿Qué es esto?» del panel de detalle, y `tessera-cli mcp`, donde `crates/tessera-cli/src/clean.rs` las incluye con `include_str!` para la herramienta `cleanup_candidates`. El servidor MCP de la portable (`apps/portable/src/mcp.ts`) usa las funciones de `packages/ui/src/clean.ts`. El formato completo se explica en `packages/protocol/src/clean.ts`.
 
 ```json
 { "id": "gradleCache", "q": "type:dir name:caches", "risk": "ok",

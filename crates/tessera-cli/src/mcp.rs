@@ -8,17 +8,23 @@
 //! escaneos quedan en memoria (los [`MAX_SCANS`] usados más recientemente) y las preguntas siguientes no
 //! vuelven a escanear. Un hilo aparte lee la entrada para poder cancelar un escaneo o una búsqueda de
 //! duplicados largos (`notifications/cancelled`).
+//!
+//! Las herramientas (nombre, descripción, esquema y anotaciones) y las instrucciones son datos que comparte con el
+//! servidor MCP de la edición portable (apps/portable/src/mcp.ts): packages/protocol/src/mcp-tools.json.
 
 use std::io::{BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{mpsc, Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 use tessera_core::types::flag;
-use tessera_core::{links, names, ops, saved, sys, DupProgress, EngineChoice, EngineMessage, History, NodeRow, Scan, ScanOptions, ScanProgress, SortKey, Totals, Tree, VolumeInfo};
+use tessera_core::{
+    links, names, ops, saved, sys, DupProgress, Engine, EngineChoice, EngineMessage, History, NodeRow, Param, Scan, ScanOptions, ScanProgress, SortKey, Totals, Tree,
+    VolumeInfo,
+};
 
 use crate::clean::{self, Card, Risk};
 use crate::cmds::{self, find_node, iso, largest_files, largest_folders, Threshold};
@@ -37,28 +43,7 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
-const INSTRUCTIONS: &str = "TesseraFS analyzes disk usage on this computer (Windows or Linux). \
-Typical flow: list_volumes, then scan a drive or folder (a whole NTFS drive takes seconds; scans stay in memory, so later calls are instant), \
-then largest, list_folder, search and file_types to explain what uses the space. compare_snapshot and size_trend answer \"what grew?\" \
-from the snapshots in the TesseraFS history. Every result says when its scan was taken; call scan with refresh: true for current data. \
-All tools are read-only: nothing is deleted, moved or sent anywhere. When suggesting what to free, start with cleanup_candidates \
-(the rules of the app's Free up space tab, with risk, why and how), explain what each item is, \
-prefer the program's own cleanup command (cargo clean, npm cache clean --force, docker system prune, Disk Cleanup…) over deleting folders, \
-and let the user delete things themselves (the TesseraFS app sends them to the Recycle Bin).";
-
 const NO_SCAN: &str = "No scan in memory yet: pass `path` (a folder or drive), or call `scan` first (list_volumes shows the drives).";
-
-const PATH_HELP: &str = "Absolute path of a folder or file (e.g. C:\\Users\\ana\\Downloads or /home/ana). \
-Defaults to the root of the most recently used scan. If no scan in memory contains it, the folder is scanned first.";
-
-const QUERY_HELP: &str = "TesseraFS filter. Space = AND, `OR` or `|` = OR, `-x` = NOT, quotes for text with spaces. \
-Plain text matches names (substring, case-insensitive); `*` and `?` are wildcards over the whole name. \
-Keys: ext:mp4,mkv (ext:none) · size:>1g, size:100m..2g (b k m g t, base 1024) · alloc:>500m (space on disk) · \
-age:<7d, age:>1y (d w mo y; time since last modification) · path:Downloads (text in the full path) · name:*.bak · \
-re:^IMG_\\d{4} (regex on the name) · type:dir or type:file (default: files only) · files:>10k (files inside a folder; files:=0 = empty) · \
-attr:cloud,hidden,system,compressed,hardlink,sparse,reparse. \
-Examples: `ext:gguf,safetensors size:>1g` · `type:dir name:node_modules` · `path:Downloads ext:msi,exe,iso,zip age:>6mo` · \
-`type:dir files:=0 -attr:reparse` · `age:>2y size:>500m`. Empty = the largest files.";
 
 // ---------- Entrada y salida ----------
 
@@ -236,7 +221,7 @@ impl Server {
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": { "name": "tesserafs", "title": "TesseraFS", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": INSTRUCTIONS
+                    "instructions": defs().instructions
                 }))
             }
             "ping" => Ok(json!({})),
@@ -382,7 +367,8 @@ impl Server {
                             "size": human(e.bytes),
                             "bytes": e.bytes,
                             "files": e.files,
-                            "folders": e.dirs
+                            "folders": e.dirs,
+                            "engine": e.engine
                         })
                     })
                     .collect();
@@ -646,215 +632,194 @@ impl Server {
         let (s, _) = self.at(a, ctx)?;
         s.check_online().map_err(engine_error)?;
         let t = &s.tree;
+        let engine = s.result.engine;
+        // Por defecto, el más reciente hecho con el mismo motor: con otro, parte de la diferencia es del motor
         let id = match snapshot {
             Some(id) => id,
-            None => h
-                .list()
-                .map_err(engine_error)?
-                .into_iter()
-                .find(|e| e.scanned_at != s.scanned_at && same_root(&e.path, t.root_path()))
-                .map(|e| e.id)
-                .ok_or_else(|| {
+            None => {
+                let mine: Vec<_> = h.list().map_err(engine_error)?.into_iter().filter(|e| e.scanned_at != s.scanned_at && same_root(&e.path, t.root_path())).collect();
+                let pick = mine.iter().find(|e| e.engine == engine).or(mine.first());
+                pick.map(|e| e.id.clone()).ok_or_else(|| {
                     format!(
                         "There is no snapshot of {} to compare with. Save one now with save_snapshot and compare in a later session \
                          (the TesseraFS app and its scheduled scan also save them).",
                         t.root_path()
                     )
-                })?,
+                })?
+            }
         };
         let r = h.compare(s, &id, limit).map_err(engine_error)?;
-        let changes = |v: &[tessera_core::ChangeRow]| -> Vec<Value> {
+        let art = Artifacts::new(s, r.entry.engine);
+        let changes = |v: &[tessera_core::ChangeRow], grew: bool| -> Vec<Value> {
             v.iter()
                 .map(|c| {
                     let mut n = c.row.node.clone();
                     (n.prev, n.fresh) = (c.prev, c.prev.is_none().then_some(true));
-                    row(&n, c.row.path.clone())
+                    let mut o = row(&n, c.row.path.clone());
+                    if let Some(why) = art.reason(&c.row.path, if grew { Change::Grew } else { Change::Shrank }) {
+                        o["likelyArtifact"] = why.into();
+                    }
+                    o
                 })
                 .collect()
         };
-        Ok(json!({
+        let removed: Vec<Value> = r
+            .removed
+            .iter()
+            .map(|x| {
+                let mut o = json!({ "path": x.path, "type": kind(x.is_dir), "size": human(x.size) });
+                if let Some(why) = art.reason(&x.path, Change::Removed) {
+                    o["likelyArtifact"] = why.into();
+                }
+                o
+            })
+            .collect();
+        let mut o = json!({
             "root": t.root_path(),
-            "snapshot": { "id": r.entry.id, "scannedAt": iso(r.entry.scanned_at) },
+            "snapshot": { "id": r.entry.id, "scannedAt": iso(r.entry.scanned_at), "engine": r.entry.engine },
             "now": iso(s.scanned_at),
+            "nowEngine": engine,
             "before": totals(&r.before),
             "after": totals(&r.after),
             "change": signed(r.after.bytes as i64 - r.before.bytes as i64),
-            "grew": changes(&r.grew),
-            "shrank": changes(&r.shrank),
-            "removed": r.removed.iter().map(|x| json!({ "path": x.path, "type": kind(x.is_dir), "size": human(x.size) })).collect::<Vec<_>>(),
+            "grew": changes(&r.grew, true),
+            "shrank": changes(&r.shrank, false),
+            "removed": removed,
             "note": "The comparison stays active: list_folder with sort \"change\" shows what changed inside any folder."
-        }))
+        });
+        let warnings = art.warnings();
+        if !warnings.is_empty() {
+            o["warnings"] = warnings.into();
+        }
+        Ok(o)
+    }
+}
+
+// ---------- Comparación: lo que no es un cambio ----------
+
+/// La lista de la comparación en la que va una fila.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Change {
+    Grew,
+    Shrank,
+    Removed,
+}
+
+/// Lo que una comparación cuenta como cambio sin serlo. Una carpeta que este escaneo no pudo leer sale vacía, así
+/// que lo que el resumen tenía dentro cuenta como reducido o eliminado. Y con motores distintos, la MFT (con
+/// administrador) ve los metadatos de NTFS de la raíz (`$MFT`, `$LogFile`…) y carpetas protegidas que el recorrido
+/// sin administrador no ve.
+struct Artifacts<'a> {
+    t: &'a Tree,
+    now: Engine,
+    then: Engine,
+    /// Carpetas que este escaneo no pudo leer (`scan.accessDenied`).
+    denied: u64,
+}
+
+fn engine_name(e: Engine) -> &'static str {
+    match e {
+        Engine::Mft => "mft",
+        Engine::Walk => "walk",
+    }
+}
+
+impl<'a> Artifacts<'a> {
+    fn new(s: &'a Scan, then: Engine) -> Artifacts<'a> {
+        let denied = s.result.warnings.iter().find(|w| w.code == "scan.accessDenied").and_then(|w| w.get("count")).map_or(0, |p| match p {
+            Param::Int(n) => (*n).max(0) as u64,
+            Param::Num(n) => n.max(0.0) as u64,
+            Param::Str(s) => s.parse().unwrap_or(0),
+        });
+        Artifacts { t: &s.tree, now: s.result.engine, then, denied }
+    }
+
+    /// Por qué la fila de `path` es, probablemente, efecto de cómo se hicieron los escaneos y no un cambio en el disco.
+    fn reason(&self, path: &str, change: Change) -> Option<&'static str> {
+        let sep = names::sep_of(path);
+        let (parent, name) = path.trim_end_matches(sep).rsplit_once(sep)?;
+        if self.now != self.then && name.starts_with('$') && same_root(parent, self.t.root_path()) {
+            return Some("NTFS metadata at the root of the drive: only the MFT engine counts it");
+        }
+        if self.denied == 0 || change == Change::Grew {
+            return None;
+        }
+        // La carpeta (o, si ya no está, la que la contenía) está vacía ahora: lo más probable es que no se pudiera leer
+        let dir = if change == Change::Removed { parent } else { path };
+        let id = find_node(self.t, dir)?;
+        (self.t.is_dir(id) && self.t.kids(id).is_empty())
+            .then_some("this scan could not read this folder (access denied): it looks empty now, but it was probably not emptied")
+    }
+
+    fn warnings(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if self.now != self.then {
+            let (now, then) = (engine_name(self.now), engine_name(self.then));
+            v.push(format!(
+                "This scan used the {now} engine and the snapshot the {then} engine. The MFT engine (as administrator) also counts \
+                 protected folders (System Volume Information, Recovery, WindowsApps…) and NTFS metadata ($MFT…) that a walk without \
+                 administrator cannot read, so part of the difference, totals included, comes from how the scans were made and not \
+                 from the disk. For an exact comparison, pass the snapshotId of a {now} snapshot (history shows each one's engine) \
+                 or scan the same way both times."
+            ));
+        }
+        if self.denied > 0 {
+            let n = self.denied;
+            v.push(format!(
+                "This scan could not read {n} folder{} (access denied). Unreadable folders look empty, so whatever the snapshot \
+                 counted inside them shows up as shrunk or removed: the rows marked likelyArtifact are probably that, not deletions.",
+                if n == 1 { "" } else { "s" }
+            ));
+        }
+        v
     }
 }
 
 // ---------- Herramientas ----------
 
-fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], read_only: bool) -> Value {
-    let mut schema = json!({ "type": "object", "properties": properties });
-    if !required.is_empty() {
-        schema["required"] = json!(required);
-    }
-    json!({
-        "name": name,
-        "title": title,
-        "description": description,
-        "inputSchema": schema,
-        "annotations": { "title": title, "readOnlyHint": read_only, "destructiveHint": false, "idempotentHint": read_only, "openWorldHint": false }
-    })
+/// Las herramientas y las instrucciones: las mismas que anuncia la edición portable (apps/portable/src/mcp.ts).
+const TOOLS_JSON: &str = include_str!("../../../packages/protocol/src/mcp-tools.json");
+
+struct Defs {
+    instructions: String,
+    /// Lo que devuelve `tools/list`.
+    tools: Value,
 }
 
-fn tools() -> Value {
-    let path = json!({ "type": "string", "description": PATH_HELP });
-    let int = |d: &str| json!({ "type": "integer", "minimum": 0, "description": d });
-    json!([
-        tool(
-            "list_volumes",
-            "Drives and free space",
-            "List the drives (Windows) or mounted file systems (Linux) with size and free space, without scanning. \
-             Also says whether TesseraFS runs as administrator (whole NTFS drives then scan in seconds through the MFT).",
-            json!({}),
-            &[],
-            true
-        ),
-        tool(
-            "scan",
-            "Scan a drive or folder",
-            "Scan a drive or folder (or open a .tessera saved scan) and keep it in memory for the other tools. Returns the totals, \
-             the largest items inside and, for a drive, its free space. If a scan in memory already contains the path, answers from \
-             it at once; refresh: true updates it (NTFS change journal for a whole drive, or rescans just that folder).",
-            json!({
-                "path": { "type": "string", "description": "Drive or folder to scan (C:\\, D:\\Projects, /home/ana) or a .tessera file" },
-                "refresh": { "type": "boolean", "description": "Update the data even if it is already in memory (default false)" },
-                "engine": { "type": "string", "enum": ["auto", "walk", "mft"], "description": "auto (default): MFT for a whole NTFS drive when running as administrator, otherwise a folder walk" }
-            }),
-            &["path"],
-            true
-        ),
-        tool(
-            "largest",
-            "Largest files and folders",
-            "The largest files (at any depth) and the largest folders (at a given depth) under a folder.",
-            json!({
-                "path": path,
-                "files": int("How many files (default 20, max 500)"),
-                "folders": int("How many folders (default 10, max 500)"),
-                "depth": int("Folder depth: 1 = direct subfolders (default), 2 = their subfolders…")
-            }),
-            &[],
-            true
-        ),
-        tool(
-            "list_folder",
-            "List a folder",
-            "The items directly inside a folder with their total size, file count and date, largest first by default. \
-             Use it to drill down step by step.",
-            json!({
-                "path": path,
-                "sort": { "type": "string", "enum": ["size", "name", "modified", "files", "onDisk", "change"], "description": "Order (default size). change = growth since the snapshot of compare_snapshot" },
-                "limit": int("Items (default 50, max 1000)"),
-                "offset": int("Items to skip, for paging (default 0)")
-            }),
-            &[],
-            true
-        ),
-        tool(
-            "search",
-            "Search with filters",
-            "Find files or folders under a path with the TesseraFS filter language (size, age, extension, path, attributes…). \
-             Returns the matches largest first, plus the count and total size of all matches.",
-            json!({
-                "query": { "type": "string", "description": QUERY_HELP },
-                "path": path,
-                "limit": int("Rows (default 50, max 2000); the count and total size always cover all matches")
-            }),
-            &[],
-            true
-        ),
-        tool(
-            "file_types",
-            "Space by file type",
-            "Space used by each file extension under a folder, largest first.",
-            json!({ "path": path, "limit": int("Extensions (default 25)") }),
-            &[],
-            true
-        ),
-        tool(
-            "cleanup_candidates",
-            "What can be cleaned up",
-            "What the Free up space tab of the TesseraFS app would propose inside a folder, with the same rules: build output and \
-             dependencies (target, node_modules, .venv), package, browser and shader caches, temporary files, crash dumps, update \
-             leftovers, the Recycle Bin or Trash, local AI models, virtual disks, games, installers in Downloads, folders that declare \
-             themselves a cache (CACHEDIR.TAG), empty folders and files, broken links… Each candidate has its risk (ok = regenerates \
-             itself or is temporary; warn = the user's own data: they decide; bad = managed by the system: never delete it by hand), \
-             size, why, how and the program's own cleanup command when there is one. Safest first, then largest. Read-only.",
-            json!({
-                "path": path,
-                "risk": { "type": "string", "description": "Only these risks, comma-separated: ok, warn, bad (default: all)" },
-                "limit": int("Candidates (default 50, max 500); byRisk always covers all of them")
-            }),
-            &[],
-            true
-        ),
-        tool(
-            "find_duplicates",
-            "Find duplicate files",
-            "Find files with identical content under a folder (same size, then BLAKE3 of the content). Reads the candidate files, \
-             so a large folder can take minutes; raise minSize to go faster.",
-            json!({
-                "path": path,
-                "minSize": { "type": ["string", "integer"], "description": "Smallest file size to compare: \"10MB\", \"1GB\" or bytes (default 1MB)" },
-                "limit": int("Groups to return, most space wasted first (default 20, max 500)")
-            }),
-            &[],
-            true
-        ),
-        tool(
-            "broken_links",
-            "Broken links",
-            "Symbolic links, junctions and mount points under a folder whose target no longer exists.",
-            json!({ "path": path, "limit": int("Rows (default 50)") }),
-            &[],
-            true
-        ),
-        tool(
-            "history",
-            "Saved snapshots",
-            "The scan snapshots in the TesseraFS history (saved by the app, its scheduled scan or save_snapshot), newest first.",
-            json!({ "path": { "type": "string", "description": "Only the snapshots of this scanned root (optional)" } }),
-            &[],
-            true
-        ),
-        tool(
-            "compare_snapshot",
-            "What changed",
-            "Compare the scan in memory with a saved snapshot of the same root: what grew, shrank or disappeared since then.",
-            json!({
-                "path": path,
-                "snapshotId": { "type": "string", "description": "Snapshot id from history (default: the most recent one of this root)" },
-                "limit": int("Rows per list (default 20)")
-            }),
-            &[],
-            true
-        ),
-        tool(
-            "size_trend",
-            "Size over time",
-            "Size of a file or folder in every saved snapshot of its root, oldest first, plus the current scan.",
-            json!({ "path": path }),
-            &[],
-            true
-        ),
-        tool(
-            "save_snapshot",
-            "Save a snapshot",
-            "Save a summary of the scan containing path to the TesseraFS history, to compare against it later (compare_snapshot, \
-             size_trend or the app's Changes tab). Writes only to the history folder; like the app, it keeps the most recent \
-             snapshots of each root and removes older ones.",
-            json!({ "path": path }),
-            &[],
-            false
-        ),
-    ])
+/// Un error en los datos lo detectan las pruebas.
+static DEFS: LazyLock<Defs> = LazyLock::new(|| load_defs(TOOLS_JSON).unwrap_or_else(|e| panic!("{e}")));
+
+fn defs() -> &'static Defs {
+    &DEFS
+}
+
+fn tools() -> &'static Value {
+    &defs().tools
+}
+
+fn load_defs(json: &str) -> Result<Defs, String> {
+    let v: Value = serde_json::from_str(json).map_err(|e| format!("mcp-tools.json: {e}"))?;
+    let instructions = v["instructions"].as_str().ok_or("mcp-tools.json: no instructions")?.to_string();
+    let tools = resolve(&v["tools"], &v["$defs"])?;
+    if !tools.as_array().is_some_and(|t| t.iter().all(|t| t["name"].is_string() && t["inputSchema"]["type"] == "object")) {
+        return Err("mcp-tools.json: every tool needs a name and an object inputSchema".into());
+    }
+    Ok(Defs { instructions, tools })
+}
+
+/// Sustituye cada `{"$ref": "#/$defs/<nombre>"}` por esa definición.
+fn resolve(v: &Value, defs: &Value) -> Result<Value, String> {
+    Ok(match v {
+        Value::Array(a) => Value::Array(a.iter().map(|x| resolve(x, defs)).collect::<Result<_, _>>()?),
+        Value::Object(o) => match o.get("$ref") {
+            Some(r) => {
+                let def = r.as_str().and_then(|r| r.strip_prefix("#/$defs/")).and_then(|k| defs.get(k));
+                resolve(def.ok_or_else(|| format!("mcp-tools.json: unknown $ref {r}"))?, defs)?
+            }
+            None => Value::Object(o.iter().map(|(k, x)| Ok((k.clone(), resolve(x, defs)?))).collect::<Result<_, String>>()?),
+        },
+        x => x.clone(),
+    })
 }
 
 // ---------- Argumentos ----------
@@ -1184,7 +1149,13 @@ mod tests {
             assert!(t["description"].as_str().unwrap().len() > 20);
             let ro = t["annotations"]["readOnlyHint"] == true;
             assert_eq!(ro, t["name"] != "save_snapshot");
+            assert_eq!(t["annotations"]["title"], t["title"]);
         }
+        // Los datos compartidos con la portable (mcp-tools.json), con las referencias ya resueltas
+        assert!(!tools.to_string().contains("$ref") && !tools.to_string().contains("$defs"));
+        let largest = tools.as_array().unwrap().iter().find(|t| t["name"] == "largest").unwrap();
+        assert!(largest["inputSchema"]["properties"]["path"]["description"].as_str().unwrap().starts_with("Absolute path"));
+        assert!(rpc(&mut s, &io, 10, "initialize", json!({}))["result"]["instructions"].as_str().unwrap().contains("cleanup_candidates"));
         let r = rpc(&mut s, &io, 5, "nada/raro", json!({}));
         assert_eq!(r["error"]["code"], METHOD_NOT_FOUND);
         let r = rpc(&mut s, &io, 6, "tools/call", json!({ "name": "borrar_todo" }));
@@ -1197,6 +1168,17 @@ mod tests {
         // Sin escaneo y sin ruta: error de herramienta, no de protocolo
         let (v, err) = call(&mut s, &io, "largest", json!({}));
         assert!(err && v.as_str().unwrap().starts_with("No scan in memory"), "{v}");
+    }
+
+    #[test]
+    fn tool_data_errors_are_reported() {
+        let load = |tools: &str| load_defs(&format!(r#"{{ "instructions": "i", "$defs": {{ "p": {{ "type": "string" }} }}, "tools": {tools} }}"#));
+        let ok = load(r##"[{ "name": "a", "inputSchema": { "type": "object", "properties": { "path": { "$ref": "#/$defs/p" } } } }]"##).unwrap();
+        assert_eq!(ok.tools[0]["inputSchema"]["properties"]["path"], json!({ "type": "string" }));
+        let err = |tools: &str| load(tools).err().unwrap_or_default();
+        assert!(err(r##"[{ "name": "a", "inputSchema": { "type": "object", "properties": { "x": { "$ref": "#/$defs/nada" } } } }]"##).contains("unknown $ref"));
+        assert!(err(r#"[{ "name": "a" }]"#).contains("inputSchema"));
+        assert!(load_defs("{").err().unwrap().starts_with("mcp-tools.json:"));
     }
 
     #[test]
@@ -1287,6 +1269,49 @@ mod tests {
         assert_eq!(points[1]["bytes"].as_u64(), Some((2 << 20) + 4));
         let (_, err) = call(&mut s, &io, "history", json!({ "path": dir.0.join("otra").to_string_lossy() }));
         assert!(!err);
+    }
+
+    /// Lo que la comparación cuenta como cambio sin serlo: otro motor (metadatos de NTFS) y carpetas que este
+    /// escaneo no pudo leer (salen vacías). Por defecto se compara con el resumen del mismo motor.
+    #[test]
+    fn compare_artifacts() {
+        let dir = sample("artifacts");
+        let d = dir.0.join("datos");
+        std::fs::write(d.join("$MFT"), vec![1u8; 2 << 20]).unwrap();
+        let (mut s, io) = (Server::new(Some(dir.0.join("history"))), Io::new());
+        let root = d.to_string_lossy().into_owned();
+        // A: recorrido; B, más reciente: como si fuera de la MFT
+        call(&mut s, &io, "scan", json!({ "path": root }));
+        let (a, _) = call(&mut s, &io, "save_snapshot", json!({}));
+        std::thread::sleep(Duration::from_millis(1100));
+        call(&mut s, &io, "scan", json!({ "path": root, "refresh": true }));
+        s.scans[0].scan.result.engine = Engine::Mft;
+        let (b, _) = call(&mut s, &io, "save_snapshot", json!({}));
+        let (v, _) = call(&mut s, &io, "history", json!({}));
+        assert_eq!((v["snapshots"][0]["engine"].as_str(), v["snapshots"][1]["engine"].as_str()), (Some("mft"), Some("walk")), "{v}");
+        // Ahora: sin $MFT y con «copia» vacía
+        std::fs::remove_file(d.join("$MFT")).unwrap();
+        std::fs::remove_file(d.join("copia").join("grande.bin")).unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        call(&mut s, &io, "scan", json!({ "path": root, "refresh": true }));
+        let gone = |v: &Value, name: &str| v["removed"].as_array().unwrap().iter().find(|r| r["path"].as_str().unwrap().ends_with(name)).cloned().unwrap();
+        // Por defecto, el del mismo motor (A, aunque B sea más reciente): todo es un cambio real
+        let (v, err) = call(&mut s, &io, "compare_snapshot", json!({}));
+        assert!(!err, "{v}");
+        assert_eq!((&v["snapshot"]["id"], v["snapshot"]["engine"].as_str()), (&a["saved"]["id"], Some("walk")), "{v}");
+        assert!(v.get("warnings").is_none() && gone(&v, "$MFT").get("likelyArtifact").is_none(), "{v}");
+        // Con B (otro motor): $MFT de la raíz es un metadato de NTFS y se avisa
+        let (v, _) = call(&mut s, &io, "compare_snapshot", json!({ "snapshotId": b["saved"]["id"] }));
+        assert!(gone(&v, "$MFT")["likelyArtifact"].as_str().unwrap().starts_with("NTFS metadata"), "{v}");
+        assert!(v["warnings"][0].as_str().unwrap().starts_with("This scan used the walk engine and the snapshot the mft engine"), "{v}");
+        assert!(gone(&v, "grande.bin").get("likelyArtifact").is_none(), "sin accesos denegados, vaciar es un cambio real: {v}");
+        // Con accesos denegados, una carpeta vacía ahora probablemente no se pudo leer
+        s.scans[0].scan.result.warnings.push(tessera_core::msg::access_denied(1, &[]));
+        let (v, _) = call(&mut s, &io, "compare_snapshot", json!({}));
+        assert!(gone(&v, "grande.bin")["likelyArtifact"].as_str().unwrap().contains("access denied"), "{v}");
+        assert!(v["shrank"][0]["path"].as_str().unwrap().ends_with("copia") && v["shrank"][0]["likelyArtifact"].is_string(), "{v}");
+        assert!(gone(&v, "$MFT").get("likelyArtifact").is_none(), "mismo motor: {v}");
+        assert!(v["warnings"][0].as_str().unwrap().starts_with("This scan could not read 1 folder (access denied)"), "{v}");
     }
 
     /// Carpeta junto al ejecutable de las pruebas (en target/) y no en el temporal del sistema: en Windows está
