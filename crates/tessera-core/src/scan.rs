@@ -79,7 +79,8 @@ impl Default for Progress {
 
 #[derive(Clone, Debug)]
 pub struct ScanOptions {
-    /// Hilos del recorrido (0 = núcleos lógicos).
+    /// Hilos del escaneo (0 = automático: núcleos lógicos; el recorrido de un disco local de Windows,
+    /// como mucho [`LOCAL_WALK_THREADS`]).
     pub threads: usize,
     /// Búfer por hilo para `NtQueryDirectoryFile` (local; en red se usan 64 KiB) o, en Linux, `getdents64`.
     pub buf_size: usize,
@@ -92,6 +93,33 @@ pub struct ScanOptions {
 impl Default for ScanOptions {
     fn default() -> Self {
         ScanOptions { threads: 0, buf_size: 1 << 20, tick: Duration::from_millis(66), keep_frn: false }
+    }
+}
+
+/// Tope de hilos del recorrido de un disco local de Windows con `threads: 0`.
+///
+/// El coste está en abrir cada carpeta, dentro del núcleo (NTFS y los filtros del antivirus), y ese
+/// trabajo compite entre hilos, incluso de procesos distintos: abrir una carpeta cuesta unos 40 µs con
+/// 4 hilos y 190 µs con 16. Pasada cierta cantidad, más hilos sólo gastan más CPU. En un
+/// i5-13450HX (16 núcleos lógicos) y C:\ con 1,8 millones de elementos y la caché caliente:
+/// 4 hilos 5,7 s, 8 hilos 4,7 s, 12 hilos 5,8 s, 16 hilos 5,7–6,3 s; con el disco ocupado por
+/// Windows Update, 8 hilos 12,5 s y 16 hilos 15–17 s. La edición portable usa como mucho 8 workers.
+pub const LOCAL_WALK_THREADS: usize = 8;
+
+/// Hilos de la lectura de la MFT y del agregado con `threads: 0`.
+fn logical_cores() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+}
+
+/// Hilos del recorrido de una carpeta del volumen `vol_root`. En red se usan todos los núcleos lógicos:
+/// allí el tiempo es la espera de cada petición y más peticiones a la vez sí ayudan.
+pub(crate) fn walk_threads(opts: &ScanOptions, vol_root: &str) -> usize {
+    if opts.threads != 0 {
+        opts.threads
+    } else if cfg!(windows) && !sys::is_network(vol_root) {
+        logical_cores().min(LOCAL_WALK_THREADS)
+    } else {
+        logical_cores()
     }
 }
 
@@ -216,7 +244,7 @@ pub fn scan(
         EngineChoice::Mft => true,
         EngineChoice::Auto => whole_volume && cfg!(windows),
     };
-    let threads = if opts.threads == 0 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) } else { opts.threads };
+    let threads = if opts.threads == 0 { logical_cores() } else { opts.threads };
     // Diario USN: la posición se toma al empezar, así lo que cambie durante el escaneo también lo verá
     // el primer `refresh` (volver a escanear de más no estropea nada; perder un cambio, sí)
     let journal = journal_start(&fs, &vol_root);
@@ -355,7 +383,7 @@ fn run_engines(
     prog.set_phase(ScanPhase::Walk);
     prog.entries.store(0, Relaxed);
     prog.bytes.store(0, Relaxed);
-    let (raw, frn_complete) = walk_engine(root, fs, want_frn, threads, opts, prog, cancel, warnings)?;
+    let (raw, frn_complete) = walk_engine(root, fs, want_frn, walk_threads(opts, vol_root), opts, prog, cancel, warnings)?;
     prog.set_phase(ScanPhase::Aggregate);
     let tree = pool.install(|| build(raw, root.to_string(), &[]))?;
     Ok((tree, Engine::Walk, frn_complete))
@@ -457,6 +485,21 @@ mod tests {
         assert_eq!(drive_letter("D:\\"), Some('D'));
         assert_eq!(drive_letter("\\\\srv\\x\\"), None);
         assert_eq!(normalize_path("  ").unwrap_err().code, "error.invalidPath");
+    }
+
+    #[test]
+    fn walk_threads_default() {
+        let vol = sys::volume_root_of(&std::env::temp_dir().to_string_lossy()).unwrap();
+        let n = walk_threads(&ScanOptions::default(), &vol);
+        if cfg!(windows) && !sys::is_network(&vol) {
+            assert_eq!(n, logical_cores().min(LOCAL_WALK_THREADS));
+        } else {
+            assert_eq!(n, logical_cores());
+        }
+        assert_eq!(walk_threads(&ScanOptions { threads: 3, ..ScanOptions::default() }, &vol), 3);
+        assert_eq!(walk_threads(&ScanOptions { threads: 32, ..ScanOptions::default() }, &vol), 32);
+        #[cfg(windows)]
+        assert_eq!(walk_threads(&ScanOptions::default(), r"\\srv\datos\"), logical_cores());
     }
 
     #[cfg(not(windows))]

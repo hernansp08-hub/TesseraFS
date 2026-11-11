@@ -45,6 +45,8 @@ Analizador de espacio en disco para Windows y Linux, de código abierto, rápido
 | C:\ con 1,5 M elementos | **1,8 s** con admin · 4–5 s sin admin | 9 s con admin · 5–6 s sin admin |
 | Para | Tu equipo | Empresas donde el antivirus bloquea ejecutables sin firma: **no lleva ningún binario propio** |
 
+Las cifras sin administrador son con las carpetas ya en la caché de Windows. El primer recorrido tras encender el equipo, o con el disco ocupado (Windows Update, otro análisis), lee mucho más del disco y puede tardar de 15 s a un par de minutos.
+
 Las dos comparten la misma interfaz y dan los mismos resultados.
 
 ## Empezar

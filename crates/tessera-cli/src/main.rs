@@ -52,7 +52,7 @@ check <ruta>  (no escanea: sólo mira el volumen que contiene la ruta):
 Opciones de scan:
   --engine auto|walk|mft   Motor (por defecto auto)
   --top N                  Archivos más grandes a mostrar (10)
-  --threads N              Hilos del recorrido (núcleos lógicos)
+  --threads N              Hilos del recorrido (núcleos lógicos; en un disco local de Windows, 8 como mucho)
   --buf KiB                Búfer por hilo del recorrido (1024)
   --slice-out f.bin        Escribe el slice de la raíz
   --min-bytes X            Umbral del slice (0)

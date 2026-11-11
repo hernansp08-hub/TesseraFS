@@ -281,7 +281,8 @@ pub fn walk_jobs(jobs: &[RescanJob], opts: &ScanOptions, prog: &Progress, cancel
     if jobs.is_empty() {
         return Ok(Vec::new());
     }
-    let threads = if opts.threads == 0 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) } else { opts.threads };
+    let vol_root = crate::sys::volume_root_of(&jobs[0].path).unwrap_or_else(|| jobs[0].path.clone());
+    let threads = crate::scan::walk_threads(opts, &vol_root);
     #[cfg(windows)]
     let pool = crate::walk::pool(threads)?;
     #[cfg(unix)]

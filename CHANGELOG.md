@@ -13,6 +13,9 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 - Guía nueva: docs/usuario/mcp.md (Claude Desktop, Claude Code, VS Code y Cursor).
 - `tessera-cli` va ahora también en el instalador de Windows, el `.deb` y la AppImage. El instalador lo deja junto a la app y añade su carpeta al `PATH` del usuario (la desinstalación la quita); el `.deb`, en `/usr/bin/tessera-cli`; la AppImage lo lleva dentro (docs/usuario/linux.md explica cómo sacarlo).
 
+### Rendimiento
+- **Escanear sin administrador va más rápido** en los equipos con más de 8 núcleos lógicos: el recorrido de un disco local de Windows usa como mucho 8 hilos. Pasado ese número, los hilos compiten dentro de Windows al abrir las carpetas, y cada hilo más sólo gasta CPU: C:\ con 1,8 millones de elementos tarda 3,9–5,1 s en vez de 5,4–6,3 s y usa una cuarta parte menos de CPU. En red se siguen usando todos los núcleos, y `--threads` sigue mandando.
+
 ## [0.11.0] - 2026-10-11
 
 ### El tiempo

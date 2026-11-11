@@ -144,6 +144,7 @@ Implementado en [`packages/protocol/src/query.ts`](../packages/protocol/src/quer
 | Motor | Tiempo | Memoria |
 |---|---|---|
 | Rust, recorrido con 16 hilos (`NtQueryDirectoryFile`, búfer de 1 MiB) | 4,2–5,1 s | ≈107 MiB el árbol, ≈270 MiB de pico |
+| Rust, recorrido con 8 hilos, el tope actual en un disco local (C:\ con 1,84 M elementos, caché caliente, 2026-11) | 3,9–5,1 s (5,4–6,3 s con 16 hilos) | ≈132 MiB el árbol |
 | Bun, recorrido con 8 workers (`NtQueryDirectoryFile` vía `bun:ffi`) | 4,7–5,8 s | ≈525 MB tras el escaneo, ≈800 MB de pico |
 | Referencia: Python `os.scandir` con 4 hilos | 15,1 s | — |
 

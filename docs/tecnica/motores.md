@@ -119,12 +119,19 @@ flowchart LR
 
 | | Rust | Bun |
 |---|---|---|
-| Paralelismo | Robo de trabajo con rayon: un hilo por núcleo lógico | *Workers* persistentes: la mitad de los núcleos, entre 2 y 8. Nunca se terminan, porque `worker.terminate()` cuelga Bun 1.3 en Windows. |
+| Paralelismo | Robo de trabajo con rayon: un hilo por núcleo lógico, como mucho 8 en un disco local (en red, todos) | *Workers* persistentes: la mitad de los núcleos, entre 2 y 8. Nunca se terminan, porque `worker.terminate()` cuelga Bun 1.3 en Windows. |
 | Clases de información | `FileIdExtdDirectoryInformation`, con caída a `FileIdFullDirectoryInformation` (38) y `FileFullDirectoryInformation` (2) | La misma cadena |
 | Archivos comprimidos al vuelo (`compact /exe`) | El listado da 0 bytes asignados, así que se consulta el asignado real leyendo sólo atributos | — |
-| C:\ con 1,47 M elementos | **4,2–5,1 s** (16 hilos) | 4,7–5,8 s (8 workers) |
+| C:\ con 1,47 M elementos (2026-10) | 4,2–5,1 s (16 hilos) | 4,7–5,8 s (8 workers) |
+| C:\ con 1,84 M elementos y 303.000 carpetas, caché caliente (2026-11) | **3,9–5,1 s** (8 hilos; 5,4–6,3 s con 16) | 6,1–6,6 s (8 workers) |
+| Lo mismo con el disco ocupado (Windows Update preparando una actualización) | 12,5 s (8 hilos; 15–17 s con 16) | — |
+| Lo mismo, primer recorrido del día (caché fría y Windows Update activo) | ≈107 s (16 hilos) | — |
 
-El coste está en el núcleo de Windows y en los filtros del antivirus: abrir una carpeta cuesta unos 100 µs, cada consulta 25 µs y cerrarla 40 µs. Por eso el paralelismo importa más que el lenguaje.
+Medido en un i5-13450HX (10 núcleos, 16 lógicos) con NVMe y Microsoft Defender activo.
+
+El coste está en el núcleo de Windows y en los filtros del antivirus, no en el motor: más del 90 % del tiempo de CPU del escaneo es tiempo de núcleo. Con 4 hilos, abrir una carpeta cuesta unos 40 µs, cada consulta 12 µs y cerrarla 7 µs. Con 16 hilos, la apertura sube a 190 µs y la consulta a 35 µs: ese trabajo compite entre hilos, e incluso entre procesos (dos escaneos de 8 hilos a la vez cuestan lo mismo que uno de 16). Pasados unos 8 hilos, cada hilo más sólo gasta más CPU: con 16, el escaneo usa 34 s de CPU en vez de 26 y tarda más. Por eso el número de hilos por defecto tiene tope en un disco local; en red el tiempo es la espera de cada petición y ahí sí sirven todos. Ni el tamaño del búfer (de 64 KiB a 1 MiB) ni las opciones de apertura (`FILE_OPEN_FOR_BACKUP_INTENT`, `FILE_OPEN_REPARSE_POINT`) cambian el resultado.
+
+Con la caché fría, el tiempo lo pone la lectura del disco: cada consulta pasa de 12 a más de 100 µs, porque NTFS tiene que leer el índice de cada carpeta. Sin administrador no se puede evitar, porque cada carpeta se abre y se lista por separado. La MFT lo lee todo de una vez.
 
 ## Progreso
 
