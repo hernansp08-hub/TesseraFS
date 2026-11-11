@@ -4,6 +4,8 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ## [Sin publicar]
 
+## [0.12.0] - 2026-11-11
+
 ### Asistentes de IA (MCP)
 - `tessera-cli mcp`: servidor MCP para que Claude, GitHub Copilot, Cursor y otros asistentes pregunten a TesseraFS qué ocupa el disco. Trece herramientas: unidades y espacio libre, escanear (también un `.tessera`), lo más grande, contenido de una carpeta, búsqueda con filtros, tipos de archivo, qué se puede limpiar, duplicados, enlaces rotos, historial, comparar con un resumen, evolución de una carpeta y guardar un resumen.
 - `cleanup_candidates`: qué se puede limpiar, con las mismas reglas que la pestaña «Liberar espacio» (que ahora comparten la app y `tessera-cli`). Cada candidato trae su riesgo, tamaño, por qué, cómo y la orden del propio programa (`cargo clean`, `npm cache clean --force`, `sudo apt clean`…); se puede filtrar por riesgo. Tampoco borra nada.
@@ -15,6 +17,13 @@ Todas las versiones de TesseraFS. El formato sigue [Keep a Changelog](https://ke
 
 ### Más rápido sin administrador
 - **Escanear sin administrador va más rápido** en los equipos con más de 8 núcleos lógicos: el recorrido de un disco local de Windows usa como mucho 8 hilos. Pasado ese número, los hilos compiten dentro de Windows al abrir las carpetas, y cada hilo más sólo gasta CPU: C:\ con 1,8 millones de elementos tarda 3,9–5,1 s en vez de 5,4–6,3 s y usa una cuarta parte menos de CPU. En red se siguen usando todos los núcleos, y `--threads` sigue mandando.
+
+### Añadido
+- **mcp:** servidor en la edición portable y comparación sin falsos cambios
+- **cli:** servidor MCP para asistentes de IA y tessera-cli en los paquetes
+
+### Rendimiento
+- **walk:** como mucho 8 hilos al recorrer un disco local de Windows
 
 ## [0.11.0] - 2026-10-11
 
@@ -163,7 +172,8 @@ Primera versión funcional.
 - Escritorio, recorrido sin administrador: 4,2–5,1 s.
 - Portable, recorrido sin administrador: 4,7–5,8 s; MFT: 9,3 s.
 
-[Sin publicar]: ../../compare/v0.11.0...HEAD
+[Sin publicar]: ../../compare/v0.12.0...HEAD
+[0.12.0]: ../../compare/v0.11.0...v0.12.0
 [0.11.0]: ../../compare/v0.10.0...v0.11.0
 [0.10.0]: ../../compare/v0.9.0...v0.10.0
 [0.9.0]: ../../compare/v0.8.1...v0.9.0
